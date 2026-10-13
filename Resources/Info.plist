@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>com.kien.margin</string>
+    <key>CFBundleName</key>
+    <string>Margin</string>
+    <key>CFBundleDisplayName</key>
+    <string>Margin</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleExecutable</key>
+    <string>Margin</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Margin reads the address of your browser's current tab when you ask it to summarize the video you're watching, and asks Finder to move your Desktop icons when you ask an agent to scatter or arrange them.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Margin transcribes a video's audio on your Mac so Claude can summarize it.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Margin adds the events you ask for (like "add dinner to my calendar at 7") to your calendar, and can undo them.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>Margin adds the events you ask for to your calendar.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Margin listens while you hold its talk shortcut, turning your voice into text on your Mac so you can ask questions and add calendar events by speaking.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Margin's background agents tidy and read your Desktop when you ask them to.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Margin's background agents tidy and read your Downloads folder when you ask them to.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Margin reads your documents and textbooks when you ask it to, and saves your notes in Documents/Margin Notes.</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
