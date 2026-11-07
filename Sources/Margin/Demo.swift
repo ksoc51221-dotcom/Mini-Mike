@@ -11,6 +11,7 @@ enum Demo {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         AskPanelController.demoMode = true
+        if ProcessInfo.processInfo.environment["MARGIN_LIGHT"] != nil { app.appearance = NSAppearance(named: .aqua) }
         let dir = URL(fileURLWithPath: outputDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         func save(_ name: String, _ image: CGImage?) {
@@ -304,6 +305,7 @@ enum Demo {
                                   appName: "Claude", context: ContextBox(resolved: nil), pid: 0, mouse: point)
         dock.open(selection, iconFrame: NSRect(x: point.x, y: point.y - 26, width: 26, height: 26))
         guard let agent = dock.debugAgents.first else { fail("no agent opened") }
+        if ProcessInfo.processInfo.environment["MARGIN_LIGHT"] != nil { for w in NSApp.windows { w.appearance = NSAppearance(named: .aqua) } }
 
         func save(_ name: String, _ image: CGImage?) {
             guard let image else { return print("  (no image for \(name))") }
@@ -343,7 +345,7 @@ enum Demo {
 
         savePNG("0-trigger.png", TriggerIcon.debugRender())
         // The painted check up close, on the circle's dark color.
-        if let check = BrushCheck.image(side: 200, scale: 2, color: Theme.ivory),
+        if let check = BrushCheck.image(side: 200, scale: 2, color: Theme.ink.dark),
            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 400, pixelsHigh: 400, bitsPerSample: 8,
                                       samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                       colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),

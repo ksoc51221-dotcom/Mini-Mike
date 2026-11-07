@@ -1,6 +1,8 @@
 import Foundation
 
-/// The local server that runs the on-Mac model (Ollama). Margin only ever talks to 127.0.0.1.
+/// The quick model's server. By default the quick model is Claude Haiku (answered through the Claude command, so there's no
+/// server to check: it's ready when the command is there). Set `localModel` to an Ollama model and this talks to Ollama on
+/// this Mac instead (only ever to 127.0.0.1).
 final class OllamaClient {
     static let shared = OllamaClient()
     static var baseURL = URL(string: "http://127.0.0.1:11434")! // a var only so tests can point it elsewhere
@@ -31,6 +33,12 @@ final class OllamaClient {
     /// Looks at the server and lists what's installed. `completion` runs on the main queue.
     func refresh(completion: ((Status) -> Void)? = nil) {
         let model = Settings.shared.localModel
+        if Settings.isClaudeModel(model) {
+            let result: Status = ClaudeSession.claudePath == nil ? .notRunning : .ready
+            status = result
+            DispatchQueue.main.async { completion?(result) }
+            return
+        }
         var request = URLRequest(url: Self.baseURL.appendingPathComponent("api/tags"))
         request.timeoutInterval = 1.5
         Self.session.dataTask(with: request) { [weak self] data, response, _ in
@@ -49,6 +57,7 @@ final class OllamaClient {
     /// `completion` gets what the check found (main queue).
     func warmUp(completion: ((Status) -> Void)? = nil) {
         let model = Settings.shared.localModel
+        if Settings.isClaudeModel(model) { return refresh(completion: completion) } // nothing to load
         refresh { status in
             completion?(status)
             guard status == .ready else { return }
@@ -67,6 +76,18 @@ final class OllamaClient {
     /// One short, non-streamed answer from the on-Mac model (for small jobs like naming a chat). `completion` runs on the
     /// main queue with the text, or nil if Ollama isn't there, doesn't have the model, or says nothing useful.
     func generate(system: String, prompt: String, maxTokens: Int = 80, json: Bool = true, completion: @escaping (String?) -> Void) {
+        let model = Settings.shared.localModel
+        if Settings.isClaudeModel(model) {
+            ClaudeOneShot.run(prompt, system: system, model: .haiku, modelID: model, effort: Settings.shared.localEffort, timeout: json ? 45 : 150) { result in
+                if case .success(let reply) = result {
+                    let t = reply.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    completion(t.isEmpty ? nil : t)
+                } else {
+                    completion(nil)
+                }
+            }
+            return
+        }
         var request = URLRequest(url: Self.baseURL.appendingPathComponent("api/chat"))
         request.httpMethod = "POST"
         request.timeoutInterval = json ? 45 : 150
@@ -124,6 +145,10 @@ final class LocalSession: AnswerSession {
     var onEvent: ((ClaudeSession.Event) -> Void)?
     var onUsage: ((ClaudeSession.Usage) -> Void)?
 
+    /// When the quick model is a Claude model, this does the answering (no tools, no web) and the rest of this class is idle.
+    private var claude: ClaudeSession?
+    private var shownThisTurn = false
+
     let model: String
     private var messages: [[String: String]]
     private var task: Task<Void, Never>?
@@ -132,25 +157,51 @@ final class LocalSession: AnswerSession {
     /// How long an answer may be (a video summary is longer than a quick answer).
     let maxTokens: Int
 
+    /// The system prompt this session started with, Context and Rules included.
+    var startingSystemPrompt: String { messages.first?["content"] ?? "" }
+
     init(model: String, system: String = Prompts.localSystem, maxTokens: Int = 700) {
         self.model = model
         self.maxTokens = maxTokens
+        let system = Prompts.personalized(system)
         messages = [["role": "system", "content": system]]
+        guard Settings.isClaudeModel(model) else { return }
+        let session = ClaudeSession(model: .haiku, webSearch: false, modelID: model, effort: Settings.shared.localEffort, system: system)
+        session.onUsage = { [weak self] in self?.onUsage?($0) }
+        session.onEvent = { [weak self] event in
+            guard let self else { return }
+            switch event {
+            case .delta: shownThisTurn = true
+            case .error(let reason) where !shownThisTurn:
+                // Nothing shown yet: the question can still go to the full Claude.
+                onEvent?(.unavailable(reason))
+                return
+            default: break
+            }
+            onEvent?(event)
+        }
+        claude = session
     }
 
     /// After a long first message has been answered (a video's notes), keep only a short stand-in for it, so follow-ups
     /// don't carry it (the model's memory is small).
     func replaceFirstUserMessage(with text: String) {
+        guard claude == nil else { return } // Claude's memory is big enough for the whole video notes
         if let i = messages.firstIndex(where: { $0["role"] == "user" }) { messages[i]["content"] = text }
     }
 
-    var isAlive: Bool { !stopped }
+    var isAlive: Bool { claude?.isAlive ?? !stopped }
 
-    func start() throws {}
+    func start() throws { try claude?.start() }
 
-    /// Text only: the local model never sees images.
+    /// Text only for a model on this Mac; a Claude model is sent the images too.
     func send(_ text: String, images: [Data]) {
         guard !stopped else { return }
+        if let claude {
+            shownThisTurn = false
+            claude.send(text, images: images)
+            return
+        }
         messages.append(["role": "user", "content": text])
         task?.cancel()
         let snapshot = messages
@@ -160,6 +211,7 @@ final class LocalSession: AnswerSession {
     func stop() {
         stopped = true
         task?.cancel()
+        claude?.stop()
     }
 
     // MARK: - One turn

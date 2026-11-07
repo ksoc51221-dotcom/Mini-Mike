@@ -7,7 +7,10 @@ import AppKit
 /// - Hold Cmd+Shift+V and press A (or hold Cmd+Shift+A and press V): talk to the agents: what you say is a job.
 /// - Cmd+Shift+L: open (or put away) the chat history.
 /// - Control+Shift+L: move the open chat (just that one) between Claude and the model on this Mac.
+/// - Cmd+Shift+C: call the cat back after it has run away (it passes straight through to the app you're in while the cat is here).
 /// - Cmd+Shift+A: show or hide the agent bar (on key-up, so it can wait to see if V joins it).
+/// - Cmd+Shift+3/4/5 (macOS's screenshots) are never touched: Margin just notes which app and window you were in, so the
+///   screenshot that follows can be labeled by it.
 /// Normal typing is never delayed: only the chord's final key is swallowed, so it never types into your document.
 final class Hotkeys {
     var onSnip: (() -> Void)?
@@ -20,13 +23,19 @@ final class Hotkeys {
     var onTasks: (() -> Void)?
     var onHistory: (() -> Void)?
     var onEngine: (() -> Void)?
+    var onCat: (() -> Void)?
+    /// The cat has run away, so ⌘⇧C is Margin's. Read on the tap's thread, written on the main one: a plain flag is enough.
+    nonisolated(unsafe) static var catGone = false
+    /// ⌘⇧3, ⌘⇧4 or ⌘⇧5 was pressed. It's macOS's own shortcut, so it's passed on untouched; Margin only notes which window you're in.
+    var onSystemShot: (() -> Void)?
 
-    enum Action: Equatable { case snip, chat, talk, tasks, history, engine }
+    enum Action: Equatable { case snip, chat, talk, tasks, history, engine, cat }
 
     private static let tabKey: Int64 = 48            // kVK_Tab
     private static let backslashKey: Int64 = 42      // kVK_ANSI_Backslash
     private static let vKey: Int64 = 9               // kVK_ANSI_V
     private static let lKey: Int64 = 37              // kVK_ANSI_L
+    private static let cKey: Int64 = 8              // kVK_ANSI_C
     private static let aKey: Int64 = 0               // kVK_ANSI_A
     /// The talk key is down (touched only on the tap thread).
     private var talking = false
@@ -50,9 +59,18 @@ final class Hotkeys {
         if keyCode == aKey && cmdShiftOnly { return .tasks }
         if keyCode == vKey && cmdShiftOnly { return .talk }
         if keyCode == lKey && cmdShiftOnly { return .history }
+        if keyCode == cKey && cmdShiftOnly { return .cat }
         if keyCode == lKey && flags.contains(.maskControl) && flags.contains(.maskShift)
             && !flags.contains(.maskCommand) && !flags.contains(.maskAlternate) { return .engine }
         return nil
+    }
+
+    private static let screenshotKeys: Set<Int64> = [20, 21, 23] // kVK_ANSI_3, _4, _5
+
+    /// macOS's screenshot chords that save a file: ⌘⇧3, ⌘⇧4, ⌘⇧5 (with Control they copy to the clipboard instead; no file).
+    static func isSystemScreenshotChord(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        screenshotKeys.contains(keyCode) && flags.contains(.maskCommand) && flags.contains(.maskShift)
+            && !flags.contains(.maskControl) && !flags.contains(.maskAlternate)
     }
 
     /// Needs Accessibility permission; returns false without it.
@@ -109,8 +127,13 @@ final class Hotkeys {
                 aHeld = false // a fresh press means its key-up was missed: forget it, so a typed "a" is never swallowed
                 tasksPending = false
             }
+            if !isRepeat, Self.isSystemScreenshotChord(keyCode: keyCode, flags: event.flags) {
+                DispatchQueue.main.async { [weak self] in self?.onSystemShot?() }
+                return pass // macOS takes the screenshot; Margin only notes where you were
+            }
             let tabHeld = CGEventSource.keyState(.hidSystemState, key: CGKeyCode(Self.tabKey))
             guard let action = Self.action(keyCode: keyCode, flags: event.flags, tabHeld: tabHeld) else { return pass }
+            if action == .cat && !Self.catGone { return pass } // the cat is here: ⌘⇧C is the app's own
             if isRepeat { return nil }
             switch action {
             case .tasks:
@@ -121,13 +144,14 @@ final class Hotkeys {
                 let forAgent = aHeld // ⌘⇧A+V
                 tasksPending = false
                 DispatchQueue.main.async { [weak self] in self?.onTalkStart?(forAgent) }
-            case .snip, .chat, .history, .engine:
+            case .snip, .chat, .history, .engine, .cat:
                 swallowedKey = keyCode
                 DispatchQueue.main.async { [weak self] in
                     switch action {
                     case .snip: self?.onSnip?()
                     case .history: self?.onHistory?()
                     case .engine: self?.onEngine?()
+                    case .cat: self?.onCat?()
                     default: self?.onChat?()
                     }
                 }

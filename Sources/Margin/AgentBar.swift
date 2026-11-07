@@ -1,11 +1,11 @@
 import AppKit
 import SwiftUI
 
-/// The background agents' own home, separate from the chat sidebar. Minimized, it's a small black strip on the
-/// right edge of the screen (half-way down) with a little cat for each agent. Expanded, it's a black bar at the top
+/// The background agents' own home, separate from the chat sidebar. Minimized, each agent is a cat asleep (and breathing) on the
+/// bottom edge of the screen, in the right-hand corner, with nothing around it. Expanded, it's a black bar at the top
 /// centre of the screen where each agent is a bigger cat: click one for its card, + for a new job.
-/// ⌘⇧A, clicking the strip, or asking by voice expands it; clicking elsewhere, Esc, ⌘⇧A or its − button
-/// minimizes it back to the strip. The agents keep working either way.
+/// ⌘⇧A, clicking a resting cat, or asking by voice expands it; clicking elsewhere, Esc, ⌘⇧A or its − button
+/// puts the cats back to sleep in the corner (unless they've run away: ⌘⇧C calls them back). The agents keep working either way.
 final class AgentBar {
     static let shared = AgentBar()
 
@@ -38,14 +38,35 @@ final class AgentBar {
                    width: denySize.width, height: denySize.height)
         }
 
-        // The minimized strip.
-        static let stripWidth: CGFloat = 50
-        static let stripCell: CGFloat = 32
-        static let stripPad: CGFloat = 8
-        static let stripMaxCats = 6
-        static let stripCorner: CGFloat = 14
-        /// Gap between the strip and the screen's right edge.
-        static let stripInset: CGFloat = 4
+        // The resting cats: asleep in the bottom-right corner while the bar is minimized.
+        /// Tenths of a point per picture pixel: 4 makes each of the sheet's pixels 2 points, and a cat about 155 points wide.
+        /// Breathing moves it one of those pixels (2 points).
+        static let restPixels = 4
+        /// How far apart neighbouring cats sit: closer than their pictures are wide, so they curl up next to each other.
+        static let restSpacing: CGFloat = 140
+        static let restMaxCats = 4
+        /// Room for "+2" when there are more agents than cats shown.
+        static let restMoreWidth: CGFloat = 34
+        /// Between the right-most cat's picture and the screen's right edge: the cat sits a little in from the corner.
+        static let restInset: CGFloat = 20
+        /// The picture's empty margin under the paws, so they sit right on the bottom of the screen.
+        static let restSink: CGFloat = 8
+        /// Hover over the cats this long and they wake up and run off the right edge of the screen.
+        static let wakeAfter = 6.0
+        /// Tenths of a point per picture pixel for the awake cats (the standing and running pictures are 1.4x resampled, so 14
+        /// makes a sheet pixel about 2 points, like the sleepers).
+        static let awakePixels = 14
+        /// How fast the cats run, in points per second.
+        static let runSpeed: CGFloat = 330
+    }
+
+    /// Where the resting cats go: the bottom-right corner of `screen` (a screen's whole frame, so they sit at the very bottom),
+    /// a little in from the right edge, growing to the left.
+    static func restFrame(count: Int, in screen: NSRect) -> NSRect {
+        let cell = CGSize(width: PixelCat.bigCell.width * CGFloat(Layout.restPixels) / 10, height: PixelCat.bigCell.height * CGFloat(Layout.restPixels) / 10)
+        let cats = max(1, min(count, Layout.restMaxCats))
+        let width = (CGFloat(cats - 1) * Layout.restSpacing + cell.width + (count > Layout.restMaxCats ? Layout.restMoreWidth : 0)).rounded(.up)
+        return NSRect(x: (screen.maxX - Layout.restInset - width).rounded(), y: screen.minY - Layout.restSink, width: width, height: cell.height.rounded(.up))
     }
 
     /// What a click on the bar landed on.
@@ -60,6 +81,16 @@ final class AgentBar {
     private var clickMonitor: Any?
     private var keyMonitor: Any?
     private var ghost: Ghost?
+    private var hoverWork: DispatchWorkItem?
+    private var restWork: DispatchWorkItem?
+    private var restTimer: Timer?
+    /// The cats have run away for good: only ⌘⇧C brings them back (it survives quitting Margin).
+    private(set) var catsGone = UserDefaults.standard.bool(forKey: "catsGone") {
+        didSet {
+            UserDefaults.standard.set(catsGone, forKey: "catsGone")
+            Hotkeys.catGone = catsGone
+        }
+    }
     /// Expanded (the bar at the top) or minimized (the strip at the side).
     private(set) var expanded = false
     /// Where the bar is going (it may still be flying in): cards and the job box hang under this.
@@ -77,10 +108,14 @@ final class AgentBar {
     func start() {
         if panel == nil { build() }
         sync()
+        Hotkeys.catGone = catsGone
+        if catsGone {
+            model.restPhase = .away
+            return
+        }
         placeStrip()
         strip?.alphaValue = 1
         strip?.orderFrontRegardless()
-        model.stripVisible = true
     }
 
     // MARK: Expanding and minimizing
@@ -95,6 +130,7 @@ final class AgentBar {
     func show(newJob: Bool = false, prefill: String = "", message: String? = nil) {
         if panel == nil { build() }
         guard let panel, let host else { return }
+        cancelRest()
         sync()
         let target = frame(width: width(for: model.tasks.count), on: screenUnderMouse())
         settledFrame = target
@@ -119,8 +155,7 @@ final class AgentBar {
         if let strip, strip.isVisible, strip.alphaValue > 0.1, let from = snapshot(stripHost), let to = snapshot(host) {
             let start = strip.frame
             strip.alphaValue = 0
-            model.stripVisible = false
-            let g = Ghost(image: from, frame: start, radius: Layout.stripCorner, gravity: .resize, area: flightArea(start, target))
+            let g = Ghost(image: from, frame: start, radius: 0, gravity: .resizeAspect, area: flightArea(start, target))
             ghost = g
             g.animate(to: target, radius: Layout.corner, crossfadeTo: to, gravity: .resize, duration: 0.34,
                       timing: CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.25, 1)) { [weak self] remove in
@@ -135,7 +170,6 @@ final class AgentBar {
             }
         } else {
             strip?.orderOut(nil)
-            model.stripVisible = false
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.2
                 panel.animator().alphaValue = 1
@@ -151,11 +185,16 @@ final class AgentBar {
         guard expanded, let panel else { return }
         expanded = false
         ghost?.dismiss()
+        if catsGone { // the cats ran away: there's nothing to minimize into
+            panel.alphaValue = 0
+            panel.orderOut(nil)
+            model.visible = false
+            return
+        }
         placeStrip()
         guard let strip else { return }
         strip.alphaValue = 0
         strip.orderFrontRegardless()
-        model.stripVisible = true
         stripHost?.layoutSubtreeIfNeeded()
         let start = panel.frame
         if panel.isVisible, let from = snapshot(host), let to = snapshot(stripHost) {
@@ -164,7 +203,7 @@ final class AgentBar {
             model.visible = false
             let g = Ghost(image: from, frame: start, radius: Layout.corner, gravity: .resize, area: flightArea(start, strip.frame))
             ghost = g
-            g.animate(to: strip.frame, radius: Layout.stripCorner, crossfadeTo: to, gravity: .resize, duration: 0.3,
+            g.animate(to: strip.frame, radius: 0, crossfadeTo: to, gravity: .resizeAspect, duration: 0.3,
                       timing: CAMediaTimingFunction(controlPoints: 0.4, 0, 0.2, 1)) { [weak self] remove in
                 guard let self else { return remove() }
                 if !self.expanded { strip.alphaValue = 1 }
@@ -294,12 +333,10 @@ final class AgentBar {
         return NSRect(x: vf.midX - w / 2, y: vf.maxY - Layout.topGap - Layout.height, width: w, height: Layout.height)
     }
 
-    /// The strip hugs the right edge of the main screen, half-way down.
+    /// The resting cats sit in the bottom-right corner of the main screen.
     func stripFrame() -> NSRect {
-        let vf = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let cats = max(1, min(model.tasks.count, Layout.stripMaxCats)) + (model.tasks.count > Layout.stripMaxCats ? 1 : 0)
-        let h = Layout.stripPad * 2 + CGFloat(cats) * Layout.stripCell
-        return NSRect(x: vf.maxX - Layout.stripWidth - Layout.stripInset, y: (vf.midY - h / 2).rounded(), width: Layout.stripWidth, height: h)
+        let frame = (NSScreen.main ?? NSScreen.screens.first)?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return Self.restFrame(count: model.tasks.count, in: frame)
     }
 
     private func placeStrip() {
@@ -343,7 +380,7 @@ final class AgentBar {
         }
         guard changed else { return }
         model.tasks = shown
-        if let strip, strip.isVisible {
+        if let strip, strip.isVisible, model.restPhase == .asleep {
             WindowMotion.animate(strip, to: stripFrame())
         }
         guard expanded, let panel, panel.isVisible else { return }
@@ -374,15 +411,24 @@ final class AgentBar {
         p.onClick = { [weak self] point in
             if let hit = self?.hit(at: point) { self?.handle(hit) }
         }
+        p.onPress = { [weak self] point in
+            guard let self else { return }
+            switch point.flatMap({ self.hit(at: $0) }) {
+            case .allow(let i): self.model.pressed = .allow(i)
+            case .deny(let i): self.model.pressed = .deny(i)
+            default: self.model.pressed = nil
+            }
+        }
         panel = p
         host = h
 
         let f = stripFrame()
         let s = AgentBarPanel(size: f.size, canKey: false)
-        s.hasShadow = true
+        s.hasShadow = false // nothing around the cats: a window shadow would draw a box
+        s.keepsBelowMenuBar = false // the cats run off the edge of the screen
         let sh = NSHostingView(rootView: AgentStripView(model: model))
-        s.contentView = container(for: sh, size: f.size) { [weak self] _ in self?.model.stripHover = true }
-            exit: { [weak self] in self?.model.stripHover = false }
+        s.contentView = container(for: sh, size: f.size) { [weak self] _ in self?.stripHovered(true) }
+            exit: { [weak self] in self?.stripHovered(false) }
         s.setFrame(f, display: false)
         s.onClick = { [weak self] _ in self?.stripClicked() }
         strip = s
@@ -404,6 +450,107 @@ final class AgentBar {
         hover.onExit = exit
         content.addSubview(hover)
         return content
+    }
+
+    // MARK: The cats run away
+
+    /// The mouse is over the cats (or left them). Staying for `wakeAfter` seconds wakes them.
+    private func stripHovered(_ inside: Bool) {
+        model.stripHover = inside
+        if !inside {
+            hoverWork?.cancel()
+            hoverWork = nil
+            return
+        }
+        guard hoverWork == nil, !expanded, model.restPhase == .asleep else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.hoverWork = nil
+            self?.wakeCats()
+        }
+        hoverWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Layout.wakeAfter, execute: work)
+    }
+
+    private func later(_ seconds: Double, _ body: @escaping () -> Void) {
+        restWork?.cancel()
+        let work = DispatchWorkItem(block: body)
+        restWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
+    }
+
+    /// They wake and stand up, then run off to the right.
+    private func wakeCats() {
+        guard !expanded, model.restPhase == .asleep, strip != nil else { return }
+        model.restPhase = .waking
+        later(0.9) { [weak self] in self?.runOut() }
+    }
+
+    private func runOut() {
+        guard !expanded, let strip, let edge = (NSScreen.main ?? NSScreen.screens.first)?.frame.maxX else { return }
+        model.stripHover = false
+        model.restPhase = .leaving
+        let distance = edge - strip.frame.minX
+        slide(strip, toX: edge, duration: max(1.0, Double(distance / Layout.runSpeed)), accelerating: true) { [weak self] in
+            strip.orderOut(nil)
+            self?.model.restPhase = .away
+            self?.catsGone = true
+            Toast.show("The cat left. ⌘⇧C calls it back.", near: NSRect(x: edge - 300, y: strip.frame.maxY + 70, width: 1, height: 1))
+        }
+    }
+
+    /// ⌘⇧C: the cat that ran away comes back, trotting in from the right.
+    func callCats() {
+        guard catsGone else { return }
+        catsGone = false
+        guard !expanded else { return } // the bar is open: the cats are in the corner when it's put away
+        runBack()
+    }
+
+    /// Trot in from the right, sit, then curl up again.
+    private func runBack() {
+        guard !expanded, let strip, let edge = (NSScreen.main ?? NSScreen.screens.first)?.frame.maxX else { return }
+        let rest = stripFrame()
+        strip.setFrame(NSRect(x: edge, y: rest.minY, width: rest.width, height: rest.height), display: true)
+        strip.alphaValue = 1
+        model.restPhase = .returning
+        strip.orderFrontRegardless()
+        slide(strip, toX: rest.minX, duration: max(1.0, Double((edge - rest.minX) / Layout.runSpeed)), accelerating: false) { [weak self] in
+            self?.model.restPhase = .settling
+            self?.later(0.9) { self?.model.restPhase = .asleep }
+        }
+    }
+
+    /// Moves the strip sideways by hand (so it can be stopped): starting slowly then trotting off, or running in and slowing down.
+    private func slide(_ window: NSWindow, toX x: CGFloat, duration: Double, accelerating: Bool, done: @escaping () -> Void) {
+        restTimer?.invalidate()
+        let from = window.frame
+        let began = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self, weak window] timer in
+            guard let window else { return timer.invalidate() }
+            let p = min(1, (CACurrentMediaTime() - began) / duration)
+            let e = accelerating ? p * p : 1 - (1 - p) * (1 - p)
+            window.setFrame(NSRect(x: (from.minX + (x - from.minX) * CGFloat(e)).rounded(), y: from.minY, width: from.width, height: from.height), display: true)
+            if p >= 1 {
+                timer.invalidate()
+                self?.restTimer = nil
+                done()
+            }
+        }
+        restTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    /// Stops whatever the cats are doing and puts them back asleep in the corner (the bar is opening).
+    private func cancelRest() {
+        hoverWork?.cancel()
+        hoverWork = nil
+        restWork?.cancel()
+        restWork = nil
+        restTimer?.invalidate()
+        restTimer = nil
+        guard model.restPhase != .asleep, !catsGone else { return }
+        model.restPhase = .asleep
+        strip?.setFrame(stripFrame(), display: false)
     }
 
     // MARK: Going away
@@ -458,13 +605,17 @@ final class AgentBar {
 /// the very first click on a cat always counts.
 final class AgentBarPanel: FloatingPanel {
     var onClick: ((NSPoint) -> Void)?
+    /// The point of a mouse-down while the button is held, nil once it is released (for the Allow / Deny press feedback).
+    var onPress: ((NSPoint?) -> Void)?
     private var downAt: NSPoint?
 
     override func sendEvent(_ event: NSEvent) {
         switch event.type {
         case .leftMouseDown:
             downAt = event.locationInWindow
+            onPress?(event.locationInWindow)
         case .leftMouseUp:
+            onPress?(nil)
             if let d = downAt, hypot(d.x - event.locationInWindow.x, d.y - event.locationInWindow.y) < 6 { onClick?(event.locationInWindow) }
             downAt = nil
         default:
@@ -505,10 +656,14 @@ final class AgentBarModel: ObservableObject {
     @Published var tasks: [BackgroundTask] = []
     @Published var openID: UUID?
     @Published var hover: Hover?
-    /// Running cats only animate while they're on screen: in the bar, or in the strip.
+    /// The Allow / Deny button the mouse is held down on.
+    @Published var pressed: Hover?
+    /// Running cats only animate while the bar is on screen.
     @Published var visible = false
-    @Published var stripVisible = false
     @Published var stripHover = false
+    /// What the resting cats are doing: asleep, or awake and running out of the screen (and back).
+    enum RestPhase { case asleep, waking, leaving, away, returning, settling }
+    @Published var restPhase = RestPhase.asleep
     /// Each agent's cat, for as long as it's listed.
     var coats: [UUID: Int] = [:]
 
@@ -523,7 +678,25 @@ final class AgentBarModel: ObservableObject {
 
 // MARK: - Drawing
 
-private let accent = Color(nsColor: Theme.accent)
+private let accent = Theme.accent.color
+private let onAccent = Theme.onAccent.color
+/// The bar is ink in both appearances.
+private let barInk = Theme.ink.color
+private let barInk2 = Theme.inkSecondary.color
+private let barRaised = Theme.surfaceRaised.color
+private let barHair = Theme.hairline.color
+
+/// The cats wear a white sticker outline that vanishes on the off-white bar, so in light mode they sit on a quiet raised plate.
+private struct CatPlate: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content.background {
+            if scheme == .light {
+                RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.surfaceRaised.color).padding(.vertical, 8).padding(.horizontal, 4)
+            }
+        }
+    }
+}
 
 struct AgentBarView: View {
     @ObservedObject var model: AgentBarModel
@@ -535,7 +708,7 @@ struct AgentBarView: View {
             } else {
                 ForEach(Array(model.tasks.enumerated()), id: \.element.id) { i, task in
                     AgentSlotView(task: task, coat: model.coat(task), animating: model.visible,
-                                  isOpen: model.openID == task.id, hover: model.hover, index: i, closable: model.closable(i))
+                                  isOpen: model.openID == task.id, hover: model.hover, pressed: model.pressed, index: i, closable: model.closable(i))
                 }
             }
             newJob
@@ -544,19 +717,20 @@ struct AgentBarView: View {
         .padding(.horizontal, AgentBar.Layout.pad)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: AgentBar.Layout.corner, style: .continuous)
-                .fill(Color(white: 0.04))
-                .overlay(RoundedRectangle(cornerRadius: AgentBar.Layout.corner, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+            // Two fills for the 1px border (a stroked rounded shape rasterizes with notches).
+            ZStack {
+                RoundedRectangle(cornerRadius: AgentBar.Layout.corner, style: .continuous).fill(Theme.hairlineStrong.color)
+                RoundedRectangle(cornerRadius: AgentBar.Layout.corner - 1, style: .continuous).fill(Theme.canvas.color).padding(1)
+            }
         )
-        .environment(\.colorScheme, .dark)
     }
 
     private var empty: some View {
         HStack(spacing: 4) {
-            PixelCatView(coat: 0, mood: .idle).frame(width: AgentBar.Layout.catArea)
+            PixelCatView(coat: 0, mood: .idle).frame(width: AgentBar.Layout.catArea).modifier(CatPlate())
             VStack(alignment: .leading, spacing: 2) {
-                Text("No agents running").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(.white)
-                Text("Click + or say “tidy my desktop”").font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.55))
+                Text("No agents running").font(.geist(12, .semibold)).foregroundStyle(barInk)
+                Text("Click + or say “tidy my desktop”").font(.geist(12, .medium)).foregroundStyle(barInk2)
             }
             Spacer(minLength: 0)
         }
@@ -566,8 +740,8 @@ struct AgentBarView: View {
     private var newJob: some View {
         let hot = model.hover == .newJob
         return ZStack {
-            Circle().fill(Color.white.opacity(hot ? 0.2 : 0.1)).frame(width: 34, height: 34)
-            Image(systemName: "plus").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white.opacity(hot ? 1 : 0.8))
+            RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hot ? Theme.surfaceSelected.color : barRaised).frame(width: 34, height: 34)
+            Image(systemName: "plus").font(.geist(15, .semibold)).foregroundStyle(hot ? barInk : barInk2)
         }
         .frame(width: AgentBar.Layout.newJobWidth, height: AgentBar.Layout.height)
     }
@@ -575,65 +749,120 @@ struct AgentBarView: View {
     /// Back to the strip on the right.
     private var minimize: some View {
         let hot = model.hover == .minimize
-        return Image(systemName: "arrow.down.right.and.arrow.up.left").font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white.opacity(hot ? 0.95 : 0.5))
+        return Image(systemName: "arrow.down.right.and.arrow.up.left").font(.geist(11, .semibold))
+            .foregroundStyle(hot ? barInk : barInk2)
             .frame(width: 26, height: 26)
-            .background(Circle().fill(Color.white.opacity(hot ? 0.16 : 0)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(hot ? barRaised : Color.clear))
             .frame(width: AgentBar.Layout.minimizeWidth, height: AgentBar.Layout.height)
     }
 }
 
-/// The minimized agent bar: a small black strip on the right edge with a little cat per agent.
+/// The minimized agents: a cat asleep for each one, sitting on the bottom edge of the screen with nothing around it. Newer cats
+/// are to the right; with no agents there is still one cat, asleep.
 struct AgentStripView: View {
     @ObservedObject var model: AgentBarModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            if model.tasks.isEmpty {
-                PixelCatView(coat: 0, mood: .idle, roam: 0, pixels: 3).opacity(0.6)
-                    .frame(height: AgentBar.Layout.stripCell)
-            } else {
-                ForEach(model.tasks.suffix(AgentBar.Layout.stripMaxCats), id: \.id) { task in
-                    MiniCatView(task: task, coat: model.coat(task), animating: model.stripVisible)
-                        .frame(height: AgentBar.Layout.stripCell)
-                }
-                if model.tasks.count > AgentBar.Layout.stripMaxCats {
-                    Text("+\(model.tasks.count - AgentBar.Layout.stripMaxCats)").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white.opacity(0.7)).frame(height: AgentBar.Layout.stripCell)
+        let cell = PixelCat.bigCell.width * CGFloat(AgentBar.Layout.restPixels) / 10
+        let hidden = model.tasks.count - AgentBar.Layout.restMaxCats
+        HStack(alignment: .bottom, spacing: 0) {
+            if hidden > 0 {
+                Text("+\(hidden)").font(.mNum.weight(.semibold)).foregroundStyle(barInk)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.canvas.color.opacity(0.85)))
+                    .frame(width: AgentBar.Layout.restMoreWidth).padding(.bottom, 40)
+            }
+            HStack(alignment: .bottom, spacing: AgentBar.Layout.restSpacing - cell) {
+                if model.tasks.isEmpty {
+                    RestingCat(coat: 0, phase: model.restPhase)
+                } else {
+                    ForEach(model.tasks.suffix(AgentBar.Layout.restMaxCats), id: \.id) { task in
+                        RestingCatView(task: task, coat: model.coat(task), phase: model.restPhase)
+                    }
                 }
             }
         }
-        .padding(.vertical, AgentBar.Layout.stripPad)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: AgentBar.Layout.stripCorner, style: .continuous)
-                .fill(Color(white: model.stripHover ? 0.12 : 0.04))
-                .overlay(RoundedRectangle(cornerRadius: AgentBar.Layout.stripCorner, style: .continuous).strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .brightness(model.stripHover ? 0.08 : 0)
+        .animation(Motion.animation(Motion.small), value: model.stripHover)
+        .animation(Motion.animation(Motion.small), value: model.restPhase)
         .help("Agents: click to open (⌘⇧A)")
     }
 }
 
-/// One agent in the strip: a small cat in the same pose as in the bar, with a ? when it needs you.
-struct MiniCatView: View {
+/// One agent's resting cat: asleep and breathing whatever the agent is doing (the bar shows the real pose), with an alert badge
+/// when it needs you.
+struct RestingCatView: View {
     @ObservedObject var task: BackgroundTask
     let coat: Int
-    let animating: Bool
+    var phase = AgentBarModel.RestPhase.asleep
 
     var body: some View {
-        let mood = AgentSlotView.mood(task)
-        PixelCatView(coat: coat, mood: animating || mood != .running ? mood : .paused, roam: 0, pixels: 3)
+        RestingCat(coat: coat, phase: phase)
             .overlay(alignment: .topTrailing) {
-                if task.state == .needsApproval {
-                    Circle().fill(accent).frame(width: 9, height: 9)
-                        .overlay(Circle().strokeBorder(Color.black, lineWidth: 1.5))
-                        .offset(x: 2, y: -1)
+                if task.state == .needsApproval, phase == .asleep {
+                    Text("?").font(.geist(13, .semibold)).foregroundStyle(Theme.onAccent.color)
+                        .frame(width: 22, height: 22).background(Circle().fill(Theme.alert.color))
+                        .background(Circle().fill(Theme.canvas.color).padding(-1.5))
+                        .offset(x: -8, y: 14)
                 }
             }
     }
 }
 
-/// One agent: its cat (sitting, running or a loaf), what it's called, and what it's doing. An agent that's waiting for
+/// A resting cat in whatever it is doing: asleep, sitting up (just woken, or just back), or running out of the screen (facing
+/// right) and back in (facing left).
+struct RestingCat: View {
+    let coat: Int
+    let phase: AgentBarModel.RestPhase
+
+    var body: some View {
+        switch phase {
+        case .asleep, .away:
+            SleepingCatView(coat: coat, pixels: AgentBar.Layout.restPixels, offset: Double(coat) * 0.37)
+        case .waking, .settling:
+            AwakeCatView(coat: coat, act: .sit)
+        case .leaving:
+            AwakeCatView(coat: coat, act: .runRight)
+        case .returning:
+            AwakeCatView(coat: coat, act: .runLeft)
+        }
+    }
+}
+
+/// An awake cat from the small sheet, drawn at the same size as the sleepers: sitting up, or trotting (the pictures face left).
+struct AwakeCatView: View {
+    enum Act { case sit, runLeft, runRight }
+    let coat: Int
+    let act: Act
+
+    static func size() -> CGSize {
+        CGSize(width: PixelCat.cell.width * CGFloat(AgentBar.Layout.awakePixels) / 10, height: PixelCat.cell.height * CGFloat(AgentBar.Layout.awakePixels) / 10)
+    }
+
+    var body: some View {
+        Group {
+            switch act {
+            case .sit:
+                sprite(.sit)
+            case .runLeft, .runRight:
+                TimelineView(.periodic(from: .now, by: 1.0 / 15)) { context in
+                    let frame = Int(context.date.timeIntervalSinceReferenceDate * 10) % PixelCat.runFrames
+                    sprite(.run(frame)).scaleEffect(x: act == .runRight ? -1 : 1, y: 1)
+                }
+            }
+        }
+        .frame(width: Self.size().width, height: Self.size().height)
+    }
+
+    @ViewBuilder private func sprite(_ pose: PixelCat.Pose) -> some View {
+        if let image = PixelCat.image(coat: coat, pose: pose) {
+            Image(decorative: image, scale: 10 / CGFloat(AgentBar.Layout.awakePixels)).interpolation(.high)
+        }
+    }
+}
+
+/// One agent: its cat (standing, running, a loaf, or asleep while it waits its turn), what it's called, and what it's doing. An agent that's waiting for
 /// you shows what it wants to do and an Allow and a Deny button right here.
 struct AgentSlotView: View {
     @ObservedObject var task: BackgroundTask
@@ -641,6 +870,7 @@ struct AgentSlotView: View {
     let animating: Bool
     let isOpen: Bool
     let hover: AgentBarModel.Hover?
+    var pressed: AgentBarModel.Hover? = nil
     let index: Int
     let closable: Bool
 
@@ -651,23 +881,24 @@ struct AgentSlotView: View {
             ZStack(alignment: .topTrailing) {
                 PixelCatView(coat: coat, mood: animating ? Self.mood(task) : Self.restingMood(task), roam: 8)
                 if task.state == .needsApproval {
-                    Text("?").font(.system(size: 10, weight: .heavy, design: .rounded)).foregroundStyle(.white)
-                        .frame(width: 15, height: 15).background(Circle().fill(accent))
+                    Text("?").font(.geist(10, .semibold)).foregroundStyle(onAccent)
+                        .frame(width: 15, height: 15).background(Circle().fill(Theme.alert.color))
                         .offset(x: -2, y: 2)
                 }
             }
             .frame(width: AgentBar.Layout.catArea)
+            .modifier(CatPlate())
             if task.state == .needsApproval { asking } else { status }
             Spacer(minLength: 0)
         }
         .frame(width: AgentBar.Layout.slotWidth, height: AgentBar.Layout.height)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .fill(Color.white.opacity(isOpen ? 0.15 : hovering ? 0.08 : 0))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+            .fill((isOpen ? Theme.surfaceSelected.color : hovering ? barRaised : Color.clear))
             .padding(.vertical, 5))
         .overlay(alignment: .topTrailing) {
             if hovering && closable && task.state != .needsApproval {
-                Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(.white.opacity(0.8))
-                    .frame(width: 16, height: 16).background(Circle().fill(Color.white.opacity(0.16)))
+                Image(systemName: "xmark").font(.geist(8, .semibold)).foregroundStyle(barInk2)
+                    .frame(width: 16, height: 16).background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(barRaised))
                     .padding(9)
             }
         }
@@ -676,15 +907,16 @@ struct AgentSlotView: View {
     /// Name, what it's doing, progress.
     private var status: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(task.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+            Text(task.title).font(.geist(12, .semibold)).foregroundStyle(barInk).lineLimit(1)
             let s = Self.status(task)
-            Text(s.text).font(.system(size: 10.5)).foregroundStyle(s.color).lineLimit(1)
+            Text(s.text).font(.geist(12, .medium)).foregroundStyle(s.color).lineLimit(1)
             if task.state == .working, !task.queued, let f = task.fraction {
                 GeometryReader { g in
                     ZStack(alignment: .leading) {
-                        Capsule().fill(Color.white.opacity(0.12))
-                        Capsule().fill(accent).frame(width: max(3, g.size.width * f))
+                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(barHair)
+                        RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(barInk).frame(width: max(3, g.size.width * f))
                     }
+                    .animation(Motion.animation(Motion.functional), value: f)
                 }
                 .frame(height: 3)
             }
@@ -696,12 +928,12 @@ struct AgentSlotView: View {
     private var asking: some View {
         let quick = task.canQuickApprove
         return VStack(alignment: .leading, spacing: 0) {
-            Text(task.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white).lineLimit(1).frame(height: 15)
-            Text(task.approvalSummary).font(.system(size: 10)).foregroundStyle(accent).lineLimit(1).frame(height: 13)
+            Text(task.title).font(.geist(12, .semibold)).foregroundStyle(barInk).lineLimit(1).frame(height: 15)
+            Text(task.approvalSummary).font(.geist(12, .medium)).foregroundStyle(barInk2).lineLimit(1).frame(height: 13)
             Spacer(minLength: 0)
             HStack(spacing: AgentBar.Layout.buttonGap) {
-                pill(quick ? "Allow" : "Review", size: AgentBar.Layout.allowSize, filled: true, hot: hover == .allow(index))
-                pill("Deny", size: AgentBar.Layout.denySize, filled: false, hot: hover == .deny(index))
+                pill(quick ? "Allow" : "Review", size: AgentBar.Layout.allowSize, filled: true, hot: hover == .allow(index), pressed: pressed == .allow(index))
+                pill("Deny", size: AgentBar.Layout.denySize, filled: false, hot: hover == .deny(index), pressed: pressed == .deny(index))
             }
         }
         .padding(.top, 9)
@@ -709,15 +941,18 @@ struct AgentSlotView: View {
         .frame(maxHeight: .infinity)
     }
 
-    private func pill(_ title: String, size: CGSize, filled: Bool, hot: Bool) -> some View {
-        Text(title).font(.system(size: 11.5, weight: .semibold)).foregroundStyle(.white)
+    private func pill(_ title: String, size: CGSize, filled: Bool, hot: Bool, pressed: Bool) -> some View {
+        Text(title).font(.geist(12, .semibold)).foregroundStyle(filled ? onAccent : barInk)
             .frame(width: size.width, height: size.height)
-            .background(Capsule().fill(filled ? accent.opacity(hot ? 1 : 0.9) : Color.white.opacity(hot ? 0.26 : 0.15)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(filled ? accent.opacity(hot ? 1 : 0.92) : (hot ? Theme.surfaceSelected.color : barRaised)))
+            .scaleEffect(pressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+            .animation(Motion.animation(Motion.small), value: pressed)
+            .animation(Motion.animation(Motion.small), value: hot)
     }
 
     static func mood(_ task: BackgroundTask) -> PixelCatView.Mood {
         switch task.state {
-        case .working: return task.queued ? .idle : .running
+        case .working: return task.queued ? .asleep : .running
         case .needsApproval, .failed, .cancelled: return .idle
         case .done: return .done
         }
@@ -731,15 +966,15 @@ struct AgentSlotView: View {
     static func status(_ task: BackgroundTask) -> (text: String, color: Color) {
         switch task.state {
         case .working:
-            return (task.queued ? "Waiting its turn" : task.detail, .white.opacity(0.6))
+            return (task.queued ? "Waiting its turn" : task.detail, barInk2)
         case .needsApproval:
-            return ("Needs your OK", accent)
+            return ("Needs your OK", barInk)
         case .done:
-            return (task.undone ? "Undone" : (task.report?.headline ?? "Done"), Color(red: 0.45, green: 0.85, blue: 0.55))
+            return (task.undone ? "Undone" : (task.report?.headline ?? "Done"), barInk2)
         case .failed(let message):
-            return ("Failed: " + message, Color(red: 1, green: 0.45, blue: 0.42))
+            return ("Failed: " + message, Theme.alert.color)
         case .cancelled:
-            return (task.detail == "Starting…" ? "Stopped" : task.detail, .white.opacity(0.55))
+            return (task.detail == "Starting…" ? "Stopped" : task.detail, barInk2)
         }
     }
 }

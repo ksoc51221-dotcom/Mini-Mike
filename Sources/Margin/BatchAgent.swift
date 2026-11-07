@@ -3,7 +3,7 @@ import ImageIO
 import PDFKit
 import UniformTypeIdentifiers
 
-enum BatchKind: String, CaseIterable, Equatable {
+enum BatchKind: String, CaseIterable, Equatable, Codable {
     case heicToJpg, mergePDFs, ocrToText
 
     var title: String {

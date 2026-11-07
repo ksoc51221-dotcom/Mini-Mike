@@ -10,7 +10,7 @@ enum Prompts {
         static let all: Features = [.voice, .graphs]
     }
 
-    static func system(webSearch: Bool, sectors: [String] = Sector.defaults, features: Features = .all) -> String {
+    static func system(webSearch: Bool, sectors: [String] = Sector.defaults, sectorHints: [String: String] = [:], features: Features = .all) -> String {
         var rules = [
             "Answer only what they asked, in 2-4 short plain-language sentences (aim for under ~80 words) unless they ask for more.",
             "Use the screenshot and surrounding text to figure out what \"this\", \"it\", or a term refers to. Ignore unrelated things on screen and never describe the screenshot back to them.",
@@ -30,7 +30,7 @@ enum Prompts {
             "No headers, no long bullet lists, no preamble, and don't restate or summarize the passage back to them.",
             "If they ask you to go deeper, give a fuller explanation (up to ~200 words), still in plain language.",
             "Follow-up questions refer to the same highlighted text and your earlier answers.",
-            metaRule(sectors),
+            metaRule(sectors, hints: sectorHints),
         ]
         return """
         You are Margin, a quick clarifier that lives next to the user's cursor. The user highlighted a bit of \
@@ -41,6 +41,74 @@ enum Prompts {
         How to answer:
         \(rules.map { "- " + $0 }.joined(separator: "\n"))
         """
+    }
+
+    // MARK: Context and Rules
+
+    /// How much of each box is sent. The boxes go in every chat's system prompt, so a huge paste can't quietly get expensive.
+    static let maxPersonal = 4000
+    /// Where the boxes are read from. Tests swap in a throwaway store.
+    static var personalSource = Settings.shared
+
+    /// The Context and Rules text for a system prompt, or "" when both are empty.
+    static func personalBlock(context: String, rules: String) -> String {
+        let about = context.trimmingCharacters(in: .whitespacesAndNewlines)
+        let must = rules.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts: [String] = []
+        if !about.isEmpty {
+            parts.append("What the user has told you about themselves. Use it when it helps, and don't recite it back:\n" + clip(about, maxPersonal))
+        }
+        if !must.isEmpty {
+            parts.append("The user's rules. Follow them in every answer, even where they differ from the guidance above:\n" + clip(must, maxPersonal))
+        }
+        return parts.joined(separator: "\n\n")
+    }
+
+    /// A chat's system prompt with the user's Context and Rules added. This is set once when a chat starts, so follow-ups
+    /// don't resend it. With both boxes empty, `base` comes back exactly as it went in.
+    static func personalized(_ base: String, settings: Settings? = nil) -> String {
+        let source = settings ?? personalSource
+        let block = personalBlock(context: source.personalContext, rules: source.personalRules)
+        return block.isEmpty ? base : base + "\n\n" + block
+    }
+
+    // MARK: Learn mode
+
+    static let hintLevels = 1...4
+    /// The picker's short names.
+    static func hintName(_ level: Int) -> String {
+        switch level {
+        case 1: return "Bare hint"
+        case 2: return "The method"
+        case 3: return "Most of it"
+        default: return "Full working"
+        }
+    }
+
+    private static func hintInstruction(_ level: Int) -> String {
+        switch level {
+        case 1: return "give the bare minimum nudge: one short sentence on where to look or what to think about. Don't name the method, do any working or give the answer."
+        case 2: return "name the idea or method that applies and why it fits, in one or two sentences. Don't do any working or give the answer."
+        case 3: return "walk me through the working up to the last step, and leave that last step for me. Don't give the final answer."
+        default: return "give the full working step by step, with the final answer. Ignore the usual length limit for this."
+        }
+    }
+
+    /// The chat's question line for a hint.
+    static func hintLabel(_ level: Int, question: String? = nil) -> String {
+        let label = "Hint level \(level)"
+        return question.map { "\($0) · \(label.lowercased())" } ?? label
+    }
+
+    /// What's asked at a hint level. `question` is one they typed (otherwise the highlight or snip is the question);
+    /// `movingUp` is the same problem at a higher level, from the button under an answer.
+    static func hint(_ level: Int, question: String? = nil, movingUp: Bool = false) -> String {
+        let opening: String
+        if movingUp { opening = "Same problem, more help." }
+        else if let question { opening = question + "\n\nI'm working this out myself." }
+        else { opening = "What I highlighted or snipped is the problem I'm working on." }
+        return opening + " Hint level \(level) of 4: " + hintInstruction(level)
+            + (level < 4 ? " Keep to this level of help in any follow-up until I ask for more." : "")
     }
 
     /// How Claude speaks: <say> clips that Margin turns into voice messages. Only sent when it is likely to be used.
@@ -104,11 +172,14 @@ enum Prompts {
     """
 
     /// How Claude names and files a chat without an extra call: one hidden line at the end of its first answer.
-    static func metaRule(_ sectors: [String]) -> String {
-        "In your FIRST answer of a chat only, finish with one extra line that names and files the chat: "
+    static func metaRule(_ sectors: [String], hints: [String: String] = [:]) -> String {
+        let described = sectors.filter { !(hints[$0] ?? "").isEmpty }
+        let guide = described.isEmpty ? "" : " Sector guide: "
+            + described.map { "\($0) = \(String((hints[$0] ?? "").prefix(90)))" }.joined(separator: "; ") + "."
+        return "In your FIRST answer of a chat only, finish with one extra line that names and files the chat: "
             + "<meta title=\"a 3-6 word title\" sector=\"Math\"/>. The sector is one of: "
             + sectors.joined(separator: ", ")
-            + " (or one new short sector name only if none of them fits). Never write it in later answers."
+            + " (or one new short sector name only if none of them fits)." + guide + " Never write it in later answers."
     }
 
     static let quizLabel = "Quiz me"
@@ -159,6 +230,11 @@ enum Prompts {
         - You can't search the web or see their screen. Only if the question truly depends on recent facts, exact \
         numbers or versions, or something you can't see, say so in one short sentence instead of guessing.
         """
+
+    /// For a quick model that can look at pictures (Haiku): the same, but it may be sent a snip or a screenshot.
+    static let localSystemSeeing = localSystem.replacingOccurrences(
+        of: "You can't search the web or see their screen. Only if the question truly depends on recent facts, exact numbers or versions, or something you can't see, say so in one short sentence instead of guessing.",
+        with: "You may be sent a snip or a screenshot of their screen: look at it when the question is about it. You can't search the web: only if the question truly depends on recent facts, exact numbers or versions, say so in one short sentence instead of guessing.")
 
     static let emptySubmit = "Explain this more simply."
 

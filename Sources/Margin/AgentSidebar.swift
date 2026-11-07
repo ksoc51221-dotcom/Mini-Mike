@@ -23,6 +23,7 @@ final class AgentSidebar {
     static let stripWidth: CGFloat = 30
     static let margin: CGFloat = 10
     fileprivate static let headerHeight: CGFloat = 40
+    static let headerHeightForDrag: CGFloat = 40
     fileprivate static let rowHeight: CGFloat = 52
     fileprivate static let rowPitch: CGFloat = 56
     fileprivate static let rowInset: CGFloat = 8
@@ -31,7 +32,7 @@ final class AgentSidebar {
     /// Where the circle's center sits inside a row.
     fileprivate static let discX: CGFloat = 26
 
-    private let panel: FloatingPanel
+    private let panel: SidebarPanel
     private let content = SidebarView(frame: NSRect(x: 0, y: 0, width: AgentSidebar.width, height: 100))
     private var rows: [Row] = []
     private var views: [ObjectIdentifier: RowView] = [:]
@@ -39,10 +40,77 @@ final class AgentSidebar {
 
     init(open: Bool = Settings.shared.sidebarOpen) {
         isOpen = open
-        panel = FloatingPanel(size: NSSize(width: Self.width, height: 100), canKey: false)
+        panel = SidebarPanel(size: NSSize(width: Self.width, height: 100))
         panel.contentView = content
         content.onToggle = { [weak self] in self?.toggle() }
         content.setOpen(open, animated: false)
+        // The header (and, when folded, the whole strip) is a handle: drag the sidebar anywhere, and it stays there.
+        panel.dragZone = { [weak self] p in self?.startsDrag(at: p) ?? false }
+        panel.onDragEnded = { [weak self] in self?.dragEnded() }
+        panel.onReset = { [weak self] in self?.resetPosition() }
+    }
+
+    /// Where a press may start dragging the sidebar: the header (not its fold button), or any of the folded strip.
+    func startsDrag(at p: NSPoint) -> Bool {
+        let fromTop = panel.frame.height - p.y
+        if !isOpen { return true }
+        return fromTop < Self.headerHeight && p.x < panel.frame.width - 44
+    }
+
+    /// The sidebar was dropped somewhere: remember its top-right corner (so it grows downward and keeps its edge).
+    private func dragEnded() {
+        let f = panel.frame
+        Settings.shared.sidebarAnchor = NSPoint(x: f.maxX, y: f.maxY)
+        panel.invalidateShadow()
+    }
+
+    /// Double-click the header: back to the top-right corner of the laptop screen.
+    func resetPosition() {
+        Settings.shared.sidebarAnchor = nil
+        arrange(animated: true)
+    }
+
+    /// Moves the sidebar as a drag would (for tests).
+    func debugDrag(by delta: NSSize) {
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + delta.width, y: panel.frame.minY + delta.height))
+        dragEnded()
+    }
+
+    /// Drags it with real mouse events through the window, like the header does. False if that spot isn't a handle.
+    func debugDragHeader(by delta: NSSize) -> Bool {
+        let local = NSPoint(x: 60, y: panel.frame.height - 20)
+        guard startsDrag(at: local) else { return false }
+        let start = NSPoint(x: panel.frame.minX + local.x, y: panel.frame.minY + local.y)
+        func send(_ type: NSEvent.EventType, at screen: NSPoint) {
+            let location = NSPoint(x: screen.x - panel.frame.minX, y: screen.y - panel.frame.minY)
+            guard let e = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: panel.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+            panel.sendEvent(e)
+        }
+        send(.leftMouseDown, at: start)
+        for i in 1...6 {
+            let f = CGFloat(i) / 6
+            send(.leftMouseDragged, at: NSPoint(x: start.x + delta.width * f, y: start.y + delta.height * f))
+        }
+        send(.leftMouseUp, at: NSPoint(x: start.x + delta.width, y: start.y + delta.height))
+        return true
+    }
+    var debugHasSavedPosition: Bool { Settings.shared.sidebarAnchor != nil }
+
+    /// Double-clicks the header with real mouse events (it should put the sidebar back in its corner).
+    func debugDoubleClickHeader() -> Bool {
+        let local = NSPoint(x: 60, y: panel.frame.height - 20)
+        guard startsDrag(at: local) else { return false }
+        for (type, count) in [(NSEvent.EventType.leftMouseDown, 1), (.leftMouseUp, 1), (.leftMouseDown, 2), (.leftMouseUp, 2)] {
+            guard let e = NSEvent.mouseEvent(with: type, location: local, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: panel.windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: count, pressure: 1) else { return false }
+            panel.sendEvent(e)
+        }
+        return true
     }
 
     var frame: NSRect { panel.frame }
@@ -107,12 +175,27 @@ final class AgentSidebar {
         return NSSize(width: Self.width, height: Self.headerHeight + CGFloat(count) * Self.rowPitch + Self.bottomPad)
     }
 
-    /// Where the sidebar is (or is moving to): the top-right corner of the laptop screen.
+    /// Where the sidebar is (or is moving to): where you dragged it, or else the top-right corner of the laptop screen.
     private func targetFrame() -> NSRect {
-        let vf = Self.dockScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let s = size(open: isOpen, count: max(rows.count, 1))
-        return NSRect(x: vf.maxX - Self.margin - s.width, y: vf.maxY - Self.margin - s.height,
-                      width: s.width, height: s.height)
+        return Self.frame(size: s, anchor: Settings.shared.sidebarAnchor, screens: NSScreen.screens.map(\.visibleFrame),
+                          dockScreen: Self.dockScreen?.visibleFrame)
+    }
+
+    /// The sidebar's frame for a size. Its top-right corner stays put as it grows or folds, and it's kept on a screen
+    /// (the one the corner is on; if that screen is gone, the laptop's). Pure, so it's tested.
+    static func frame(size s: NSSize, anchor: NSPoint?, screens: [NSRect], dockScreen: NSRect?) -> NSRect {
+        let fallback = dockScreen ?? screens.first ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        guard let anchor else {
+            return NSRect(x: fallback.maxX - margin - s.width, y: fallback.maxY - margin - s.height, width: s.width, height: s.height)
+        }
+        // The screen whose area holds the corner (a little slack for the edge itself).
+        let home = screens.first { $0.insetBy(dx: -2, dy: -2).contains(anchor) } ?? fallback
+        var x = anchor.x - s.width
+        var y = anchor.y - s.height
+        x = min(max(x, home.minX + 4), home.maxX - s.width - 4)
+        y = min(max(y, home.minY + 4), home.maxY - s.height - 4)
+        return NSRect(x: x, y: y, width: s.width, height: s.height)
     }
 
     private func arrange(animated: Bool) {
@@ -199,7 +282,7 @@ final class AgentSidebar {
                 return NSPoint(x: r.midX, y: r.midY)
             }
             let want = discFrame(at: i)
-            return (screenCenter(view.discView), screenCenter(view.auraView), NSPoint(x: want.midX, y: want.midY))
+            return (screenCenter(view.discView), screenCenter(view.discView), NSPoint(x: want.midX, y: want.midY))
         }
     }
     var debugPanelFrame: NSRect { panel.frame }
@@ -229,6 +312,39 @@ final class AgentSidebar {
     }
 }
 
+// MARK: - Headless picture (--uishots)
+
+extension AgentSidebar {
+    /// The sidebar card with these rows, drawn without a window (so nothing appears on screen). The blur and shadow of the
+    /// real window aren't part of it; the card itself is the same views.
+    @MainActor
+    static func shotImage(titles: [(title: String, subtitle: String, phase: AgentPhase, isOpen: Bool)], open: Bool = true) -> CGImage? {
+        let count = max(titles.count, 1)
+        let size = open ? NSSize(width: width, height: headerHeight + CGFloat(count) * rowPitch + bottomPad)
+                        : NSSize(width: stripWidth, height: SidebarView.stripHeight(count: count))
+        let content = SidebarView(frame: NSRect(origin: .zero, size: size))
+        content.setOpen(open, animated: false)
+        content.setCount(titles.count, of: 4)
+        content.setDots(titles.map { ($0.phase, $0.isOpen) })
+        var keep: [AnyObject] = []
+        for (i, t) in titles.enumerated() {
+            let token = NSObject()
+            keep.append(token)
+            let row = RowView(id: ObjectIdentifier(token))
+            row.apply(Row(id: ObjectIdentifier(token), title: t.title, subtitle: t.subtitle, phase: t.phase, isOpen: t.isOpen))
+            row.frame = NSRect(x: rowInset, y: headerHeight + CGFloat(i) * rowPitch, width: width - rowInset * 2, height: rowHeight)
+            row.isHidden = !open
+            content.addSubview(row)
+        }
+        content.layoutSubtreeIfNeeded()
+        content.appearance = NSAppearance.currentDrawing()
+        guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return nil }
+        content.cacheDisplay(in: content.bounds, to: rep)
+        _ = keep
+        return rep.cgImage
+    }
+}
+
 // MARK: - Window content
 
 /// The black card: header with a fold button, or (folded) a strip with a dot per agent.
@@ -244,7 +360,6 @@ private final class SidebarView: NSView {
     private let header = NSView()
     private let strip = StripView()
     private let titleField = NSTextField(labelWithString: "Chats")
-    private let countField = NSTextField(labelWithString: "")
     private let foldButton = IconButton(symbol: "sidebar.right", help: "Fold the sidebar")
     private var open = true
 
@@ -253,29 +368,24 @@ private final class SidebarView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.045, alpha: 0.96).cgColor
-        layer?.cornerRadius = 18
+        layer?.backgroundColor = Theme.canvas.dark.withAlphaComponent(0.96).cgColor
+        layer?.cornerRadius = Theme.Radius.container
         layer?.cornerCurve = .continuous
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor(white: 1, alpha: 0.09).cgColor
+        layer?.borderColor = Theme.hairlineStrong.dark.cgColor
 
         header.frame = NSRect(x: 0, y: 0, width: AgentSidebar.width, height: AgentSidebar.headerHeight)
         header.autoresizingMask = [.width]
         let spark = NSImageView(image: ClaudeMark.menuBarImage())
-        spark.contentTintColor = NSColor(white: 1, alpha: 0.72)
+        spark.contentTintColor = Theme.inkSecondary.dark
         spark.frame = NSRect(x: 16, y: 13, width: 14, height: 14)
-        titleField.font = .systemFont(ofSize: 12, weight: .semibold)
-        titleField.textColor = NSColor(white: 1, alpha: 0.72)
+        titleField.font = .margin(12, .semibold)
+        titleField.textColor = Theme.inkSecondary.dark
         titleField.frame = NSRect(x: 36, y: 11, width: 80, height: 17)
-        countField.font = .systemFont(ofSize: 11)
-        countField.textColor = NSColor(white: 1, alpha: 0.38)
-        countField.alignment = .right
-        countField.frame = NSRect(x: AgentSidebar.width - 148, y: 12, width: 104, height: 15)
-        countField.autoresizingMask = [.minXMargin]
         foldButton.frame = NSRect(x: AgentSidebar.width - 36, y: 8, width: 24, height: 24)
         foldButton.autoresizingMask = [.minXMargin]
         foldButton.onClick = { [weak self] in self?.onToggle?() }
-        for v in [spark, titleField, countField, foldButton] { header.addSubview(v) }
+        for v in [spark, titleField, foldButton] { header.addSubview(v) }
         addSubview(header)
 
         strip.frame = bounds
@@ -289,7 +399,8 @@ private final class SidebarView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setCount(_ n: Int, of max: Int, tasks: Int = 0) {
-        countField.stringValue = "\(n) of \(max)" + (tasks > 0 ? " · \(tasks) task\(tasks == 1 ? "" : "s")" : "")
+        // No counter in the header; the number lives in the tooltip.
+        titleField.toolTip = tasks > 0 ? "\(n) of \(max) chats · \(tasks) \(tasks == 1 ? "task" : "tasks")" : "\(n) of \(max) chats"
     }
     func setDots(_ dots: [(AgentPhase, Bool)]) { strip.setDots(dots) }
 
@@ -332,7 +443,7 @@ private final class StripView: NSView {
         let config = NSImage.SymbolConfiguration(pointSize: 11, weight: .bold)
         arrow.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Unfold the sidebar")?
             .withSymbolConfiguration(config)
-        arrow.contentTintColor = NSColor(white: 1, alpha: 0.6)
+        arrow.contentTintColor = Theme.inkSecondary.dark
         arrow.frame = NSRect(x: 0, y: 10, width: AgentSidebar.stripWidth, height: 18)
         addSubview(arrow)
         toolTip = "Unfold the chat sidebar"
@@ -356,10 +467,6 @@ private final class StripView: NSView {
             dot.path = CGPath(ellipseIn: CGRect(origin: .zero, size: CGSize(width: d, height: d)), transform: nil)
             let color = AgentBubble.color(for: phase)
             dot.fillColor = color.cgColor
-            dot.shadowColor = color.cgColor
-            dot.shadowOpacity = 0.9
-            dot.shadowRadius = 4
-            dot.shadowOffset = .zero
             if phase == .working || phase == .idle {
                 if dot.animation(forKey: "pulse") == nil {
                     let pulse = CABasicAnimation(keyPath: "opacity")
@@ -386,15 +493,15 @@ private final class StripView: NSView {
 private final class IconButton: NSView {
     var onClick: (() -> Void)?
     private let icon = NSImageView()
-    private var hovering = false { didSet { layer?.backgroundColor = NSColor(white: 1, alpha: hovering ? 0.14 : 0).cgColor } }
+    private var hovering = false { didSet { layer?.backgroundColor = (hovering ? Theme.surfaceRaised.dark : NSColor.clear).cgColor } }
 
     init(symbol: String, help: String) {
         super.init(frame: NSRect(x: 0, y: 0, width: 24, height: 24))
         wantsLayer = true
-        layer?.cornerRadius = 12
+        layer?.cornerRadius = Theme.Radius.chip
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: help)?
             .withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
-        icon.contentTintColor = NSColor(white: 1, alpha: 0.7)
+        icon.contentTintColor = Theme.inkSecondary.dark
         icon.frame = bounds
         icon.autoresizingMask = [.width, .height]
         addSubview(icon)
@@ -424,11 +531,12 @@ private final class RowView: NSView {
     var onDelete: ((ObjectIdentifier) -> Void)?
 
     let discView = DiscView(diameter: AgentSidebar.disc, pad: 10)
-    let auraView = GlowView(diameter: AgentSidebar.disc, reach: 12)
     private let titleField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
     private let cross = NSImageView()
     private let highlight = CALayer()
+    /// The 2 pt accent bar on the open row's left edge.
+    private let selectionBar = CALayer()
     private var isOpenRow = false
     private var hovering = false { didSet { refresh() } }
 
@@ -438,23 +546,24 @@ private final class RowView: NSView {
         self.id = id
         super.init(frame: NSRect(x: 0, y: 0, width: AgentSidebar.width - AgentSidebar.rowInset * 2, height: AgentSidebar.rowHeight))
         wantsLayer = true
-        highlight.cornerRadius = 12
+        highlight.cornerRadius = Theme.Radius.control
         highlight.cornerCurve = .continuous
         layer?.addSublayer(highlight)
+        selectionBar.backgroundColor = Theme.ink.dark.cgColor
+        selectionBar.cornerRadius = 1
+        selectionBar.opacity = 0
+        layer?.addSublayer(selectionBar)
 
         let c = NSPoint(x: AgentSidebar.discX, y: AgentSidebar.rowHeight / 2)
-        let aura = auraView.bounds.width
-        auraView.frame = NSRect(x: c.x - aura / 2, y: c.y - aura / 2, width: aura, height: aura)
         let disc = discView.bounds.width
         discView.frame = NSRect(x: c.x - disc / 2, y: c.y - disc / 2, width: disc, height: disc)
-        addSubview(auraView)
         addSubview(discView)
 
         let textX: CGFloat = 52
         let textWidth = bounds.width - textX - 30
-        titleField.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleField.textColor = NSColor(white: 1, alpha: 0.94)
-        subtitleField.font = .systemFont(ofSize: 11)
+        titleField.font = .margin(13, .semibold)
+        titleField.textColor = Theme.ink.dark
+        subtitleField.font = .margin(12, .medium)
         for field in [titleField, subtitleField] {
             field.lineBreakMode = .byTruncatingTail
             field.maximumNumberOfLines = 1
@@ -465,7 +574,7 @@ private final class RowView: NSView {
 
         cross.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Delete chat")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .regular)
-                .applying(.init(paletteColors: [NSColor(white: 0.1, alpha: 1), NSColor(white: 1, alpha: 0.62)])))
+                .applying(.init(paletteColors: [Theme.canvas.dark, Theme.inkSecondary.dark])))
         cross.frame = crossRect
         cross.isHidden = true
         addSubview(cross)
@@ -485,6 +594,7 @@ private final class RowView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         highlight.frame = bounds
+        selectionBar.frame = CGRect(x: 0, y: 9, width: 2, height: max(0, bounds.height - 18))
         CATransaction.commit()
     }
 
@@ -495,23 +605,22 @@ private final class RowView: NSView {
         subtitleField.textColor = Self.statusColor(row.phase)
         isOpenRow = row.isOpen
         discView.setPhase(row.phase)
-        auraView.setPhase(row.phase)
         refresh()
     }
 
     private static func statusColor(_ phase: AgentPhase) -> NSColor {
         switch phase {
-        case .idle: return NSColor(white: 1, alpha: 0.45)
-        case .working: return AgentBubble.lightPurple.withAlphaComponent(0.9)
-        case .done: return NSColor(srgbRed: 0.42, green: 0.84, blue: 0.58, alpha: 1)
-        case .failed: return NSColor(srgbRed: 1.0, green: 0.52, blue: 0.5, alpha: 1)
+        case .idle: return Theme.inkTertiary.dark
+        case .working: return Theme.inkSecondary.dark
+        case .done: return Theme.inkSecondary.dark
+        case .failed: return AgentBubble.failed
         }
     }
 
     private func refresh() {
         cross.isHidden = !hovering
-        let alpha: CGFloat = isOpenRow ? 0.15 : (hovering ? 0.09 : 0)
-        highlight.backgroundColor = NSColor(white: 1, alpha: alpha).cgColor
+        highlight.backgroundColor = (isOpenRow ? Theme.surfaceSelected.dark : (hovering ? Theme.surfaceRaised.dark : NSColor.clear)).cgColor
+        selectionBar.opacity = isOpenRow ? 1 : 0
     }
 
     /// Slides in when a chat is added (or the sidebar unfolds).
@@ -536,7 +645,7 @@ private final class RowView: NSView {
     /// A chat just landed here: the row lights up for a moment and the circle bounces.
     func flash() {
         let glow = CABasicAnimation(keyPath: "backgroundColor")
-        glow.fromValue = NSColor(white: 1, alpha: 0.32).cgColor
+        glow.fromValue = Theme.ink.dark.withAlphaComponent(0.12).cgColor
         glow.toValue = highlight.backgroundColor
         glow.duration = 0.6
         highlight.add(glow, forKey: "flash")
@@ -557,6 +666,53 @@ private final class RowView: NSView {
             onDelete?(id)
         } else {
             onSelect?(id)
+        }
+    }
+}
+
+// MARK: - The sidebar's window
+
+/// The sidebar's window: a press on its handle drags it. A press that never moves is still a click (the fold button,
+/// the folded strip), and a drag never counts as one. Double-clicking the handle puts it back in the corner.
+final class SidebarPanel: FloatingPanel {
+    /// Whether a press at this point (window coordinates) may start a drag.
+    var dragZone: ((NSPoint) -> Bool)?
+    var onDragEnded: (() -> Void)?
+    var onReset: (() -> Void)?
+    private var pressed = false
+    private var dragging = false
+    private var mouseStart = NSPoint.zero
+    private var originStart = NSPoint.zero
+
+    init(size: NSSize) { super.init(size: size, canKey: false) }
+
+    override func sendEvent(_ event: NSEvent) {
+        switch event.type {
+        case .leftMouseDown where dragZone?(event.locationInWindow) == true:
+            if event.clickCount == 2, frame.height - event.locationInWindow.y < AgentSidebar.headerHeightForDrag { onReset?(); return }
+            pressed = true
+            dragging = false
+            mouseStart = convertPoint(toScreen: event.locationInWindow)
+            originStart = frame.origin
+            super.sendEvent(event)
+        case .leftMouseDragged where pressed:
+            let now = convertPoint(toScreen: event.locationInWindow)
+            let dx = now.x - mouseStart.x, dy = now.y - mouseStart.y
+            if !dragging {
+                guard hypot(dx, dy) >= 4 else { return } // still a click
+                dragging = true
+            }
+            setFrameOrigin(NSPoint(x: originStart.x + dx, y: originStart.y + dy))
+        case .leftMouseUp where pressed:
+            pressed = false
+            if dragging {
+                dragging = false
+                onDragEnded?()
+                return // the press became a drag: it isn't also a click
+            }
+            super.sendEvent(event)
+        default:
+            super.sendEvent(event)
         }
     }
 }

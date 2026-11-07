@@ -40,11 +40,14 @@ enum ChatNaming {
         return String(parts.joined(separator: "\n").prefix(limit))
     }
 
-    static func system(sectors: [String]) -> String {
-        """
+    static func system(sectors: [String], hints: [String: String] = [:]) -> String {
+        let described = sectors.filter { !(hints[$0] ?? "").isEmpty }
+        let guide = described.isEmpty ? "" : "\nWhat belongs where: "
+            + described.map { "\($0) = \(String((hints[$0] ?? "").prefix(90)))" }.joined(separator: "; ") + "."
+        return """
         You name a finished chat for a history list. Reply with ONLY JSON: {"title": "…", "sector": "…"}.
         title: 3 to 6 plain words that say what the chat was about, as specific as the content allows. No quotes, no full stop.
-        sector: the subject it belongs under, one of: \(sectors.joined(separator: ", ")). Use another short subject name only if none of those fits.
+        sector: the subject it belongs under, one of: \(sectors.joined(separator: ", ")). Use another short subject name only if none of those fits.\(guide)
         """
     }
 
@@ -63,7 +66,10 @@ enum ChatNaming {
         OllamaClient.shared.generate(system: system, prompt: prompt, completion: done)
     }
     static var claudeRun: (_ prompt: String, _ system: String, _ model: ModelChoice, _ done: @escaping (Result<ClaudeOneShot.Reply, ClaudeOneShot.Failure>) -> Void) -> Void = { prompt, system, model, done in
-        ClaudeOneShot.run(prompt, system: system, model: model, timeout: 60, completion: done)
+        ClaudeOneShot.run(prompt, system: system, model: model, timeout: 60) { result in
+            if case .success(let reply) = result { UsageLog.recordHousekeeping(.naming, usage: reply.usage) }
+            done(result)
+        }
     }
 
     /// Names the saved chat `id` in the background. With Local Mode on and Ollama there, the on-Mac model does it (no Claude
@@ -71,7 +77,7 @@ enum ChatNaming {
     static func rename(_ id: UUID, in library: Library = .shared, model: ModelChoice = .haiku, done: ((Int) -> Void)? = nil) {
         guard let record = library.chat(id) else { return }
         let prompt = digest(record)
-        let system = system(sectors: library.allSectors)
+        let system = system(sectors: library.allSectors, hints: library.sectorHintsForPrompt)
         func viaClaude() {
             claudeRun(prompt, system, model) { result in
                 guard case .success(let reply) = result else { return done?(0) ?? () }

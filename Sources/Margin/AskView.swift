@@ -17,6 +17,10 @@ final class AskModel: ObservableObject {
     /// e.g. "Sonnet · web search on · sees your screen": what this agent can use. It changes when the chat
     /// moves between the local model and Claude.
     @Published var footnote: String
+    /// Who answers this chat, for the Qwen/Claude button next to the question field.
+    struct Engine: Equatable { var name: String; var isLocal: Bool }
+    @Published var engine = Engine(name: "Claude", isLocal: false)
+    var onToggleEngine: (() -> Void)?
     /// Decoded once (the view re-renders every frame while text flows in).
     let snipImage: NSImage?
 
@@ -35,7 +39,7 @@ final class AskModel: ObservableObject {
     /// The chat's name and sector, from Claude's hidden <meta> line (nil until the first answer arrives).
     @Published var autoTitle: String?
     @Published var sector: String?
-    /// Answers kept in the notebook.
+    /// Answers kept in the library.
     @Published var keptTurns: Set<UUID> = []
     /// Reading the whole page or PDF behind the highlight (only the passages that matter are sent to Claude).
     enum DocState: Equatable {
@@ -55,6 +59,12 @@ final class AskModel: ObservableObject {
     @Published var videoHint = false
     /// Showing the two Summarize choices in place of the quick questions.
     @Published var choosingSummary = false
+    /// Learn mode, for this chat: the first question waits for a hint level. Off unless the panel turns it on.
+    @Published var learnMode = false
+    /// The hint level this chat is at (nil: not a Learn mode chat, or no level picked yet).
+    @Published var hintLevel: Int?
+    /// A question they typed, waiting for its hint level.
+    @Published var hintQuestion: String?
     /// This chat sends a screenshot, so Summarize works even with nothing highlighted.
     var seesScreen = false
     var onSummarizeVideo: (() -> Void)?
@@ -70,6 +80,8 @@ final class AskModel: ObservableObject {
     var onKeep: ((_ turn: UUID) -> Void)?
     var onQuizFinished: ((QuizResult) -> Void)?
     var onAsk: ((_ prompt: String) -> Void)?
+    /// The Learn toggle was used: remember it for the next chat.
+    var onLearnChange: ((Bool) -> Void)?
     /// "Ask Claude" on a local answer: the newest question goes to Claude instead.
     var onAskClaude: (() -> Void)?
     var onClose: (() -> Void)?
@@ -103,8 +115,65 @@ final class AskModel: ObservableObject {
 
     var canGoDeeper: Bool {
         guard let last = turns.last else { return false }
+        // Below the full working, "Go deeper" would skip past the hint they chose, so the next level takes its place.
         return last.done && !last.isError && !isStreaming && last.question != Self.deeperLabel
-            && last.question != Prompts.quizLabel && !last.answer.contains("<event>")
+            && last.question != Prompts.quizLabel && !last.answer.contains("<event>") && (hintLevel ?? 4) >= 4
+    }
+
+    /// Learn mode can be set while nothing has been asked. A video or a document that's been read has its own way of working.
+    var canToggleLearn: Bool {
+        guard turns.isEmpty, video == nil, selection.video == nil else { return false }
+        switch doc {
+        case .loading, .ready: return false
+        default: return true
+        }
+    }
+
+    private var learnApplies: Bool { learnMode && canToggleLearn }
+
+    /// The toggle on the new-chat screen. Later chats start from this choice; a chat already under way keeps its own mode.
+    func toggleLearn() {
+        guard canToggleLearn else { return }
+        withAnimation(Motion.animation(Motion.functional)) {
+            learnMode.toggle()
+            // A question waiting for a level goes back in the field rather than being sent by surprise.
+            if !learnMode, let question = hintQuestion {
+                draft = question
+                hintQuestion = nil
+            }
+        }
+        onLearnChange?(learnMode)
+    }
+
+    /// Show the four hint levels in place of the quick questions. With nothing highlighted, that waits for a typed question.
+    var hintPicking: Bool { learnApplies && (!selection.isBlank || hintQuestion != nil) }
+
+    /// The newest answer is a hint below the full working, so the next level can be asked for.
+    var canHintUp: Bool {
+        guard let level = hintLevel, level < 4, let last = turns.last else { return false }
+        return last.done && !last.isError && !isStreaming && fatal == nil
+    }
+
+    func pickHint(_ level: Int) {
+        guard canSubmit, Prompts.hintLevels.contains(level) else { return }
+        let question = hintQuestion
+        hintQuestion = nil
+        hintLevel = level
+        ask(display: Prompts.hintLabel(level, question: question), prompt: Prompts.hint(level, question: question))
+    }
+
+    func hintUp() {
+        guard canHintUp, let level = hintLevel else { return }
+        hintLevel = level + 1
+        ask(display: Prompts.hintLabel(level + 1), prompt: Prompts.hint(level + 1, movingUp: true))
+    }
+
+    /// This chat isn't a problem to work through: back to the usual quick questions, and any typed question is sent as it is.
+    func skipHints() {
+        let question = hintQuestion
+        hintQuestion = nil
+        withAnimation(Motion.animation(Motion.functional)) { learnMode = false }
+        if let question { ask(display: question, prompt: question) }
     }
 
     static let deeperLabel = "Go deeper"
@@ -126,7 +195,7 @@ final class AskModel: ObservableObject {
 
     func keepNewest() {
         guard canKeep, let last = turns.last, !keptTurns.contains(last.id) else { return }
-        withAnimation(.snappy(duration: 0.25)) { keptTurns.insert(last.id) }
+        withAnimation(Motion.animation(Motion.functional)) { keptTurns.insert(last.id) }
         onKeep?(last.id)
     }
 
@@ -144,7 +213,7 @@ final class AskModel: ObservableObject {
     /// Throws away the newest (local) answer and has Claude answer that question instead.
     func askClaudeInstead() {
         guard canAskClaude, let i = turns.indices.last else { return }
-        withAnimation(.snappy(duration: 0.28)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             turns[i].answer = ""
             turns[i].done = false
             turns[i].isError = false
@@ -161,7 +230,7 @@ final class AskModel: ObservableObject {
         guard let i = turns.indices.last else { return }
         finishWhenDrained = false
         pending = ""
-        withAnimation(.snappy(duration: 0.28)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             turns[i].answer = ""
             turns[i].done = false
             turns[i].isError = false
@@ -192,6 +261,16 @@ final class AskModel: ObservableObject {
     func submit() {
         guard canSubmit else { return }
         let q = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if learnApplies {
+            if q.isEmpty {
+                if hintPicking { pickHint(Prompts.hintLevels.lowerBound); return }
+            } else if CalendarIntent.parse(q) == nil && VideoIntent.parse(q) == nil {
+                // Calendar and video requests aren't problems to hint at, so only real questions wait for a level.
+                draft = ""
+                withAnimation(Motion.animation(Motion.functional)) { hintQuestion = q }
+                return
+            }
+        }
         if q.isEmpty {
             guard turns.isEmpty else { return }
             ask(display: Prompts.emptySubmit, prompt: Prompts.emptySubmit)
@@ -203,7 +282,7 @@ final class AskModel: ObservableObject {
 
     func ask(display: String, prompt: String) {
         guard canSubmit else { return }
-        withAnimation(.snappy(duration: 0.28)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             turns.append(Turn(question: display))
             isStreaming = true
             status = nil
@@ -227,7 +306,7 @@ final class AskModel: ObservableObject {
     func append(_ text: String) {
         guard !turns.isEmpty, !text.isEmpty else { return }
         if status != nil {
-            withAnimation(.easeOut(duration: 0.2)) { status = nil }
+            withAnimation(Motion.animation(Motion.small)) { status = nil }
         }
         pending += text
         if instantText { drainAll() } else { startDrain() }
@@ -236,7 +315,7 @@ final class AskModel: ObservableObject {
     /// A tool started: anything written so far was narration ("Let me look that up…").
     func toolActivity(_ label: String) {
         pending = ""
-        withAnimation(.easeInOut(duration: 0.22)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             if let i = turns.indices.last, !turns[i].done { turns[i].answer = "" }
             status = label
         }
@@ -250,7 +329,7 @@ final class AskModel: ObservableObject {
     func fail(_ message: String, sessionDead: Bool) {
         finishWhenDrained = false
         flushPending()
-        withAnimation(.snappy(duration: 0.25)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             isStreaming = false
             status = nil
             if let i = turns.indices.last {
@@ -259,7 +338,7 @@ final class AskModel: ObservableObject {
                 turns[i].isError = true
                 turns[i].done = true
             }
-            if sessionDead { fatal = turns.isEmpty ? message : "Close this and highlight again to retry." }
+            if sessionDead { fatal = turns.isEmpty ? message : "Close this and select the text again to retry." }
         }
     }
 
@@ -318,7 +397,7 @@ final class AskModel: ObservableObject {
         guard let i = turns.indices.last else { return }
         // The hidden <meta> line names and files the chat; take it off the answer.
         let meta = Answer.meta(in: turns[i].answer)
-        withAnimation(.snappy(duration: 0.3)) {
+        withAnimation(Motion.animation(Motion.functional)) {
             if meta != nil { turns[i].answer = Answer.withoutMeta(turns[i].answer) }
             if let answerFilter { turns[i].answer = answerFilter(turns[i].answer) }
             turns[i].done = true
@@ -336,7 +415,15 @@ final class AskModel: ObservableObject {
 
 // MARK: - Views
 
-private let accent = Color(nsColor: Theme.accent)
+private let accent = Theme.accent.color
+private let wash = Theme.accentWash.color
+private let raised = Theme.surfaceRaised.color
+private let hair = Theme.hairline.color
+private let hairStrong = Theme.hairlineStrong.color
+private let inkColor = Theme.ink.color
+private let inkSecondary = Theme.inkSecondary.color
+private let inkTertiary = Theme.inkTertiary.color
+private let accentText = Theme.accentText.color
 
 struct AskView: View {
     @ObservedObject var model: AskModel
@@ -354,23 +441,24 @@ struct AskView: View {
             if !model.turns.isEmpty { thread }
             if let fatal = model.fatal {
                 Text(fatal)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.geist(12))
+                    .foregroundStyle(Theme.inkSecondary.color)
                     .fixedSize(horizontal: false, vertical: true)
                     .transition(.opacity)
             } else {
-                if model.turns.isEmpty && model.video == nil
+                if model.hintPicking {
+                    hintPicker.transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
+                } else if model.turns.isEmpty && model.video == nil
                     && (!model.selection.isBlank || model.videoHint || model.seesScreen || model.doc != .none) {
                     chips.transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .leading)))
                 }
                 // Video chats start with the summary; the question field appears once there's something to ask about.
                 if model.video == nil || !model.turns.isEmpty { inputRow }
-                Text(model.footnote)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                footer
             }
         }
         .padding(14)
+        .foregroundStyle(inkColor)
         .frame(width: model.width, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .background(GeometryReader { g in
@@ -378,11 +466,12 @@ struct AskView: View {
         })
         .onPreferenceChange(PanelHeightKey.self) { h in model.onHeight?(h) }
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top) // while the panel grows, clip the bottom, not both ends
-        .overlay(RoundedRectangle(cornerRadius: AskPanelController.cornerRadius)
-            .strokeBorder(Color(nsColor: PanelGlow.color).opacity(0.45), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surfaceTint.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous)
+            .strokeBorder(hair, lineWidth: 1))
         .overlay(alignment: .top) {
             // A small grip: the top of the chat drags it around the screen.
-            Capsule().fill(Color.primary.opacity(0.16)).frame(width: 30, height: 3).padding(.top, 5)
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(hairStrong).frame(width: 28, height: 3).padding(.top, 5)
                 .allowsHitTesting(false)
         }
         .onAppear {
@@ -405,35 +494,23 @@ struct AskView: View {
                     .resizable()
                     .scaledToFill()
                     .frame(width: 56, height: 34)
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(accent.opacity(0.7), lineWidth: 1))
-                Text("Your snip from \(model.selection.appName)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hairStrong, lineWidth: 1))
+                Text("Snip · \(model.selection.appName)")
+                    .mLabelStyle()
+                    .foregroundStyle(inkSecondary)
                     .lineLimit(1)
             }
         } else if model.selection.isBlank {
             HStack(spacing: 6) {
-                Image(systemName: "keyboard")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(accent)
-                Text("Ask anything · \(model.selection.appName)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text("Ask · \(model.selection.appName)")
+                    .mLabelStyle()
+                    .foregroundStyle(inkSecondary)
                     .lineLimit(1)
             }
         } else {
-            Text(model.selection.text)
-                .font(.callout)
-                .italic()
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.tail)
-                .padding(.leading, 10)
-                .overlay(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 1.5).fill(accent).frame(width: 3)
-                }
-                .help(model.selection.text)
+            // The selected passage: a 2 pt accent bar, italic, and a small mono label above it.
+            QuoteMark(text: model.selection.text, label: "Selection · \(model.selection.appName)")
         }
     }
 
@@ -453,7 +530,10 @@ struct AskView: View {
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.6)))
             }
-            HeaderButton(symbol: "xmark", help: "Delete this chat (clicking elsewhere only puts it in the sidebar)") {
+            // Closing ends the chat but never deletes it: it stays in the Library (⌘⇧L) unless history is off.
+            HeaderButton(symbol: "xmark", help: Settings.shared.saveHistory
+                         ? "Close this chat (it stays in your Library, ⌘⇧L)"
+                         : "Close this chat (history is off, so it won't be kept)") {
                 model.onClose?()
             }
         }
@@ -470,19 +550,26 @@ struct AskView: View {
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)),
                                                     removal: .opacity))
                     }
-                    if model.canGoDeeper || model.canAskClaude || model.canKeep {
-                        FlowLayout(spacing: 6) {
+                    if model.canHintUp || model.canGoDeeper || model.canAskClaude || model.canKeep {
+                        HStack(spacing: 16) {
+                            if model.canHintUp, let level = model.hintLevel {
+                                Button { model.hintUp() } label: {
+                                    Label("Hint level \(level + 1)", systemImage: "arrow.up.right")
+                                }
+                                .buttonStyle(GhostStyle())
+                                .help("More help on the same problem: \(Prompts.hintName(level + 1).lowercased())")
+                            }
                             if model.canGoDeeper {
                                 Button { model.goDeeper() } label: {
                                     Label("Go deeper", systemImage: "arrow.down.right")
                                 }
-                                .buttonStyle(ChipStyle())
+                                .buttonStyle(GhostStyle())
                             }
                             if model.canQuiz {
                                 Button { model.quizMe() } label: {
                                     Label("Quiz me", systemImage: "questionmark.circle")
                                 }
-                                .buttonStyle(ChipStyle())
+                                .buttonStyle(GhostStyle())
                                 .help("Four quick questions on this. Multiple choice is graded on your Mac.")
                             }
                             if model.canKeep {
@@ -490,15 +577,15 @@ struct AskView: View {
                                     Label(model.newestIsKept ? "Kept" : "Keep",
                                           systemImage: model.newestIsKept ? "bookmark.fill" : "bookmark")
                                 }
-                                .buttonStyle(ChipStyle())
+                                .buttonStyle(GhostStyle())
                                 .disabled(model.newestIsKept)
-                                .help("Save this answer to your notebook")
+                                .help("Save this answer to your library")
                             }
                             if model.canAskClaude {
                                 Button { model.askClaudeInstead() } label: {
                                     Label("Ask Claude", systemImage: "sparkles")
                                 }
-                                .buttonStyle(ChipStyle())
+                                .buttonStyle(GhostStyle())
                                 .help("Have Claude answer this instead (it can search the web and see your screen)")
                             }
                         }
@@ -519,9 +606,14 @@ struct AskView: View {
                 guard threadHeight > model.maxThreadHeight else { return }
                 if let graphTurn = latestGraphTurn {
                     // A graph is the answer's centerpiece: keep the question and the top of the graph in view.
-                    withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo(graphTurn, anchor: .top) }
+                    withAnimation(Motion.animation(Motion.functional)) { proxy.scrollTo(graphTurn, anchor: .top) }
                 } else {
                     scrollToBottom(proxy)
+                }
+            }
+            .onChange(of: model.canHintUp) {
+                if model.canHintUp && threadHeight > model.maxThreadHeight && latestGraphTurn == nil {
+                    scrollToBottom(proxy, after: 0.2)
                 }
             }
             .onChange(of: model.canGoDeeper) {
@@ -542,7 +634,7 @@ struct AskView: View {
     /// Deferred so rows that are still animating in (like Go deeper) count toward the bottom.
     private func scrollToBottom(_ proxy: ScrollViewProxy, after delay: Double = 0) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            proxy.scrollTo("bottom", anchor: .bottom) // pinned, flat: no animation while the answer streams
         }
     }
 
@@ -561,31 +653,63 @@ struct AskView: View {
         }
     }
 
+    /// Learn mode: how much help, before any answer.
+    private var hintPicker: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(model.hintQuestion.map { "How much help with “\($0)”?" } ?? "How much help?")
+                    .mLabelStyle()
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+                Button("Skip hints") { model.skipHints() }
+                    .buttonStyle(.plain)
+                    .font(.geist(12))
+                    .foregroundStyle(Theme.inkSecondary.color)
+                    .help("Answer this chat the usual way")
+            }
+            HStack(spacing: 6) {
+                ForEach(Array(Prompts.hintLevels), id: \.self) { level in
+                    Button { model.pickHint(level) } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(level)").font(.geist(14, .semibold)).monospacedDigit()
+                            Text(Prompts.hintName(level)).font(.geist(11)).foregroundStyle(Theme.inkSecondary.color)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(HintTileStyle())
+                    .accessibilityLabel("Hint level \(level): \(Prompts.hintName(level).lowercased())")
+                    .staggerIn(level - 1)
+                }
+            }
+        }
+    }
+
     /// After tapping Summarize: how to summarize it.
     private var summaryChoices: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 6) {
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { model.choosingSummary = false }
+                    withAnimation(Motion.animation(Motion.functional)) { model.choosingSummary = false }
                 } label: {
                     Image(systemName: "chevron.left")
-                        .font(.caption.weight(.semibold))
+                        .font(.mLabel.weight(.semibold))
                         .frame(width: 16, height: 16)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.inkSecondary.color)
                 .help("Back")
                 Text(model.selection.isBlank ? "Summarize what's on your screen by its…" : "Summarize it by its…")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .mLabelStyle()
             }
             FlowLayout(spacing: 6) {
-                ForEach(Prompts.Summary.allCases, id: \.self) { kind in
+                ForEach(Array(Prompts.Summary.allCases.enumerated()), id: \.element) { index, kind in
                     Button { model.summarize(kind) } label: {
                         Label(kind.title, systemImage: kind.symbol)
                     }
-                    .buttonStyle(ProminentChipStyle())
+                    .buttonStyle(ChipStyle())
+                    .staggerIn(index)
                 }
             }
         }
@@ -598,24 +722,23 @@ struct AskView: View {
             EmptyView()
         case .loading(let name):
             HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
                 ShimmerText(text: "Reading \(name)…")
             }
             .transition(.opacity)
         case .ready(let name, let detail):
             HStack(spacing: 7) {
-                Image(systemName: "doc.text.fill").foregroundStyle(accent)
-                Text(name).font(.callout.weight(.medium)).lineLimit(1).truncationMode(.middle)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Image(systemName: "doc.text").foregroundStyle(inkSecondary)
+                Text(name).font(.geist(12, .medium)).lineLimit(1).truncationMode(.middle)
+                Text(detail).font(.geist(12, .medium)).foregroundStyle(Theme.inkSecondary.color).lineLimit(1)
                 Spacer(minLength: 0)
-                Button { model.onDropDocument?() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary) }
+                Button { model.onDropDocument?() } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.inkTertiary.color) }
                     .buttonStyle(.plain).help("Stop reading this document")
             }
             .padding(.horizontal, 9).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(accent.opacity(0.1)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(raised))
             .transition(.opacity)
         case .failed(let message):
-            Text(message).font(.caption).foregroundStyle(.red).transition(.opacity)
+            Text(message).font(.geist(12, .medium)).foregroundStyle(Theme.alert.color).transition(.opacity)
         }
     }
 
@@ -646,31 +769,93 @@ struct AskView: View {
             }
             if canSummarize {
                 Button {
-                    withAnimation(.snappy(duration: 0.25)) { model.choosingSummary = true }
+                    withAnimation(Motion.animation(Motion.functional)) { model.choosingSummary = true }
                 } label: {
                     Label("Summarize", systemImage: "doc.plaintext")
                 }
                 .buttonStyle(ChipStyle())
             }
             // The quick questions are about "this", so a blank chat skips them.
-            ForEach(model.selection.isBlank ? [] : Prompts.chips, id: \.label) { chip in
+            ForEach(Array((model.selection.isBlank ? [] : Prompts.chips).enumerated()), id: \.element.label) { index, chip in
                 Button { model.ask(display: chip.prompt, prompt: chip.prompt) } label: {
                     if chip.label == "Pronounce" {
                         Label(chip.label, systemImage: "speaker.wave.2.fill")
                     } else if chip.label == "Visualize" {
                         Label(chip.label, systemImage: "chart.xyaxis.line")
+                    } else if chip.label == "Simpler" {
+                        Label(chip.label, systemImage: "text.badge.minus")
+                    } else if chip.label == "Example?" {
+                        Label(chip.label, systemImage: "lightbulb")
+                    } else if chip.label == "Define terms" {
+                        Label(chip.label, systemImage: "character.book.closed")
                     } else {
                         Text(chip.label)
                     }
                 }
                 .buttonStyle(ChipStyle())
+                .staggerIn(index)
             }
         }
+    }
+
+    /// The footnote's first part is the model ("Sonnet"); it becomes the engine switch. A footnote that doesn't start with a
+    /// model name ("Drawn on your Mac · …") keeps the engine's own name in the switch and the whole note after it.
+    private var footerParts: (head: String, rest: String) {
+        let note = model.footnote
+        if let r = note.range(of: " · "), note[..<r.lowerBound].split(separator: " ").count <= 2 {
+            return (String(note[..<r.lowerBound]), String(note[r.upperBound...]))
+        }
+        return (model.engine.name, note)
+    }
+
+    private var footer: some View {
+        let parts = footerParts
+        let engineHelp = model.engine.isLocal ? (Settings.shared.localIsOnMac ? "\(model.engine.name) on your Mac answers this chat. Click for Claude (⌃⇧L)"
+                                                                           : "\(model.engine.name) answers this chat (quick, light on your usage). Click for the full model (⌃⇧L)")
+                                            : "Claude answers this chat. Click for the model on your Mac (⌃⇧L)"
+        return HStack(spacing: 10) {
+            Button { model.onToggleEngine?() } label: {
+                HStack(spacing: 4) {
+                    Text("⇆")
+                    Text(parts.head)
+                }
+                .font(.geist(12, .medium))
+                .foregroundStyle(inkSecondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle())
+            .help(parts.rest.isEmpty ? engineHelp : parts.rest + "\n" + engineHelp) // the note that used to be a mono footer line
+            .accessibilityLabel("Switch model")
+            if model.canToggleLearn { learnToggle }
+        }
+    }
+
+    /// On: a filled chip in ink. Off: plain secondary text. Never the accent, which is kept for Send.
+    private var learnToggle: some View {
+        let on = model.learnMode
+        return Button { model.toggleLearn() } label: {
+            HStack(spacing: 4) {
+                Glyph(kind: .nib, size: 12, color: on ? inkColor : inkSecondary)
+                Text("Learn").font(.geist(12, .medium))
+            }
+            .foregroundStyle(on ? inkColor : inkSecondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(on ? hairStrong : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .help(on ? "Learn mode is on: choose how much help before any answer. Click to turn it off."
+                 : "Turn on Learn mode: choose how much help (hint levels 1-4) before any answer.")
+        .accessibilityLabel("Learn mode")
+        .accessibilityValue(on ? "On" : "Off")
+        .accessibilityAddTraits(.isToggle)
     }
 
     private var placeholder: String {
         switch model.turns.count {
         case 0:
+            if model.learnMode && model.hintPicking { return "Or type your question…" }
             if model.selection.isBlank { return "Ask anything…" }
             return model.snipImage == nil ? "What's confusing about this?" : "What do you want to know about this?"
         case 1...3: return "Ask a follow-up…"
@@ -685,21 +870,94 @@ struct AskView: View {
                 .focused($fieldFocused)
                 .onSubmit { model.submit() }
             Button { model.submit() } label: {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 22, height: 22)
-                    .background(Circle().fill(accent.opacity(model.canSubmit ? 1 : 0.35)))
-                    .animation(.easeOut(duration: 0.2), value: model.canSubmit)
+                SendGlyph(busy: model.isStreaming, canSubmit: model.canSubmit)
             }
-            .buttonStyle(PressStyle())
+            .buttonStyle(PressStyle(scale: 0.92))
             .disabled(!model.canSubmit)
             .help(model.turns.isEmpty ? "Ask (empty = explain simpler)" : "Ask")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(fieldFocused ? 0.08 : 0.06)))
-        .animation(.easeOut(duration: 0.15), value: fieldFocused)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(raised))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(fieldFocused ? hairStrong : hair, lineWidth: 1))
+        .overlay(alignment: .bottomLeading) {
+            // Focus: a 1 pt accent underline sweeps in from the left.
+            GeometryReader { g in
+                Rectangle().fill(accent).frame(width: fieldFocused ? g.size.width : 0, height: 1)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+            .allowsHitTesting(false)
+        }
+        .animation(Motion.animation(Motion.small), value: fieldFocused)
+    }
+}
+
+/// The selected passage: a 2 pt neutral bar on the left, Geist Italic in secondary ink, and a small sentence-case
+/// "Selection · App" label above it. Static: nothing animates on first paint.
+struct QuoteMark: View {
+    let text: String
+    var label: String? = nil
+    var lines: Int? = 2
+    @State private var drawn: Bool
+
+    /// `animated: false` draws the bar already in place (the library has no sweep). `lines: nil` shows the whole quote.
+    init(text: String, label: String? = nil, animated: Bool = true, lines: Int? = 2) {
+        self.text = text
+        self.label = label
+        self.lines = lines
+        _drawn = State(initialValue: true)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let label {
+                Text(label)
+                    .mLabelStyle()
+                    .lineLimit(1)
+            }
+            Text(text)
+                .font(.mQuote)
+                .foregroundStyle(Theme.inkSecondary.color)
+                .lineSpacing(3)
+                .lineLimit(lines)
+                .truncationMode(.tail)
+                .padding(.leading, 10)
+                .overlay(alignment: .leading) {
+                    GeometryReader { g in
+                        // Neutral: lime is kept for the one primary action.
+                        Rectangle().fill(inkTertiary)
+                            .frame(width: 2, height: drawn ? g.size.height : 0)
+                    }
+                    .frame(width: 2)
+                }
+        }
+        .help(text)
+    }
+}
+
+/// The send button's face: an arrow, which morphs into a small square while an answer streams. There is no stop action yet
+/// (the only way to stop an answer is to close the chat), so the square is a state indicator and the button stays disabled.
+private struct SendGlyph: View {
+    let busy: Bool
+    let canSubmit: Bool
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "arrow.up")
+                .font(.geist(11, .semibold))
+                .opacity(busy ? 0 : 1)
+                .scaleEffect(busy || Motion.reduceMotion ? 0.7 : 1)
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .frame(width: 8, height: 8)
+                .opacity(busy ? 1 : 0)
+                .scaleEffect(busy || Motion.reduceMotion ? 1 : 0.7)
+        }
+        .foregroundStyle(canSubmit ? Theme.onAccent.color : inkTertiary)
+        .frame(width: 22, height: 22)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(canSubmit ? accent : hair))
+        .animation(Motion.animation(Motion.small), value: busy)
+        .animation(Motion.animation(Motion.small), value: canSubmit)
     }
 }
 
@@ -712,13 +970,13 @@ private struct HeaderButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(hovering ? .primary : .secondary)
+                .font(.geist(9, .semibold))
+                .foregroundStyle(hovering ? inkColor : inkSecondary)
                 .frame(width: 18, height: 18)
-                .background(Circle().fill(Color.primary.opacity(hovering ? 0.14 : 0.07)))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(hovering ? hairStrong : Color.clear))
         }
-        .buttonStyle(PressStyle())
-        .onHover { h in withAnimation(.easeOut(duration: 0.12)) { hovering = h } }
+        .buttonStyle(PressStyle(scale: 0.92))
+        .onHover { h in withAnimation(Motion.animation(Motion.small)) { hovering = h } }
         .help(help)
     }
 }
@@ -732,12 +990,13 @@ private struct TurnView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(turn.question)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(accent)
+                .font(.geist(13, .semibold))
+                .foregroundStyle(inkColor)
                 .fixedSize(horizontal: false, vertical: true)
             if turn.answer.isEmpty && !turn.done {
-                HStack(spacing: 6) {
-                    ShimmerText(text: status ?? "Thinking…")
+                HStack(spacing: 7) {
+                    Glyph(kind: .orbit, size: 14, color: inkSecondary, animated: !Motion.still && !Motion.reduceMotion)
+                    ShimmerText(text: status ?? "Thinking")
                     Spacer(minLength: 6)
                     if let onMinimize {
                         Button(action: onMinimize) {
@@ -750,12 +1009,13 @@ private struct TurnView: View {
                 .transition(.opacity)
             } else {
                 AnswerView(text: turn.answer, streaming: !turn.done, speech: speech)
-                    .foregroundStyle(turn.isError ? Color.red : Color.primary)
+                    .foregroundStyle(turn.isError ? Theme.alert.color : inkColor)
                     .transition(.opacity)
                 if let local = turn.localModel {
-                    Label("Answered on your Mac · \(local)", systemImage: "laptopcomputer")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    Label(Settings.isClaudeModel(local) ? "Answered by \(EngineLabel.full(local))" : "Answered on your Mac · \(local)",
+                          systemImage: Settings.isClaudeModel(local) ? "hare" : "laptopcomputer")
+                        .font(.geist(12, .medium))
+                        .foregroundStyle(Theme.inkSecondary.color)
                         .transition(.opacity)
                 }
             }
@@ -770,29 +1030,30 @@ struct ShimmerText: View {
 
     var body: some View {
         label
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Theme.inkSecondary.color)
             .overlay {
-                GeometryReader { g in
-                    LinearGradient(colors: [.clear, Color.primary.opacity(0.85), .clear],
+                if !Motion.reduceMotion { GeometryReader { g in
+                    LinearGradient(colors: [.clear, inkColor, .clear],
                                    startPoint: .leading, endPoint: .trailing)
                         .frame(width: max(36, g.size.width * 0.35))
                         .offset(x: -g.size.width * 0.35 + phase * g.size.width * 1.35)
                 }
                 .mask(label)
-                .allowsHitTesting(false)
+                .allowsHitTesting(false) }
             }
             .contentTransition(.opacity)
             .animation(.easeInOut(duration: 0.2), value: text)
             .onAppear {
+                guard !Motion.reduceMotion, !Motion.still else { return } // Reduce Motion: plain secondary text
                 withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) { phase = 1 }
             }
     }
 
     private var label: some View {
         Text(text)
-            .font(.callout)
+            .mLabelStyle()
             .lineLimit(1)
-            .truncationMode(.middle)
+            .truncationMode(.tail)
     }
 }
 
@@ -802,24 +1063,85 @@ struct MarkdownText: View {
     var streaming = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(Self.segments(text).enumerated()), id: \.offset) { _, seg in
                 if seg.isCode {
                     Text(seg.text)
-                        .font(.system(.callout, design: .monospaced))
+                        .font(.mCode)
+                        .foregroundStyle(inkColor)
                         .padding(8)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(raised))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
                 } else {
-                    Text(Self.inline(streaming ? Self.softenPartial(seg.text) : seg.text))
-                        .font(.body)
-                        .lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    let tidy = seg.text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+                    let parts = tidy.components(separatedBy: "Sources:")
+                    let body = parts.count > 1 ? parts.dropLast().joined(separator: "Sources:") : tidy
+                    let sources = parts.count > 1 ? (parts.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
+                    ForEach(Array(body.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, para in
+                        if !para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(Array(Self.lines(para).enumerated()), id: \.offset) { _, line in
+                                    if let marker = line.marker {
+                                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                            Text(marker).font(.mBody).foregroundStyle(inkSecondary)
+                                                .frame(minWidth: 12, alignment: .trailing)
+                                            Text(Self.inline(streaming ? Self.softenPartial(line.text) : line.text))
+                                                .font(.mBody).lineSpacing(4)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    } else {
+                                        Text(Self.inline(streaming ? Self.softenPartial(line.text) : line.text))
+                                            .font(.mBody).lineSpacing(4)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !sources.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Sources")
+                                .mLabelStyle()
+                            let links = Self.sourceLinks(sources)
+                            if links.isEmpty {
+                                Text(Self.inline(sources))
+                                    .font(.geist(12))
+                                    .lineSpacing(1)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                FlowLayout(spacing: 12) {
+                                    ForEach(Array(links.enumerated()), id: \.offset) { _, link in
+                                        SourceChip(link: link)
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
                 }
             }
         }
-        .tint(accent)
+        .tint(accentText)
         .textSelection(.enabled)
+    }
+
+    /// A paragraph's lines: list items ("- x", "• x", "1. x") split into a marker and text so wrapped lines hang
+    /// under the text; other consecutive lines stay together as one block.
+    static func lines(_ para: String) -> [(marker: String?, text: String)] {
+        var out: [(marker: String?, text: String)] = []
+        for raw in para.components(separatedBy: "\n") {
+            if let m = raw.range(of: #"^\s*(?:[-*+•]|\d{1,2}[.)])\s+(?=\S)"#, options: .regularExpression) {
+                let head = raw[m].trimmingCharacters(in: .whitespaces)
+                let marker = head.first?.isNumber == true ? head : "•"
+                out.append((marker, String(raw[m.upperBound...])))
+            } else if let last = out.last, last.marker == nil {
+                out[out.count - 1].text += "\n" + raw
+            } else {
+                out.append((nil, raw))
+            }
+        }
+        return out
     }
 
     static func segments(_ text: String) -> [(text: String, isCode: Bool)] {
@@ -850,20 +1172,80 @@ struct MarkdownText: View {
         return t
     }
 
+    /// "[Swift book](https://…), [Apple](https://…)" as chips: the site's name (no www.) with the link behind it.
+    static func sourceLinks(_ s: String) -> [(title: String, domain: String, url: URL)] {
+        guard let regex = try? NSRegularExpression(pattern: #"\[([^\]]*)\]\((https?://[^)\s]+)\)"#) else { return [] }
+        let ns = s as NSString
+        return regex.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap { m in
+            guard let url = URL(string: ns.substring(with: m.range(at: 2))), let host = url.host else { return nil }
+            return (ns.substring(with: m.range(at: 1)), host.hasPrefix("www.") ? String(host.dropFirst(4)) : host, url)
+        }
+    }
+
     static func inline(_ s: String) -> AttributedString {
         let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         // Inline-only parsing leaves "- item" as a hyphen; show list items with real bullets.
         let bulleted = s.replacingOccurrences(of: #"(?m)^([ \t]*)[-*+] (?=\S)"#, with: "$1• ", options: .regularExpression)
-        return (try? AttributedString(markdown: bulleted, options: opts)) ?? AttributedString(bulleted)
+        var out = (try? AttributedString(markdown: bulleted, options: opts)) ?? AttributedString(bulleted)
+        // Inline code: SF Mono 13 on the raised surface.
+        for run in out.runs where run.inlinePresentationIntent?.contains(.code) == true {
+            out[run.range].font = .mCode
+            out[run.range].backgroundColor = Theme.surfaceRaised.color
+        }
+        return out
+    }
+}
+
+/// A source as a plain text link: the site's name, underlined on hover.
+private struct SourceChip: View {
+    let link: (title: String, domain: String, url: URL)
+    @State private var hovering = false
+
+    var body: some View {
+        Link(destination: link.url) {
+            Text(link.domain)
+                .font(.geist(12, .medium))
+                .foregroundStyle(hovering ? inkColor : inkSecondary)
+                .underline(hovering)
+        }
+        .animation(Motion.animation(Motion.small), value: hovering)
+        .onHover { hovering = $0 }
+        .help(link.title)
+    }
+}
+
+/// A quiet text action (no box): grey, ink on hover, dips to 0.97 when pressed.
+private struct GhostStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        GhostBody(configuration: configuration)
+    }
+
+    private struct GhostBody: View {
+        let configuration: Configuration
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var enabled
+
+        var body: some View {
+            configuration.label
+                .font(.geist(12, .semibold))
+                .foregroundStyle(hovering && enabled ? inkColor : inkSecondary)
+                .contentShape(Rectangle())
+                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
+                .animation(Motion.animation(Motion.small), value: hovering)
+                .onHover { hovering = $0 }
+        }
     }
 }
 
 /// Buttons dip slightly when pressed.
 private struct PressStyle: ButtonStyle {
+    /// 0.97 for buttons with a label; small icon-only buttons dip further, or the press would not show.
+    var scale: CGFloat = Motion.pressScale
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.9 : 1)
-            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? scale : 1)
+            .animation(Motion.animation(Motion.small), value: configuration.isPressed)
     }
 }
 
@@ -876,35 +1258,35 @@ private struct VideoHeader: View {
         HStack(alignment: .top, spacing: 10) {
             if video.thumbnail != nil {
                 ZStack {
-                    accent.opacity(0.15)
+                    raised
                     if let image {
                         Image(nsImage: image).resizable().scaledToFill().transition(.opacity)
                     }
                 }
-                .animation(.easeOut(duration: 0.25), value: image != nil)
+                .animation(Motion.animation(Motion.functional), value: image != nil)
                 .frame(width: 96, height: 54)
-                .clipShape(RoundedRectangle(cornerRadius: 7))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
                 .overlay(
                     Image(systemName: "play.fill")
-                        .font(.system(size: 11, weight: .bold))
+                        .font(.geist(11, .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 24, height: 24)
                         .background(Circle().fill(.black.opacity(0.45)))
                 )
             } else {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(accent.opacity(0.15))
+                RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                    .fill(raised)
                     .frame(width: 46, height: 46)
-                    .overlay(Image(systemName: video.icon).font(.system(size: 20, weight: .semibold)).foregroundStyle(accent))
+                    .overlay(Image(systemName: video.icon).font(.geist(20, .semibold)).foregroundStyle(inkSecondary))
             }
             VStack(alignment: .leading, spacing: 3) {
                 Text(video.title)
-                    .font(.callout.weight(.semibold))
+                    .font(.geist(13, .semibold))
                     .lineLimit(2)
                 if let subtitle = video.subtitle {
                     Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .font(.geist(12, .medium))
+                        .foregroundStyle(Theme.inkSecondary.color)
                         .lineLimit(1)
                 }
             }
@@ -924,8 +1306,8 @@ private struct VideoStageView: View {
         case .chooseLanguage:
             VStack(alignment: .leading, spacing: 8) {
                 Text("What language is spoken in it?")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.geist(12))
+                    .foregroundStyle(Theme.inkSecondary.color)
                 HStack(spacing: 6) {
                     ForEach(SpokenLanguage.allCases, id: \.self) { language in
                         Button(language.title) { model.onChooseLanguage?(language) }
@@ -943,7 +1325,8 @@ private struct VideoStageView: View {
                 HStack(spacing: 8) {
                     PulsingDot()
                     Text("Listening · \(VideoTranscript.clock(elapsed))")
-                        .font(.callout.weight(.semibold).monospacedDigit())
+                        .font(.mNum.weight(.semibold))
+                        .contentTransition(.numericText())
                     Spacer(minLength: 8)
                     Button { model.onStopListening?() } label: {
                         Label("Stop & summarize", systemImage: "stop.fill")
@@ -952,15 +1335,15 @@ private struct VideoStageView: View {
                 }
                 Text(caption.isEmpty ? "Play your video. Margin hears your Mac's sound, even with headphones."
                                      : "…" + String(caption.suffix(220)))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .font(.geist(12))
+                    .foregroundStyle(Theme.inkSecondary.color)
                     .lineLimit(2)
                     .truncationMode(.head)
                     .fixedSize(horizontal: false, vertical: true)
-                    .animation(.easeOut(duration: 0.2), value: caption)
+                    .animation(Motion.animation(Motion.small), value: caption)
                 Text("You can minimize this; it keeps listening.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                    .font(.geist(12, .medium))
+                    .foregroundStyle(Theme.inkTertiary.color)
             }
         case .transcribing(let fraction):
             VStack(alignment: .leading, spacing: 6) {
@@ -972,7 +1355,7 @@ private struct VideoStageView: View {
         case .chooseStyle(let language):
             VStack(alignment: .leading, spacing: 8) {
                 Text("This video is in \(language). How should I summarize it?")
-                    .font(.callout)
+                    .font(.geist(12))
                 FlowLayout(spacing: 6) {
                     ForEach(SummaryStyle.allCases, id: \.self) { style in
                         Button(style.label(language: language)) { model.onChooseStyle?(style) }
@@ -983,8 +1366,8 @@ private struct VideoStageView: View {
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 Text(message)
-                    .font(.callout)
-                    .foregroundStyle(.red)
+                    .font(.geist(12))
+                    .foregroundStyle(Theme.alert.color)
                     .fixedSize(horizontal: false, vertical: true)
                 if model.onListenInstead != nil {
                     Button { model.onListenInstead?() } label: {
@@ -1005,7 +1388,7 @@ private struct PulsingDot: View {
 
     var body: some View {
         Circle()
-            .fill(Color.red)
+            .fill(Theme.alert.color)
             .frame(width: 8, height: 8)
             .opacity(on ? 1 : 0.35)
             .onAppear {
@@ -1058,17 +1441,57 @@ private struct FlowLayout: Layout {
     }
 }
 
-/// A filled terracotta pill, for the one action that matters right now.
+/// A filled accent button, for the one action that matters right now.
 private struct ProminentChipStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.caption.weight(.semibold))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Capsule().fill(accent.opacity(configuration.isPressed ? 0.8 : 1)))
-            .foregroundStyle(.white)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.snappy(duration: 0.15), value: configuration.isPressed)
+        ProminentBody(configuration: configuration)
+    }
+
+    private struct ProminentBody: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.geist(12, .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(accent))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.onAccent.color.opacity(hovering ? 0.08 : 0)))
+                .foregroundStyle(Theme.onAccent.color)
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
+                .animation(Motion.animation(Motion.small), value: hovering)
+                .onHover { hovering = $0 }
+        }
+    }
+}
+
+/// One level in the Learn mode picker. Its edge is drawn as two fills.
+private struct HintTileStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TileBody(configuration: configuration)
+    }
+
+    private struct TileBody: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(inkColor)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control - 1, style: .continuous).fill(configuration.isPressed || hovering ? hairStrong : raised))
+                .padding(1)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hair))
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
+                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
+                .animation(Motion.animation(Motion.small), value: hovering)
+                .onHover { hovering = $0 }
+        }
     }
 }
 
@@ -1083,15 +1506,16 @@ private struct ChipStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.caption.weight(.medium))
+                .font(.geist(12, .medium))
                 .padding(.horizontal, 9)
                 .padding(.vertical, 4)
-                .background(Capsule().fill(accent.opacity(configuration.isPressed ? 0.3 : hovering ? 0.22 : 0.14)))
-                .foregroundStyle(accent)
-                .contentShape(Capsule())
-                .scaleEffect(configuration.isPressed ? 0.95 : 1)
-                .animation(.snappy(duration: 0.15), value: configuration.isPressed)
-                .animation(.easeOut(duration: 0.12), value: hovering)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(configuration.isPressed || hovering ? hairStrong : raised))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
+                .foregroundStyle(inkColor)
+                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
+                .animation(Motion.animation(Motion.small), value: hovering)
                 .onHover { hovering = $0 }
         }
     }
@@ -1107,3 +1531,8 @@ private struct ThreadHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
+
+private extension View {
+    /// Chips used to fade in one by one; they now appear together with no motion.
+    func staggerIn(_ index: Int) -> some View { self }
+}

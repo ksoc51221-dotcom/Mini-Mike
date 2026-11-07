@@ -23,7 +23,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.sidebarIsOpen = { [weak self] in self?.dock.sidebarIsOpen ?? true }
         statusMenu.onToggleSidebar = { [weak self] in self?.dock.toggleSidebar() }
         statusMenu.onHistory = { notebook in LibraryWindow.shared.show(notebook: notebook) }
+        statusMenu.onScreenshots = { LibraryWindow.shared.show(mode: .screenshots) }
+        statusMenu.onBin = { LibraryWindow.shared.show(mode: .bin) }
+        // The Library's Settings and sector editor are one window: the editor is the Sectors section of the settings.
+        LibraryHooks.openSettings = { LibrarySettingsWindow.show() }
+        LibraryHooks.openSectorEditor = { LibrarySettingsWindow.show(section: .sectors) }
+        LibrarySettingsHooks.openSectorEditor = { LibrarySettingsWindow.show(section: .sectors) }
+        Library.shared.applyRetention() // Bin auto-empty and screenshot retention, at launch and not only when the window opens
+        LibraryWindow.shared.onNewChat = { [weak self] in self?.chatShortcut() }
         LibraryWindow.shared.onAsk = { [weak self] text, prompt in self?.dock.openChat(about: text, asking: prompt) }
+        LibraryWindow.shared.onAskImage = { [weak self] jpeg, app in self?.dock.openChat(aboutImage: jpeg, appName: app) }
+        ScreenshotInbox.shared.start() // every screenshot you take is kept in the dashboard
         statusMenu.onSnip = { [weak self] in self?.startSnip() }
         statusMenu.onChat = { [weak self] in self?.chatShortcut() }
         statusMenu.onSummarizeVideo = { [weak self] choice in self?.summarizeVideo(choice) }
@@ -34,7 +44,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.onTalkEnd = { [weak self] in self?.voice.talkEnd() }
         AgentBar.shared.start() // the minimized agent strip on the right edge
         hotkeys.onTasks = { AgentBar.shared.toggle() }
+        hotkeys.onCat = { AgentBar.shared.callCats() }
         hotkeys.onHistory = { LibraryWindow.shared.toggle() }
+        hotkeys.onSystemShot = { ScreenshotInbox.shared.noteCaptureKey() }
         hotkeys.onEngine = { [dock] in dock.toggleEngineOfOpenChat() }
         statusMenu.onAgentBar = { AgentBar.shared.show() }
         TaskBox.shared.onVideo = { [weak self] intent in self?.summarizeVideo(intent) }
@@ -158,14 +170,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Toast.show("Snipping needs Screen Recording permission. Turn Margin on in System Settings → Privacy & Security → Screen Recording.", near: near)
             return
         }
-        dock.prepareForSnip()
-        guard dock.hasRoom else {
-            Toast.show(AgentDock.fullMessage, near: near)
-            return
-        }
         let app = NSWorkspace.shared.frontmostApplication
-        Snipper.run { [weak self] jpeg, mouse in
-            self?.dock.openSnip(jpeg: jpeg, mouse: mouse, app: app)
+        dock.prepareForSnip() // open chats step aside for a moment so they aren't in the picture
+        Snipper.run(finished: { [weak self] in self?.dock.finishSnip() }) { [weak self] jpeg, png, mouse in
+            // Every snip is kept in the dashboard, whether or not there's a free chat to ask about it.
+            ScreenshotInbox.shared.addSnip(png: png, app: app)
+            guard let self else { return }
+            guard self.dock.hasRoom else {
+                Toast.show("Saved to your screenshots. " + AgentDock.fullMessage, near: NSRect(x: mouse.x, y: mouse.y - 10, width: 1, height: 1))
+                return
+            }
+            self.dock.openSnip(jpeg: jpeg, mouse: mouse, app: app)
         }
     }
 
@@ -223,8 +238,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+if CommandLine.arguments.contains("--mcp") { MCPServer.runStdio() } // before any UI/font setup: stdout is protocol-only
+MarginFonts.register()
 let arguments = CommandLine.arguments
 if arguments.contains("--selftest") { SelfTest.claudeRoundTrip() }
+if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }
 if arguments.contains("--capturetest") { SelfTest.captureTest() }
@@ -241,6 +259,10 @@ if arguments.contains("--namingtest") { FeatureTests.liveNamingTest() }
 if arguments.contains("--videochattest") { FeatureTests.videoChatTest() }
 if arguments.contains("--customtest") { FeatureTests.liveCustomTest() }
 if arguments.contains("--switchtest") { FeatureTests.liveSwitchTest() }
+if arguments.contains("--connectedtest") { FeatureTests.liveConnectedTest() }
+if arguments.contains("--historytest") { FeatureTests.liveHistoryTest() }
+if arguments.contains("--bintest") { FeatureTests.liveBinTest() }
+if arguments.contains("--screenshottest") { FeatureTests.liveScreenshotTest() }
 if let i = arguments.firstIndex(of: "--pilldemo") {
     let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
     MainActor.assumeIsolated { FeatureTests.pillDemo(directory: dir) }
@@ -253,6 +275,11 @@ if arguments.contains("--libtest") { FeatureTests.liveLibraryTest() }
 if arguments.contains("--tokenbench") { FeatureTests.tokenBench() }
 if let i = arguments.firstIndex(of: "--agentbartest"), i + 1 < arguments.count { FeatureTests.agentBarTest(directory: arguments[i + 1]) }
 if let i = arguments.firstIndex(of: "--catsheet"), i + 1 < arguments.count { FeatureTests.catSheet(path: arguments[i + 1]) }
+if let i = arguments.firstIndex(of: "--barpicture"), i + 1 < arguments.count { MainActor.assumeIsolated { FeatureTests.barPicture(path: arguments[i + 1]) } }
+if let i = arguments.firstIndex(of: "--uishots"), i + 1 < arguments.count { MainActor.assumeIsolated { UIShots.run(directory: arguments[i + 1]) } }
+if let i = arguments.firstIndex(of: "--chromeshots"), i + 1 < arguments.count { MainActor.assumeIsolated { ChromeShots.run(directory: arguments[i + 1]) } }
+if let i = arguments.firstIndex(of: "--glyphshots"), i + 1 < arguments.count { MainActor.assumeIsolated { GlyphGallery.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
+if let i = arguments.firstIndex(of: "--sectorshots"), i + 1 < arguments.count { MainActor.assumeIsolated { SectorEditorView.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--libdemo") {
     let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
     MainActor.assumeIsolated { FeatureTests.libraryDemo(directory: dir) }

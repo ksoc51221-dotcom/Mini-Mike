@@ -51,7 +51,7 @@ final class AskPanelController {
 
     /// Normal width; the "make bigger" toggle multiplies it (see AskModel.width).
     static let width: CGFloat = 380
-    static let cornerRadius: CGFloat = 14
+    static let cornerRadius: CGFloat = Theme.Radius.container
     /// `--demo` runs without taking keyboard focus from whatever the user is doing.
     static var demoMode = false
 
@@ -65,6 +65,15 @@ final class AskPanelController {
     var onClosed: (() -> Void)?
     /// The user (or a click-away) wants this put back in the sidebar.
     var onMinimizeRequest: (() -> Void)?
+    /// This chat just took the keyboard (you clicked or typed in it): the dock treats it as the one you're using.
+    var onFocused: (() -> Void)?
+    /// How far this chat is nudged from where it would open, so chats opened at the same spot don't sit exactly on top
+    /// of each other. Ignored once you've dragged the chat somewhere.
+    var cascade = NSPoint.zero
+    private var focusObserver: Any?
+    /// Hidden for a moment so a snip doesn't catch it. It comes straight back after.
+    private var hiddenForCapture = false
+    private var alphaBeforeCapture: CGFloat = 1
     /// Phase or activity changed (drives the sidebar row).
     var onUpdate: (() -> Void)?
     /// "Summarize video" was tapped: the dock swaps this chat for a video agent.
@@ -97,7 +106,9 @@ final class AskPanelController {
     private let choice: ModelChoice
     private let webSearch: Bool
     /// Who answers this chat, and with what (decided at the first question).
-    private var plan: Router.Plan?
+    private var plan: Router.Plan? { didSet { refreshEngineButton() } }
+    /// Picked with the button before the first question; after that the chat's own plan rules.
+    private var engineOverride: Router.Plan.Engine?
     private var localModelName = ""
     /// The prompt behind the newest question (the chat shows a label, e.g. "Summarize: overall meaning").
     private var lastPrompt = ""
@@ -161,7 +172,8 @@ final class AskPanelController {
 
         let localFirst = OllamaClient.shared.status.isUsable
             && Router.mayGoLocal(selection: selection.text, hasSnip: selection.regionImage != nil,
-                                 isVideo: selection.video != nil, localMode: settings.localMode)
+                                 isVideo: selection.video != nil, localMode: settings.localMode,
+                                 seesImages: Settings.isClaudeModel(settings.localModel))
         let askModel = AskModel(selection: selection,
                                 footnote: Self.footnote(choice: choice, web: web, screen: screenMode, plan: nil,
                                                         localModel: settings.localModel, localFirst: localFirst))
@@ -170,6 +182,8 @@ final class AskPanelController {
             askModel.isLarge = true // summaries are long; this doesn't change the saved preference
         } else {
             askModel.videoHint = YouTube.videoID(in: selection.text) != nil || BrowserTab.isBrowser(selection.bundleID)
+            askModel.learnMode = settings.learnMode
+            askModel.onLearnChange = { Settings.shared.learnMode = $0 }
         }
         model = askModel
         panel = ChatPanel(size: NSSize(width: askModel.width, height: 140), canKey: !Self.demoMode) // test windows can never take your typing
@@ -187,8 +201,16 @@ final class AskPanelController {
         panel.contentView = effect
         hosting.frame = effect.bounds
         glow = PanelGlow(around: panel, cornerRadius: Self.cornerRadius)
-        panel.hasShadow = false // the orange glow does the lifting; a dark shadow would muddy it
+        panel.hasShadow = false // PanelGlow draws the one soft shadow (and a faint accent rim)
         panel.ignoresMouseEvents = Self.demoMode // test windows never take your clicks or typing
+        focusObserver = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            self?.glow.restack() // with several chats open, the one you click comes to the front with its glow
+            self?.onFocused?()
+        }
+    }
+
+    deinit {
+        if let focusObserver { NotificationCenter.default.removeObserver(focusObserver) }
     }
 
     func show() {
@@ -211,6 +233,8 @@ final class AskPanelController {
         model.onActivity = { [weak self] in self?.touch() }
         model.onAsk = { [weak self] prompt in self?.send(prompt) }
         model.onAskClaude = { [weak self] in self?.askClaudeInstead() }
+        model.onToggleEngine = { [weak self] in self?.engineButtonTapped() }
+        refreshEngineButton()
 
         // The session itself starts at the first question (measured: starting it early made no difference to
         // how fast the first answer came). Only the "Claude isn't installed" error is shown right away.
@@ -236,12 +260,16 @@ final class AskPanelController {
         panel.setFrame(targetFrame(height: contentHeight), display: true)
         if Self.demoMode { panel.orderFrontRegardless() } else { panel.makeKeyAndOrderFront(nil) }
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
+            ctx.duration = 0.12
             ctx.timingFunction = Motion.easeOut
             panel.animator().alphaValue = 1
         }
         if let content = panel.contentView {
-            Motion.popIn(content, from: 0.965, dy: growsDown ? 8 : -8, damping: 22, stiffness: 320)
+            // Raycast-style: from 0.97 (growing out of the cursor) with a quick spring, while the panel fades in over 120 ms.
+            let anchorRect: NSRect
+            switch anchor { case .selection(let r), .dock(let r): anchorRect = r }
+            let origin = Motion.layerPoint(fromScreen: NSPoint(x: anchorRect.midX, y: anchorRect.midY), in: content)
+            Motion.popIn(content, from: 0.97, about: origin, response: 0.25, damping: 1)
         }
         glow.popped()
         installMonitors()
@@ -250,6 +278,36 @@ final class AskPanelController {
 
     /// Whether you're typing in this chat right now.
     var isFocused: Bool { panel.isKeyWindow && !isMinimized && !closed }
+
+    /// Where the chat is on screen.
+    var frame: NSRect { panel.frame }
+    var isOnScreen: Bool { !isMinimized && !closed && panel.isVisible }
+
+    /// The top-left corner this chat would open at with `cascade` applied (so the dock can find a spot nobody is on).
+    func candidateTopLeft(cascade trial: NSPoint) -> NSPoint {
+        let saved = cascade
+        cascade = trial
+        defer { cascade = saved }
+        let f = targetFrame(height: contentHeight)
+        return NSPoint(x: f.minX, y: f.maxY)
+    }
+
+    /// Makes the chat invisible while a snip is taken (so it isn't in the picture) and brings it straight back after.
+    func setHiddenForCapture(_ hide: Bool) {
+        if hide {
+            guard isOnScreen, !inFlight, !awaitingFirstLayout, !hiddenForCapture else { return }
+            hiddenForCapture = true
+            alphaBeforeCapture = panel.alphaValue
+            panel.alphaValue = 0
+        } else if hiddenForCapture {
+            hiddenForCapture = false
+            guard !closed, !isMinimized else { return }
+            panel.alphaValue = alphaBeforeCapture
+        }
+    }
+    var debugHiddenForCapture: Bool { hiddenForCapture }
+    /// Whether this chat has a timer that would fade it and tuck it away by itself (it shouldn't, unless chats are set the old way).
+    var debugDecayActive: Bool { tick != nil }
 
     /// Brings the open chat back under your keyboard (Option+Shift+Tab when you'd clicked elsewhere).
     func focus() {
@@ -592,7 +650,7 @@ final class AskPanelController {
     }
 
     private func setStage(_ stage: VideoState.Stage) {
-        withAnimation(.easeInOut(duration: 0.2)) { model.video?.stage = stage }
+        withAnimation(Motion.animation(Motion.small)) { model.video?.stage = stage }
     }
 
     /// Listen along / file: the user said which language is spoken.
@@ -705,13 +763,31 @@ final class AskPanelController {
     // MARK: - Answering
 
     /// What the chat's footnote says it can use. `plan` is nil before the first question.
+    /// Why Local mode can't be used right now.
+    private static var localDownText: String {
+        let name = Settings.shared.localModel
+        return Settings.isClaudeModel(name) ? "The Claude command wasn't found, so this chat stays on Claude."
+            : "Ollama isn't running (or \(name) isn't installed), so this chat stays on Claude."
+    }
+
+    /// "Haiku 5.5" or "qwen3:8b on your Mac".
+    private static func localPlace(_ name: String) -> String {
+        Settings.isClaudeModel(name) ? EngineLabel.full(name) : "\(name) on your Mac"
+    }
+
     private static func footnote(choice: ModelChoice, web: Bool, screen: ScreenContext, plan: Router.Plan?,
                                  localModel: String, localFirst: Bool) -> String {
         if let plan {
-            if plan.isLocal { return "\(localModel) · on your Mac · nothing sent to Claude · ⌃⇧L for Claude" }
+            if plan.isLocal {
+                return Settings.isClaudeModel(localModel)
+                    ? "\(EngineLabel.full(localModel)) · quick answers · text only · ⌃⇧L for \(choice.title)"
+                    : "\(localModel) · on your Mac · nothing sent to Claude · ⌃⇧L for Claude"
+            }
             if plan.lean { return "\(choice.title) · text only · web search off" }
         } else if localFirst {
-            return "Quick questions stay on your Mac (\(localModel)) · the rest goes to \(choice.title)"
+            return Settings.isClaudeModel(localModel)
+                ? "Quick questions go to \(EngineLabel.full(localModel)) · the rest goes to \(choice.title)"
+                : "Quick questions stay on your Mac (\(localModel)) · the rest goes to \(choice.title)"
         }
         var parts = [choice.title, web ? "web search on" : "web search off"]
         switch screen {
@@ -787,7 +863,7 @@ final class AskPanelController {
         if let transcript = videoTranscript {
             // A video chat works from its transcript. With Local Mode on (and English), the model on this Mac reads it;
             // otherwise Claude does, with the usual tools (to check things it says).
-            if Settings.shared.localMode, OllamaClient.shared.status.isUsable, transcript.isEnglish {
+            if effectiveLocalMode, OllamaClient.shared.status.isUsable, transcript.isEnglish {
                 startLocalVideo(transcript, request: prompt)
             } else {
                 startClaudeVideo(transcript, request: prompt)
@@ -796,7 +872,7 @@ final class AskPanelController {
         }
         let settings = Settings.shared
         // With Local Mode on, a graph that clearly fits a ready-made one is drawn here, with no Claude call.
-        if settings.localMode, selection.video == nil, docIndex == nil, selection.regionImage == nil, !selection.isBlank,
+        if effectiveLocalMode, selection.video == nil, docIndex == nil, selection.regionImage == nil, !selection.isBlank,
            let template = GraphTemplates.match(prompt: prompt, selection: selection.text) {
             let chosen = Router.Plan(engine: .local, lean: false, why: "graph template")
             plan = chosen
@@ -811,13 +887,18 @@ final class AskPanelController {
         let chosen = Router.plan(.init(prompt: prompt, selection: selection.text, context: context,
                                        hasSnip: selection.regionImage != nil, isBlank: selection.isBlank,
                                        isVideo: selection.video != nil, hasDocument: docIndex != nil,
-                                       localMode: settings.localMode, localUsable: OllamaClient.shared.status.isUsable,
-                                       smart: screenMode == .smart))
+                                       localMode: effectiveLocalMode, localUsable: OllamaClient.shared.status.isUsable,
+                                       localSeesImages: Settings.isClaudeModel(settings.localModel), smart: screenMode == .smart))
         plan = chosen
         model.footnote = Self.footnote(choice: choice, web: webSearch, screen: screenMode, plan: chosen,
                                        localModel: settings.localModel, localFirst: false)
         if chosen.isLocal {
-            startLocal(prompt)
+            // A model that sees pictures waits for the screenshot only when the question needs it.
+            if chosen.sees, Self.localWantsScreenshot(prompt, blank: selection.isBlank), screenMode != .off {
+                whenScreenshotReady { [weak self] in self?.startLocal(prompt) }
+            } else {
+                startLocal(prompt)
+            }
         } else if chosen.lean {
             startClaude(prompt, chosen) // no screenshot to wait for
         } else {
@@ -891,7 +972,47 @@ final class AskPanelController {
         }
     }
 
-    // MARK: - ⌃⇧L: who answers this chat
+    // MARK: - The Qwen/Claude button, and ⌃⇧L: who answers this chat
+
+    /// Local Mode, unless this chat's button said otherwise.
+    private var effectiveLocalMode: Bool { engineOverride.map { $0 == .local } ?? Settings.shared.localMode }
+
+    private func refreshEngineButton() {
+        let local: Bool
+        if let plan { local = plan.isLocal }
+        else if let engineOverride { local = engineOverride == .local }
+        else {
+            local = OllamaClient.shared.status.isUsable
+                && Router.mayGoLocal(selection: selection.text, hasSnip: selection.regionImage != nil,
+                                     isVideo: selection.video != nil, localMode: Settings.shared.localMode,
+                                     seesImages: Settings.isClaudeModel(Settings.shared.localModel))
+        }
+        model.engine = .init(name: EngineLabel.name(local: local, model: Settings.shared.localModel), isLocal: local)
+    }
+
+    /// The button: moves this chat to the other engine (answering the last question again), or, before the first question, picks who
+    /// will answer it. Says what happened in a short note above the chat.
+    private func engineButtonTapped() {
+        let message = sentFirst && !model.turns.isEmpty && plan != nil ? toggleEngine() : chooseFirstEngine()
+        Toast.show(message, near: NSRect(x: panel.frame.midX, y: panel.frame.maxY, width: 1, height: 1))
+    }
+
+    private func chooseFirstEngine() -> String {
+        if model.engine.isLocal {
+            engineOverride = .claude
+            refreshEngineButton()
+            return "This chat will use Claude."
+        }
+        let name = Settings.shared.localModel
+        guard OllamaClient.shared.status.isUsable else { return Self.localDownText }
+        guard docIndex == nil else { return "Chats about a whole page or document use Claude, so this one stays." }
+        if selection.video == nil, selection.isBlank || selection.regionImage != nil, !Settings.isClaudeModel(name) {
+            return "This chat needs Claude (a snip or a blank chat), so it stays."
+        }
+        engineOverride = .local
+        refreshEngineButton()
+        return "This chat will use \(Self.localPlace(name)). Some questions (the web, your screen, graphs) still go to \(choice.title)."
+    }
 
     /// Moves THIS chat to Claude (if the model on this Mac was answering it) or to the model on this Mac (if Claude was),
     /// and answers the last question again that way. Only this chat: Local Mode itself, and every other and future chat,
@@ -927,19 +1048,20 @@ final class AskPanelController {
     }
 
     private func switchToLocal() -> String {
-        guard OllamaClient.shared.status.isUsable else {
-            return "Ollama isn't running (or \(Settings.shared.localModel) isn't installed), so this chat stays on Claude."
-        }
+        guard OllamaClient.shared.status.isUsable else { return Self.localDownText }
         if let transcript = videoTranscript {
             guard transcript.isEnglish else { return "Summaries on your Mac are English only, so this video stays on Claude." }
         } else {
             if docIndex != nil { return "Chats about a whole page or document use Claude, so this one stays." }
-            guard Router.mayGoLocal(selection: selection.text, hasSnip: selection.regionImage != nil, isVideo: false, localMode: true)
+            guard Router.mayGoLocal(selection: selection.text, hasSnip: selection.regionImage != nil, isVideo: false, localMode: true,
+                                    seesImages: Settings.isClaudeModel(Settings.shared.localModel))
                     || (Prompts.isSummary(lastPrompt) && !selection.text.isEmpty && selection.regionImage == nil
                         && selection.text.count <= Router.maxLocalSummary) else {
                 return "This chat needs Claude (a snip, a blank chat, very long text or non-Latin text), so it stays."
             }
-            if Router.needsClaude(lastPrompt) { return "That question needs Claude (the web, your screen, graphs or translation), so this chat stays." }
+            if Router.needsClaude(lastPrompt, seesScreen: Settings.isClaudeModel(Settings.shared.localModel)) {
+                return "That question needs Claude (the web, graphs or translation), so this chat stays."
+            }
         }
         stopAnswering()
         model.restartNewestTurn()
@@ -950,14 +1072,14 @@ final class AskPanelController {
         if let transcript = videoTranscript {
             startLocalVideo(transcript, request: lastPrompt)
         } else {
-            let chosen = Router.Plan(engine: .local, lean: false, why: "switched by you")
+            let chosen = Router.Plan(engine: .local, lean: false, why: "switched by you", sees: Settings.isClaudeModel(Settings.shared.localModel))
             plan = chosen
             model.footnote = Self.footnote(choice: choice, web: webSearch, screen: screenMode, plan: chosen,
                                            localModel: Settings.shared.localModel, localFirst: false)
             startLocal(lastPrompt, earlier: model.earlierExchanges())
         }
         onUpdate?()
-        return "This chat now runs on your Mac (\(Settings.shared.localModel)). Your other chats, and new ones, are unchanged."
+        return "This chat now uses \(Self.localPlace(Settings.shared.localModel)). Your other chats, and new ones, are unchanged."
     }
 
     /// Later questions go to whoever started the chat, unless they need something it doesn't have.
@@ -987,15 +1109,26 @@ final class AskPanelController {
 
     private func startLocal(_ prompt: String, earlier: [(question: String, answer: String)] = []) {
         localModelName = Settings.shared.localModel
-        let local = LocalSession(model: localModelName)
+        let sees = plan?.sees == true
+        let local = LocalSession(model: localModelName, system: sees ? Prompts.localSystemSeeing : Prompts.localSystem)
         attach(local)
         try? local.start()
         model.markNewestTurn(localModel: localModelName)
+        // A model that sees pictures gets the snip, and the screenshot when the question is about the screen. The screenshot
+        // is kept in case the chat moves to Claude.
+        var images: [Data] = []
+        if sees, let snip = selection.regionImage { images.append(snip) }
+        let shot = sees && Self.localWantsScreenshot(prompt, blank: selection.isBlank) ? screenshot : nil
+        if let shot { images.append(shot) }
         let text = Prompts.first(app: selection.appName, selection: selection.text, context: context, question: prompt,
+                                 hasScreenshot: shot != nil, hasSnip: sees && selection.regionImage != nil,
                                  selectionLimit: Prompts.isSummary(prompt) ? Prompts.maxSummarySelection : Prompts.maxSelection,
                                  earlier: earlier)
-        local.send(text, images: [])
+        local.send(text, images: images)
     }
+
+    /// Does this question need the whole-screen screenshot (a blank chat, or one about what's on screen)?
+    private static func localWantsScreenshot(_ prompt: String, blank: Bool) -> Bool { blank || Router.needsScreen(prompt) }
 
     /// Starts a Claude session for this chat. A lean one has no web tools. nil (and the error shown) if it can't start.
     private func startClaudeSession(lean: Bool, features: Prompts.Features) -> ClaudeSession? {
@@ -1072,9 +1205,9 @@ final class AskPanelController {
         let why: String
         switch OllamaClient.shared.status {
         case _ where plan?.why == "graph template": why = reason
-        case .notRunning: why = "Ollama isn't running"
+        case .notRunning: why = Settings.isClaudeModel(localModelName) ? "The Claude command wasn't found" : "Ollama isn't running"
         case .modelMissing: why = "\(localModelName) isn't installed"
-        case .unknown, .ready: why = "The local model failed"
+        case .unknown, .ready: why = "\(Settings.isClaudeModel(localModelName) ? EngineLabel.full(localModelName) : "The local model") failed"
         }
         escalate(prompt: lastPrompt, earlier: model.earlierExchanges(), note: why)
     }
@@ -1089,7 +1222,8 @@ final class AskPanelController {
     private func warmUpLocalModel() {
         let settings = Settings.shared
         guard Router.mayGoLocal(selection: selection.text, hasSnip: selection.regionImage != nil,
-                                isVideo: selection.video != nil, localMode: settings.localMode) else { return }
+                                isVideo: selection.video != nil, localMode: settings.localMode,
+                                seesImages: Settings.isClaudeModel(settings.localModel)) else { return }
         OllamaClient.shared.warmUp { [weak self] status in
             guard let self, !self.closed, !self.sentFirst, !status.isUsable else { return }
             // Ollama isn't there: don't promise a local answer.
@@ -1103,7 +1237,9 @@ final class AskPanelController {
         let first = model.turns.count <= 1
         let saved: Int
         if plan.isLocal {
-            saved = UsageLog.savedByLocal(followUp: !first, screenshot: screenMode != .off, web: webSearch)
+            // On this Mac the whole call is saved; with a Claude model only the screenshot and web tools are.
+            saved = Settings.shared.localIsOnMac ? UsageLog.savedByLocal(followUp: !first, screenshot: screenMode != .off, web: webSearch)
+                : UsageLog.savedByLean(screenshot: screenMode != .off, web: webSearch)
             lastLocalSaving = saved
         } else if plan.lean {
             saved = UsageLog.savedByLean(screenshot: screenMode != .off, web: webSearch)
@@ -1133,7 +1269,7 @@ final class AskPanelController {
     private func checkStall() {
         guard !closed, model.isStreaming, Date().timeIntervalSince(lastEvent) > Self.stallTimeout else { return }
         stopWatchdog()
-        let who = plan?.isLocal == true ? "The local model" : "Claude"
+        let who = plan?.isLocal == true ? (Settings.shared.localIsOnMac ? "The local model" : EngineLabel.full(Settings.shared.localModel)) : "Claude"
         session?.stop()
         model.fail("\(who) didn't answer in time.", sessionDead: true)
         phase = .failed
@@ -1176,7 +1312,7 @@ final class AskPanelController {
         guard fading else { return }
         fading = false
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
+            ctx.duration = 0.12
             ctx.timingFunction = Motion.easeOut
             panel.animator().alphaValue = 1
         }
@@ -1185,6 +1321,9 @@ final class AskPanelController {
     private func startDecay() {
         lastActivity = Date()
         tick?.invalidate()
+        tick = nil
+        // Chats stay on screen until you close or minimize them: nothing fades them or tucks them away on its own.
+        guard !Settings.shared.chatsStayOpen else { return }
         tick = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in self?.decayTick() }
     }
 
@@ -1220,8 +1359,10 @@ final class AskPanelController {
     private func installMonitors() {
         removeMonitors()
         guard !Self.demoMode else { return } // the user's own clicks mustn't interfere with --demo
-        // Clicks in other apps. (Global monitors never see Margin's own windows, like the sidebar.)
-        if let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+        // Clicks in other apps put the chat away, unless chats are set to stay until you close them (the default).
+        // (Global monitors never see Margin's own windows, like the sidebar.)
+        if !Settings.shared.chatsStayOpen,
+           let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             self?.dismissGesture()
         }) { monitors.append(m) }
 
@@ -1332,8 +1473,12 @@ final class AskPanelController {
                 y = growsDown ? icon.minY - 4 - height : icon.maxY + 4
             case .dock(let sidebar):
                 x = sidebar.minX - 12 - model.width          // to the left of the sidebar
+                // A sidebar you've dragged to the left side of the screen has no room there: open on its right instead.
+                if x < vf.minX + 8 { x = sidebar.maxX + 12 }
                 y = sidebar.maxY - height                    // top-aligned with it
             }
+            x += cascade.x
+            y += cascade.y
         }
         x = min(max(x, vf.minX + 8), vf.maxX - model.width - 8)
         y = min(max(y, vf.minY + 8), vf.maxY - 8 - height)
@@ -1400,7 +1545,7 @@ final class AskPanelController {
     /// Catalog colors like windowBackgroundColor don't resolve offscreen, so snapshots use concrete ones.
     private var snapshotBackground: NSColor {
         let dark = panel.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return NSColor(white: dark ? 0.16 : 0.97, alpha: 1)
+        return Theme.canvas.resolved(dark: dark)
     }
 
     /// The chat drawn into an image (over a solid background, since blur can't be captured).

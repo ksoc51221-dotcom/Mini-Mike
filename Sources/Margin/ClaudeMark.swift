@@ -60,7 +60,7 @@ enum ClaudeMark {
         return image
     }
 
-    /// App icon artwork: a terracotta spark on a warm ivory tile.
+    /// App icon artwork: an ink spark on a highlighter-yellow tile.
     static func appIconPNG(pixels: Int) -> Data? {
         guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -81,17 +81,13 @@ enum ClaudeMark {
         shadow.shadowBlurRadius = s * 0.03
         NSGraphicsContext.saveGraphicsState()
         shadow.set()
-        Theme.ivory.setFill()
+        Theme.highlighter.light.setFill()
         shape.fill()
         NSGraphicsContext.restoreGraphicsState()
 
-        NSGradient(starting: NSColor(srgbRed: 0.985, green: 0.97, blue: 0.945, alpha: 1),
-                   ending: NSColor(srgbRed: 0.93, green: 0.905, blue: 0.865, alpha: 1))?
-            .draw(in: shape, angle: -90)
-
         let markSize = s * 0.5
         draw(in: NSRect(x: (s - markSize) / 2, y: (s - markSize) / 2, width: markSize, height: markSize),
-             color: Theme.accent)
+             color: Theme.onHighlighter.light)
 
         NSGraphicsContext.restoreGraphicsState()
         return rep.representation(using: .png, properties: [:])

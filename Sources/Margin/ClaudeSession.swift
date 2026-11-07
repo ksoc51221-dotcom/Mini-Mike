@@ -49,6 +49,10 @@ final class ClaudeSession: AnswerSession {
     var onUsage: ((Usage) -> Void)?
 
     private let model: ModelChoice
+    /// A specific model id (instead of `model`'s name), how hard it thinks, and a system prompt of its own: the quick model.
+    private let modelID: String?
+    private let effort: String?
+    private let systemPrompt: String?
     private let webSearch: Bool
     /// Which long parts of the system prompt this chat started with (a later question can add the rest).
     private(set) var features: Prompts.Features
@@ -62,8 +66,12 @@ final class ClaudeSession: AnswerSession {
     private var lastTotalCost = 0.0
     private var lastTotalApi = 0.0
 
-    init(model: ModelChoice, webSearch: Bool, features: Prompts.Features = .all) {
+    init(model: ModelChoice, webSearch: Bool, features: Prompts.Features = .all,
+         modelID: String? = nil, effort: String? = nil, system: String? = nil) {
         self.model = model
+        self.modelID = modelID
+        self.effort = effort
+        self.systemPrompt = system
         self.webSearch = webSearch
         self.features = features
     }
@@ -72,6 +80,11 @@ final class ClaudeSession: AnswerSession {
     func didSendExtra(_ added: Prompts.Features) { features.formUnion(added) }
 
     var isAlive: Bool { !stopped }
+
+    /// The system prompt this session starts with. One passed in (the quick model's) already has Context and Rules.
+    var startingSystemPrompt: String {
+        systemPrompt ?? Prompts.personalized(Prompts.system(webSearch: webSearch, sectors: Library.shared.sectorsForPrompt, sectorHints: Library.shared.sectorHintsForPrompt, features: features))
+    }
 
     func start() throws {
         guard let cli = Self.claudePath else { throw StartError.cliNotFound }
@@ -85,15 +98,16 @@ final class ClaudeSession: AnswerSession {
             "--output-format", "stream-json",
             "--include-partial-messages",
             "--verbose",
-            "--model", model.rawValue,
+            "--model", modelID ?? model.rawValue,
             "--tools", tools.joined(separator: ","),
         ]
+        if let effort { args += ["--effort", effort] }
         if !tools.isEmpty { args += ["--allowedTools"] + tools }
         args += [
             "--strict-mcp-config",
             "--setting-sources", "",
             "--no-session-persistence",
-            "--system-prompt", Prompts.system(webSearch: webSearch, sectors: Library.shared.sectorsForPrompt, features: features),
+            "--system-prompt", startingSystemPrompt,
         ]
         p.arguments = args
         p.currentDirectoryURL = Self.workingDirectory

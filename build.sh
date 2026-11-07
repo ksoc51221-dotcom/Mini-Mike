@@ -19,6 +19,9 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Margin "$APP/Contents/MacOS/Margin"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# Geist + Geist Mono (registered at launch by MarginFonts.register()).
+mkdir -p "$APP/Contents/Resources/Fonts"
+cp Resources/Fonts/* "$APP/Contents/Resources/Fonts/"
 # Sign with the private "Margin Local Signing" identity when it's set up (scripts/setup-signing.sh),
 # so macOS sees every build as the same app and keeps its permissions. Otherwise sign ad hoc.
 SIGN_DIR="$HOME/Library/Application Support/Margin Signing"

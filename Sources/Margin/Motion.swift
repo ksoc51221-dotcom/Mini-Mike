@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 /// Shared animation curves and helpers, so everything in Margin moves the same way.
 enum Motion {
@@ -8,19 +9,76 @@ enum Motion {
     static let easeInOut = CAMediaTimingFunction(controlPoints: 0.45, 0.0, 0.25, 1.0)
     static let easeIn = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 0.9, 0.6)
 
-    /// A transform that scales a layer around its center (view-backed layers anchor at a corner).
-    static func scale(_ s: CGFloat, _ layer: CALayer, dy: CGFloat = 0) -> CATransform3D {
+    // SwiftUI animation tokens (Instrument). Wrap in `Motion.animation(_:)` so Reduce Motion drops to a short fade.
+    /// Functional UI: 0.3 s, no bounce. Small UI (hover, press, toggles): 0.2 s. Exits run at about 65% of the enter time.
+    static let functional = Animation.spring(duration: 0.3, bounce: 0)
+    static let small = Animation.spring(duration: 0.2, bounce: 0)
+    static let exit = Animation.spring(duration: 0.3 * 0.65, bounce: 0)
+    static let exitSmall = Animation.spring(duration: 0.2 * 0.65, bounce: 0)
+    /// Button press: scale 0.97.
+    static let pressScale: CGFloat = 0.97
+    // Older names, now aliases of the two durations above.
+    static let snappy = functional
+    static let smooth = functional
+    static let quick = small
+    /// `a`, or a 0.12 s ease-out when Reduce Motion is on (pair with opacity-only changes).
+    static func animation(_ a: Animation) -> Animation { reduceMotion ? .easeOut(duration: 0.12) : a }
+
+    /// Reduce Motion is on: movement and scale are dropped, opacity and colour changes stay.
+    static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Set by the headless picture harness (`--uishots`): every animation is drawn at its final frame.
+    nonisolated(unsafe) static var still = false
+
+    /// CASpringAnimation's stiffness / damping for a SwiftUI-style spring (mass 1): `response` is the period in seconds,
+    /// `dampingFraction` 1 is critically damped.
+    static func spring(response: CGFloat, damping fraction: CGFloat) -> (stiffness: CGFloat, damping: CGFloat) {
+        let stiffness = pow(2 * .pi / response, 2)
+        return (stiffness, 2 * fraction * stiffness.squareRoot())
+    }
+
+    /// A point on screen as a point in `view`'s layer, clamped to the view (so a point just outside it becomes its nearest edge).
+    static func layerPoint(fromScreen p: NSPoint, in view: NSView) -> CGPoint? {
+        guard let window = view.window, let layer = view.layer else { return nil }
+        let local = view.convert(window.convertPoint(fromScreen: p), from: nil)
+        let b = view.bounds
+        let x = min(max(local.x, b.minX), b.maxX), y = min(max(local.y, b.minY), b.maxY)
+        return CGPoint(x: x, y: view.isFlipped == layer.isGeometryFlipped ? y : b.maxY - (y - b.minY))
+    }
+
+    /// A transform that scales a layer around its center (view-backed layers anchor at a corner), or around `about`
+    /// (a point in the layer's bounds) so it grows out of that point.
+    static func scale(_ s: CGFloat, _ layer: CALayer, dy: CGFloat = 0, about: CGPoint? = nil) -> CATransform3D {
         let b = layer.bounds
         let anchor = CGPoint(x: b.minX + layer.anchorPoint.x * b.width, y: b.minY + layer.anchorPoint.y * b.height)
-        let tx = (1 - s) * (b.midX - anchor.x)
-        let ty = (1 - s) * (b.midY - anchor.y) + dy
+        let pivot = about ?? CGPoint(x: b.midX, y: b.midY)
+        let tx = (1 - s) * (pivot.x - anchor.x)
+        let ty = (1 - s) * (pivot.y - anchor.y) + dy
         return CATransform3DConcat(CATransform3DMakeScale(s, s, 1), CATransform3DMakeTranslation(tx, ty, 0))
+    }
+
+    /// Springs a view from `from` scale up to normal size, growing out of `about`, with a SwiftUI-style spring.
+    /// Skipped under Reduce Motion (the caller's opacity fade is what remains).
+    static func popIn(_ view: NSView, from s: CGFloat, about: CGPoint? = nil, response: CGFloat, damping fraction: CGFloat) {
+        guard !reduceMotion, !still else { return }
+        view.wantsLayer = true
+        guard let layer = view.layer else { return }
+        let params = spring(response: response, damping: fraction)
+        let anim = CASpringAnimation(keyPath: "transform")
+        anim.fromValue = scale(s, layer, about: about)
+        anim.toValue = CATransform3DIdentity
+        anim.damping = params.damping
+        anim.stiffness = params.stiffness
+        anim.mass = 1
+        anim.duration = anim.settlingDuration
+        layer.add(anim, forKey: "pop")
     }
 
     /// Springs a view from `from` scale up to normal size. Presentation-only: the model stays identity,
     /// so AppKit layout never fights it.
     static func popIn(_ view: NSView, from s: CGFloat, dy: CGFloat = 0,
                       damping: CGFloat = 16, stiffness: CGFloat = 260) {
+        guard !reduceMotion, !still else { return }
         view.wantsLayer = true
         guard let layer = view.layer else { return }
         let spring = CASpringAnimation(keyPath: "transform")
@@ -35,6 +93,7 @@ enum Motion {
 
     /// Shrinks a view slightly as it fades out. Call `reset` after the window is ordered out.
     static func shrinkOut(_ view: NSView, to s: CGFloat, duration: CFTimeInterval) {
+        guard !reduceMotion else { return }
         view.wantsLayer = true
         guard let layer = view.layer else { return }
         let shrink = CABasicAnimation(keyPath: "transform")

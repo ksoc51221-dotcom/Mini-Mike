@@ -42,6 +42,9 @@ enum TaskRouter {
         guard !text.isEmpty || !files.isEmpty else { return nil }
         let pdfs = files.filter { $0.pathExtension.lowercased() == "pdf" }
 
+        // Your online accounts (Gmail, Google Docs, Teams, a bank): Claude only, never the Mac's model.
+        if ConnectedAgent.isAccountJob(text) { return .connected(text, files: files) }
+
         // Batch jobs
         if has(#"\bheic\b|\bheif\b"#, in: text) && has(#"\b(?:convert|change|turn|make|to)\b.*\b(?:jpg|jpeg)\b|\bjpe?g\b"#, in: text) { return .batch(.heicToJpg, files) }
         if has(#"\b(?:merge|combine|join)\b.*\bpdfs?\b"#, in: text) { return .batch(.mergePDFs, pdfs.isEmpty ? files : pdfs) }
@@ -225,7 +228,7 @@ final class TaskBoxState: ObservableObject {
     }
 }
 
-private let accent = Color(nsColor: Theme.accent)
+private let accent = Theme.accent.color
 
 struct TaskBoxView: View {
     @ObservedObject var state: TaskBoxState
@@ -244,35 +247,38 @@ struct TaskBoxView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                Image(systemName: "sparkles.rectangle.stack").font(.title3).foregroundStyle(accent)
+                Glyph(kind: .spark, size: 18, color: Theme.inkSecondary.color)
                 TextField("What should I do with your files?", text: $state.text)
-                    .textFieldStyle(.plain).font(.title3)
+                    .textFieldStyle(.plain).font(.geist(17))
                     .focused($focused)
                     .onSubmit { state.onSubmit?() }
                 Button { state.onChoose?() } label: { Image(systemName: "paperclip") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary).help("Choose files or a folder")
+                    .buttonStyle(.plain).foregroundStyle(Theme.inkSecondary.color).help("Choose files or a folder")
             }
             if !state.files.isEmpty {
                 FlowChips(items: state.files.map(\.lastPathComponent)) { i in state.files.remove(at: i) }
             }
-            HStack(spacing: 6) {
+            HStack(spacing: 4) {
                 ForEach(chips, id: \.0) { chip in
-                    Button { chipTapped(chip) } label: { Label(chip.0, systemImage: chip.1).font(.caption.weight(.medium)) }
+                    Button { chipTapped(chip) } label: { Text(chip.0).font(.geist(11.5, .medium)).lineLimit(1).fixedSize() }
                         .buttonStyle(.plain)
-                        .padding(.horizontal, 9).padding(.vertical, 5)
-                        .background(Capsule().fill(accent.opacity(0.14)))
-                        .foregroundStyle(accent)
+                        .padding(.horizontal, 7).padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surfaceRaised.color).padding(1).background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.hairline.color))) // border as two fills
+                        .foregroundStyle(Theme.ink.color)
                 }
                 Spacer(minLength: 0)
             }
             Text(state.message ?? "Drop files here, or press Return. Nothing changes until you approve the plan.")
-                .font(.caption).foregroundStyle(state.message == nil ? .tertiary : .secondary)
+                .font(.geist(11.5)).foregroundStyle(state.message == nil ? Theme.inkTertiary.color : Theme.inkSecondary.color)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
         .frame(width: 580, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(dropping ? accent : Color(nsColor: PanelGlow.color).opacity(0.5), lineWidth: dropping ? 2 : 1))
+        .foregroundStyle(Theme.ink.color)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.surfaceTint.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(dropping ? Theme.hairlineStrong.color : Theme.hairline.color, lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.accentWash.color).opacity(dropping ? 1 : 0).allowsHitTesting(false).animation(Motion.animation(Motion.quick), value: dropping))
         .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
             for p in providers {
                 _ = p.loadObject(ofClass: URL.self) { url, _ in
@@ -305,12 +311,12 @@ private struct FlowChips: View {
         HStack(spacing: 6) {
             ForEach(Array(items.enumerated()), id: \.offset) { i, name in
                 HStack(spacing: 4) {
-                    Image(systemName: "doc").font(.caption2)
-                    Text(name).font(.caption).lineLimit(1)
-                    Button { remove(i) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }.buttonStyle(.plain)
+                    Image(systemName: "doc").font(.geist(11.5))
+                    Text(name).font(.geist(11.5)).lineLimit(1)
+                    Button { remove(i) } label: { Image(systemName: "xmark").font(.geist(8, .semibold)) }.buttonStyle(.plain)
                 }
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background(Capsule().fill(Color.primary.opacity(0.1)))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surfaceRaised.color))
             }
         }
     }
@@ -454,30 +460,30 @@ final class TaskCardController {
     }
 }
 
-/// The go-ahead button: always filled orange, even though the card's window isn't the focused one
+/// The go-ahead button: always filled with the accent, even though the card's window isn't the focused one
 /// (macOS would grey out the standard prominent style there).
 struct AllowButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.white)
+            .font(.geist(12, .semibold))
+            .foregroundStyle(enabled ? Theme.onAccent.color : Theme.inkTertiary.color)
             .padding(.horizontal, 16).padding(.vertical, 7)
-            .background(Capsule().fill(Color(nsColor: Theme.accent).opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.35)))
-            .contentShape(Capsule())
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(enabled ? accent.opacity(configuration.isPressed ? 0.8 : 1) : Theme.surfaceRaised.color))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
     }
 }
 
-/// The other half of the pair: Deny, in a quiet dark capsule.
+/// The other half of the pair: Deny, a quiet raised rectangle with a hairline.
 struct DenyButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.callout.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.9))
+            .font(.geist(12, .semibold))
+            .foregroundStyle(Theme.ink.color)
             .padding(.horizontal, 16).padding(.vertical, 7)
-            .background(Capsule().fill(Color.white.opacity(configuration.isPressed ? 0.28 : 0.16)))
-            .contentShape(Capsule())
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(configuration.isPressed ? Theme.surfaceSelected.color : Theme.surfaceRaised.color).padding(1).background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.hairline.color)))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
     }
 }
 
@@ -494,8 +500,8 @@ struct TaskCardView: View {
             case .working: working
             case .needsApproval: approval
             case .done: done
-            case .failed(let message): Text(message).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            case .cancelled: Text(task.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            case .failed(let message): Text(message).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color).fixedSize(horizontal: false, vertical: true)
+            case .cancelled: Text(task.detail).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(14)
@@ -511,16 +517,18 @@ struct TaskCardView: View {
         // minHeight 0: if the content is ever taller than the window, it's the bottom that's cut, never the top
         // (where the Allow button is). Without it SwiftUI centres the overflow.
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color(nsColor: PanelGlow.color).opacity(0.45), lineWidth: 1))
+        .foregroundStyle(Theme.ink.color)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.surfaceTint.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(Theme.hairline.color, lineWidth: 1))
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: task.kind.symbol).foregroundStyle(accent)
-            Text(task.title).font(.callout.weight(.semibold)).lineLimit(1)
+            Image(systemName: task.kind.symbol).foregroundStyle(Theme.inkSecondary.color)
+            Text(task.title).font(.geist(13, .semibold)).lineLimit(1)
             Spacer()
-            Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 9, weight: .bold)) }
-                .buttonStyle(.plain).foregroundStyle(.secondary).help("Close (the task keeps going; it stays in the sidebar)")
+            Button(action: onClose) { Image(systemName: "xmark").font(.geist(9, .semibold)) }
+                .buttonStyle(.plain).foregroundStyle(Theme.inkSecondary.color).help("Close (the task keeps going; it stays in the sidebar)")
         }
     }
 
@@ -529,7 +537,7 @@ struct TaskCardView: View {
     private var working: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let f = task.fraction { ProgressView(value: f).tint(accent) } else { ProgressView().controlSize(.small) }
-            Text(task.detail).font(.caption).foregroundStyle(.secondary)
+            Text(task.detail).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             Button("Stop") { task.cancelRequested = true; task.onCancel?() }.controlSize(.small)
         }
     }
@@ -547,22 +555,22 @@ struct TaskCardView: View {
     /// "This is a bigger job, about 14k tokens. Go ahead?": the cost is said before any is spent.
     private func gateView(_ gate: TaskGate) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label(gate.headline, systemImage: "gauge.with.dots.needle.67percent").font(.headline).foregroundStyle(.orange)
-            Text(gate.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Label(gate.headline, systemImage: "gauge.with.dots.needle.67percent").font(.mUI.weight(.semibold)).foregroundStyle(Theme.alert.color)
+            Text(gate.detail).font(.geist(12)).foregroundStyle(Theme.ink.color).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
                 Button { TaskEngine.shared.approve(task) } label: { Label("Go ahead", systemImage: "checkmark") }
                     .buttonStyle(AllowButtonStyle())
                 Button { TaskEngine.shared.deny(task) } label: { Label("Cancel", systemImage: "xmark") }
                     .buttonStyle(DenyButtonStyle())
                 Spacer(minLength: 0)
-                Text(gate.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(gate.summary).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color).lineLimit(1)
             }
         }
     }
 
     private func planView(_ plan: TaskPlan) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(plan.headline).font(.headline)
+            Text(plan.headline).font(.mUI.weight(.semibold))
             // The buttons come first, so they're on screen however long the plan is.
             HStack(spacing: 8) {
                 Button { TaskEngine.shared.approve(task); onClose() } label: { Label("Allow", systemImage: "checkmark") }
@@ -571,9 +579,9 @@ struct TaskCardView: View {
                 Button { TaskEngine.shared.deny(task) } label: { Label("Deny", systemImage: "xmark") }
                     .buttonStyle(DenyButtonStyle())
                 Spacer(minLength: 0)
-                Text(plan.summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(plan.summary).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color).lineLimit(1)
             }
-            Text("Nothing has changed yet. Untick anything you don't want, then press Allow.").font(.caption).foregroundStyle(.secondary)
+            Text("Nothing has changed yet. Untick anything you don't want, then press Allow.").font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(Array(plan.groups.enumerated()), id: \.element.id) { i, group in
@@ -583,22 +591,22 @@ struct TaskCardView: View {
                                     .labelsHidden().toggleStyle(.checkbox)
                                 VStack(alignment: .leading, spacing: 1) {
                                     Label(group.title, systemImage: group.removes ? "trash" : group.symbol)
-                                        .font(.callout.weight(.medium)).foregroundStyle(group.removes ? .orange : .primary)
-                                    if !group.subtitle.isEmpty { Text(group.subtitle).font(.caption).foregroundStyle(.secondary) }
+                                        .font(.geist(12, .medium)).foregroundStyle(group.removes ? Theme.alert.color : Theme.ink.color)
+                                    if !group.subtitle.isEmpty { Text(group.subtitle).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color) }
                                 }
                                 Spacer(minLength: 0)
                                 if !group.files.isEmpty {
                                     Button(expanded.contains(group.id) ? "Hide" : "Show files") {
                                         if expanded.contains(group.id) { expanded.remove(group.id) } else { expanded.insert(group.id) }
-                                    }.buttonStyle(.link).font(.caption)
+                                    }.buttonStyle(.plain).font(.geist(12, .medium)).foregroundStyle(Theme.accentText.color)
                                 }
                             }
                             if expanded.contains(group.id) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     ForEach(Array(group.files.prefix(40).enumerated()), id: \.offset) { _, line in
-                                        Text(line).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                        Text(line).font(.geistMono(10.5)).foregroundStyle(Theme.inkSecondary.color).lineLimit(1).truncationMode(.middle)
                                     }
-                                    if group.files.count > 40 { Text("…and \(group.files.count - 40) more").font(.caption2).foregroundStyle(.tertiary) }
+                                    if group.files.count > 40 { Text("…and \(group.files.count - 40) more").font(.geist(11.5)).foregroundStyle(Theme.inkTertiary.color) }
                                 }
                                 .padding(.leading, 24)
                             }
@@ -610,19 +618,19 @@ struct TaskCardView: View {
             ForEach(Array(plan.options.enumerated()), id: \.element.id) { i, option in
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle(option.title, isOn: Binding(get: { task.plan?.options[i].on ?? false }, set: { task.plan?.options[i].on = $0 }))
-                        .toggleStyle(.checkbox).font(.callout.weight(.medium))
-                    Text(option.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true).padding(.leading, 20)
+                        .toggleStyle(.checkbox).font(.geist(12, .medium))
+                    Text(option.detail).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color).fixedSize(horizontal: false, vertical: true).padding(.leading, 20)
                 }
             }
             if !plan.notes.isEmpty {
-                Text(plan.notes.joined(separator: " · ")).font(.caption2).foregroundStyle(.tertiary).lineLimit(3)
+                Text(plan.notes.joined(separator: " · ")).font(.geist(11.5)).foregroundStyle(Theme.inkTertiary.color).lineLimit(3)
             }
         }
     }
 
     private func chooserView(_ chooser: TaskChooser) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text(chooser.heading).font(.headline)
+            Text(chooser.heading).font(.mUI.weight(.semibold))
             HStack(spacing: 8) {
                 Button { TaskEngine.shared.approve(task); onClose() } label: { Label("Allow", systemImage: "checkmark") }
                     .buttonStyle(AllowButtonStyle())
@@ -634,22 +642,22 @@ struct TaskCardView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(chooser.items.enumerated()), id: \.element.id) { i, item in
                         Toggle(isOn: Binding(get: { task.chooser?.items[i].on ?? false }, set: { task.chooser?.items[i].on = $0 })) {
-                            HStack { Text(item.title).lineLimit(1); Text(item.detail).font(.caption).foregroundStyle(.secondary) }
+                            HStack { Text(item.title).lineLimit(1); Text(item.detail).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color) }
                         }.toggleStyle(.checkbox)
                     }
                 }
             }
             .frame(maxHeight: 190)
-            Text(chooser.optionsHeading).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(chooser.optionsHeading).font(.geist(12, .semibold)).foregroundStyle(Theme.inkSecondary.color)
             HStack(spacing: 14) {
                 ForEach(Array(chooser.options.enumerated()), id: \.element.id) { i, option in
                     Toggle(option.title, isOn: Binding(get: { task.chooser?.options[i].on ?? false }, set: { task.chooser?.options[i].on = $0 }))
-                        .toggleStyle(.checkbox).font(.caption)
+                        .toggleStyle(.checkbox).font(.geist(11.5))
                 }
             }
             if let estimate = chooser.estimate {
                 let picked = Set(task.chooser?.items.filter(\.on).map(\.id) ?? []), outs = Set(task.chooser?.options.filter(\.on).map(\.id) ?? [])
-                Text(estimate(picked, outs)).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                Text(estimate(picked, outs)).font(.geist(11.5)).foregroundStyle(Theme.alert.color).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -659,21 +667,21 @@ struct TaskCardView: View {
     private var done: some View {
         VStack(alignment: .leading, spacing: 8) {
             if let r = task.report {
-                Text(r.headline).font(.headline).fixedSize(horizontal: false, vertical: true)
+                Text(r.headline).font(.mUI.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
                 if !r.lines.isEmpty && r.links.isEmpty || task.kind != .find {
                     ForEach(Array(r.lines.prefix(8).enumerated()), id: \.offset) { _, l in
-                        Text(l).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(l).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color).fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(r.links) { link in
                             HStack(spacing: 8) {
-                                Image(systemName: link.url.hasDirectoryPath ? "folder" : "doc").foregroundStyle(accent)
-                                Text(link.title).font(.callout).lineLimit(1).truncationMode(.middle)
+                                Image(systemName: link.url.hasDirectoryPath ? "folder" : "doc").foregroundStyle(Theme.inkSecondary.color)
+                                Text(link.title).font(.geist(12)).lineLimit(1).truncationMode(.middle)
                                 Spacer(minLength: 0)
-                                Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([link.url]) }.buttonStyle(.link).font(.caption)
-                                Button("Open") { NSWorkspace.shared.open(link.url) }.buttonStyle(.link).font(.caption)
+                                Button("Show") { NSWorkspace.shared.activateFileViewerSelecting([link.url]) }.buttonStyle(.plain).font(.geist(12, .medium)).foregroundStyle(Theme.accentText.color)
+                                Button("Open") { NSWorkspace.shared.open(link.url) }.buttonStyle(.plain).font(.geist(12, .medium)).foregroundStyle(Theme.accentText.color)
                             }
                         }
                     }

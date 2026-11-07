@@ -16,6 +16,200 @@ enum FeatureTests {
         fileSafety(check)
         agents(check)
         taskRouting(check)
+        librarySettings(check)
+        reviewList(check)
+        personalAndLearn(check)
+        MCPServer.selfTest(check)
+    }
+
+    // MARK: - Context, Rules and Learn mode
+
+    private static func personalAndLearn(_ check: (String, Bool) -> Void) {
+        // A fixed name, so repeat runs can't pile up settings files. Cleared first in case a crash left anything in it.
+        let suite = "com.kien.margin.tests.personal"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        let realSource = Prompts.personalSource
+        defer {
+            Prompts.personalSource = realSource
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let settings = Settings(defaults: defaults)
+        Prompts.personalSource = settings
+        func occurrences(_ needle: String, in text: String) -> Int { text.components(separatedBy: needle).count - 1 }
+
+        // Empty boxes add nothing, on every kind of chat.
+        check("personal: Context, Rules and Learn mode start empty and off",
+              settings.personalContext.isEmpty && settings.personalRules.isEmpty && !settings.learnMode)
+        let claudeBase = Prompts.system(webSearch: true, sectors: ["Math"], features: [])
+        check("personal: empty boxes leave Claude's prompt untouched", Prompts.personalized(claudeBase) == claudeBase)
+        check("personal: empty boxes leave the local prompt untouched", LocalSession(model: "qwen3:8b").startingSystemPrompt == Prompts.localSystem)
+        settings.personalContext = "  \n "
+        settings.personalRules = "\n\n"
+        check("personal: boxes holding only spaces count as empty", Prompts.personalized(claudeBase) == claudeBase)
+
+        // Filled boxes reach the prompt of every chat that talks to a model.
+        settings.personalContext = "I study economics"
+        settings.personalRules = "Straight forward answer"
+        check("personal: the boxes are remembered", Settings(defaults: defaults).personalContext == "I study economics"
+              && Settings(defaults: defaults).personalRules == "Straight forward answer")
+        func reaches(_ prompt: String) -> Bool {
+            occurrences("I study economics", in: prompt) == 1 && occurrences("Straight forward answer", in: prompt) == 1
+        }
+        check("personal: both reach a Claude chat, once", reaches(ClaudeSession(model: .sonnet, webSearch: true, features: []).startingSystemPrompt))
+        check("personal: both reach a lean Claude chat, once", reaches(ClaudeSession(model: .sonnet, webSearch: false, features: []).startingSystemPrompt))
+        check("personal: both reach a local chat through Ollama, once", reaches(LocalSession(model: "qwen3:8b").startingSystemPrompt))
+        check("personal: both reach a quick-model chat, once", reaches(LocalSession(model: Settings.haikuID).startingSystemPrompt))
+        check("personal: both reach a local video chat", reaches(LocalSession(model: "qwen3:8b", system: Prompts.localVideoSystem).startingSystemPrompt))
+        let firstMessage = Prompts.first(app: "Safari", selection: "x", context: nil, question: "why?")
+        check("personal: they stay out of the messages, so follow-ups don't resend them",
+              !firstMessage.contains("I study economics") && !firstMessage.contains("Straight forward answer"))
+        settings.personalRules = ""
+        let contextOnly = Prompts.personalized(claudeBase)
+        check("personal: one empty box adds nothing of its own", contextOnly.contains("I study economics") && !contextOnly.contains("The user's rules"))
+        settings.personalContext = String(repeating: "x", count: Prompts.maxPersonal + 500)
+        check("personal: a huge paste is cut to the limit",
+              Prompts.personalized(claudeBase).count <= claudeBase.count + Prompts.maxPersonal + 200)
+
+        // Hint levels.
+        let hints = Prompts.hintLevels.map { Prompts.hint($0) }
+        check("learn: each level asks for something different", Set(hints).count == 4 && Set(hints.map { $0.replacingOccurrences(of: #"Hint level \d of 4"#, with: "", options: .regularExpression) }).count == 4)
+        check("learn: each prompt names its level", Prompts.hintLevels.allSatisfy { Prompts.hint($0).contains("Hint level \($0) of 4") })
+        check("learn: levels below 4 hold back the answer, level 4 gives it",
+              (1...3).allSatisfy { Prompts.hint($0).contains("Don't") && Prompts.hint($0).contains("give the") } && !Prompts.hint(4).contains("Don't") && Prompts.hint(4).contains("final answer"))
+        let wrapped = Prompts.hintLevels.flatMap { [Prompts.hint($0), Prompts.hint($0, movingUp: true)] }
+        check("learn: the instruction doesn't push a chat to Claude or switch on extras",
+              wrapped.allSatisfy { !Router.needsClaude($0) && Prompts.features(question: $0, selection: "").isEmpty })
+        check("learn: the instruction isn't mistaken for a calendar or video request",
+              wrapped.allSatisfy { CalendarIntent.parse($0) == nil && VideoIntent.parse($0) == nil })
+
+        // The popup, Learn mode off and on.
+        func chat(text: String = "Why is 2 + 2 four?", learn: Bool) -> (AskModel, () -> [String]) {
+            let selection = Selection(text: text, appName: "Safari", context: ContextBox(resolved: nil), pid: 0, mouse: .zero)
+            let model = AskModel(selection: selection, footnote: "")
+            model.learnMode = learn
+            let box = SentBox()
+            model.onAsk = { box.prompts.append($0) }
+            return (model, { box.prompts })
+        }
+        func finish(_ model: AskModel) {
+            model.turns[model.turns.count - 1].answer = "An answer."
+            model.turns[model.turns.count - 1].done = true
+            model.isStreaming = false
+        }
+        let (off, offSent) = chat(learn: false)
+        check("learn off: no picker", !off.hintPicking)
+        off.draft = "why?"
+        off.submit()
+        check("learn off: a typed question goes straight out, unchanged", offSent() == ["why?"] && off.turns.first?.question == "why?")
+        finish(off)
+        check("learn off: Go deeper is there, the hint button isn't", off.canGoDeeper && !off.canHintUp)
+        let (offEmpty, offEmptySent) = chat(learn: false)
+        offEmpty.submit()
+        check("learn off: pressing Return with nothing typed still explains simply", offEmptySent() == [Prompts.emptySubmit])
+
+        let (on, onSent) = chat(learn: true)
+        check("learn on: a highlight shows the picker and sends nothing", on.hintPicking && onSent().isEmpty && on.turns.isEmpty)
+        on.pickHint(1)
+        check("learn on: picking a level asks at that level", onSent() == [Prompts.hint(1)] && !on.hintPicking && on.hintLevel == 1)
+        check("learn on: no moving up while it answers", !on.canHintUp)
+        finish(on)
+        check("learn on: an answer offers the next level, not Go deeper", on.canHintUp && !on.canGoDeeper)
+        on.hintUp()
+        check("learn on: moving up asks about the same problem at the next level", onSent().last == Prompts.hint(2, movingUp: true) && on.hintLevel == 2)
+        finish(on); on.hintUp(); finish(on); on.hintUp(); finish(on)
+        check("learn on: level 4 is the top, and Go deeper comes back", on.hintLevel == 4 && !on.canHintUp && on.canGoDeeper && onSent().count == 4)
+
+        let (typed, typedSent) = chat(learn: true)
+        typed.draft = "what about 3 + 3?"
+        typed.submit()
+        check("learn on: a typed question waits for a level", typedSent().isEmpty && typed.hintQuestion == "what about 3 + 3?" && typed.draft.isEmpty && typed.hintPicking)
+        typed.pickHint(3)
+        check("learn on: the typed question goes out with its level", typedSent().first == Prompts.hint(3, question: "what about 3 + 3?") && typedSent().first?.contains("what about 3 + 3?") == true && typed.hintQuestion == nil)
+
+        let (blank, blankSent) = chat(text: "", learn: true)
+        check("learn on: with nothing highlighted, no picker until there's a question", !blank.hintPicking)
+        blank.draft = "explain derivatives"
+        blank.submit()
+        check("learn on: a typed question in a blank chat gets the picker", blank.hintPicking && blankSent().isEmpty)
+
+        let (event, eventSent) = chat(learn: true)
+        event.draft = "add dinner with Anna to my calendar tomorrow at seven"
+        event.submit()
+        check("learn on: a calendar request isn't held back for a hint", eventSent().count == 1 && event.hintQuestion == nil)
+
+        let (skip, skipSent) = chat(learn: true)
+        skip.draft = "just tell me"
+        skip.submit()
+        skip.skipHints()
+        check("learn on: Skip hints sends a waiting question as it is", skipSent() == ["just tell me"] && !skip.hintPicking && skip.hintLevel == nil)
+
+        // The toggle on the new-chat screen.
+        let (toggled, toggledSent) = chat(learn: false)
+        let memory = LearnMemory()
+        toggled.onLearnChange = { memory.values.append($0); settings.learnMode = $0 }
+        check("learn toggle: offered on a new chat", toggled.canToggleLearn)
+        toggled.toggleLearn()
+        check("learn toggle: on shows the picker and is remembered", toggled.hintPicking && memory.values == [true] && Settings(defaults: defaults).learnMode)
+        toggled.toggleLearn()
+        check("learn toggle: off hides the picker and is remembered", !toggled.hintPicking && memory.values == [true, false] && !Settings(defaults: defaults).learnMode)
+        toggled.toggleLearn()
+        toggled.draft = "my question"
+        toggled.submit()
+        toggled.toggleLearn()
+        check("learn toggle: turning off puts a waiting question back in the field, unsent",
+              toggled.draft == "my question" && toggled.hintQuestion == nil && toggledSent().isEmpty)
+        toggled.toggleLearn()
+        toggled.pickHint(2)
+        let levelBefore = toggled.hintLevel
+        let countBefore = memory.values.count
+        check("learn toggle: gone once a chat has started", !toggled.canToggleLearn)
+        toggled.toggleLearn()
+        check("learn toggle: can't change a chat under way", toggled.learnMode && toggled.hintLevel == levelBefore && memory.values.count == countBefore)
+        let (other, _) = chat(learn: true)
+        let (second, _) = chat(learn: true)
+        other.onLearnChange = { settings.learnMode = $0 }
+        other.toggleLearn()
+        check("learn toggle: another open chat keeps the mode it started in", second.learnMode && second.hintPicking)
+
+        let (read, _) = chat(learn: true)
+        read.doc = .ready(name: "Book", detail: "")
+        check("learn on: a chat reading a whole document keeps its usual flow", !read.hintPicking)
+    }
+
+    private final class SentBox { var prompts: [String] = [] }
+    private final class LearnMemory { var values: [Bool] = [] }
+
+    // MARK: - To review
+
+    private static func reviewList(_ check: (String, Bool) -> Void) {
+        let now = Date()
+        func miss(_ ago: Double) -> QuizResult {
+            QuizResult(title: "q", correct: 1, total: 2, date: now.addingTimeInterval(-ago), missed: [.init(question: "q", answer: "a", why: "w")])
+        }
+        func clean(_ ago: Double) -> QuizResult { QuizResult(title: "q", correct: 2, total: 2, date: now.addingTimeInterval(-ago)) }
+        func chat(_ title: String, _ quizzes: [QuizResult]) -> ChatRecord {
+            var c = ChatRecord(title: title, sector: "Math", app: "Safari", quote: "", turns: [.init(question: "q", answer: "a")])
+            c.quizzes = quizzes
+            return c
+        }
+        let never = chat("never quizzed", [])
+        let old = chat("old miss", [miss(3000)])
+        let recent = chat("recent miss", [miss(100)])
+        let fixed = chat("fixed on retake", [miss(500), clean(50)])
+        let relapsed = chat("missed again", [clean(900), miss(200)])
+        let perfect = chat("all right", [clean(10)])
+        let list = Review.chats([never, old, recent, fixed, relapsed, perfect])
+        check("review: only chats whose newest quiz missed something", Set(list.map(\.chat.title)) == ["old miss", "recent miss", "missed again"])
+        check("review: newest miss first", list.map(\.chat.title) == ["recent miss", "missed again", "old miss"])
+        check("review: a perfect retake takes it off the list", !list.contains { $0.chat.title == "fixed on retake" })
+        check("review: the list's date is the miss, not the chat", abs(list[0].missed.timeIntervalSince(now.addingTimeInterval(-100))) < 1)
+        check("review: order doesn't depend on how results were stored", chat("x", [miss(100), clean(500)]).reviewDate != nil
+              && chat("x", [clean(500), miss(100)]).reviewDate != nil && chat("x", [clean(10), miss(100)]).reviewDate == nil)
+        check("review: empty library is empty", Review.chats([]).isEmpty)
+        let oldJSON = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","created":0,"updated":0,"title":"t","sector":"Math","app":"","quote":"","turns":[]}"#
+        check("review: older chats without quiz data decode and stay off the list",
+              (try? JSONDecoder().decode(ChatRecord.self, from: Data(oldJSON.utf8)))?.reviewDate == nil)
     }
 
     // MARK: - Meta tag, sectors, library
@@ -87,6 +281,7 @@ enum FeatureTests {
         reopened.flush()
         let again = Library(directory: dir)
         check("library: deletes stay deleted", again.chats.count == 1 && again.notes.isEmpty)
+        check("library: ...in the Bin, not gone", again.binned.count == 2 && again.binItem(lang.id)?.kind == .chat && again.binItem(note.id)?.kind == .note)
         again.deleteAllChats()
         again.flush()
         check("library: clear all", Library(directory: dir).chats.isEmpty)
@@ -417,7 +612,7 @@ extension FeatureTests {
         exit(0)
     }
 
-    /// Margin --libdemo <dir>: pictures of the quiz in four states and the History & Notebook window, filled with
+    /// Margin --libdemo <dir>: pictures of the quiz in four states and the History, Screenshots & Notebook window, filled with
     /// sample chats in a temporary library (nothing of yours is touched or shown).
     @MainActor
     static func libraryDemo(directory: String) -> Never {
@@ -470,41 +665,90 @@ extension FeatureTests {
         Library.shared.add(Note(kind: .missed, title: "Parabolas", sector: "Math", app: "Safari", quote: "",
                                 question: "Which way does y = 2x² open?", body: "Up, because a = 2 is positive."))
 
-        let state = LibraryState()
-        let chats = Library.shared.chats
-        func card(_ view: some View, width: CGFloat) -> some View {
-            view.frame(width: width).background(Color(nsColor: .windowBackgroundColor))
+        // A few screenshots, as the inbox would have kept them.
+        let shots: [(title: String, sector: String, app: String, window: String, words: String, source: ScreenshotRecord.Source)] = [
+            ("BIDV transaction history", "Business", "Safari", "BIDV SmartBanking", "Transaction History October", .system),
+            ("AL1 ESL 03 cover work", "Language", "Microsoft Teams", "AL1 ESL 03 | Files", "Cover Work Week Six", .system),
+            ("Parabola homework, question 4", "Math", "Preview", "Algebra worksheet.pdf", "Find the vertex of y = x squared", .snip),
+            ("Swift error: cannot find type", "Computer Science", "Xcode", "Connected.swift", "error: cannot find type in scope", .system),
+        ]
+        for (i, s) in shots.enumerated() {
+            var r = ScreenshotRecord(created: Date().addingTimeInterval(-Double(i) * 7200 - 600), title: s.title)
+            r.sector = s.sector
+            r.app = s.app
+            r.windowTitle = s.window
+            r.source = s.source
+            r.text = s.words
+            if let jpeg = Snipper.downscaledJPEG(wordsPNG(s.words, width: 1000, height: 560)), let rep = NSBitmapImageRep(data: jpeg) {
+                r.width = rep.pixelsWide
+                r.height = rep.pixelsHigh
+                _ = Library.shared.writeScreenshotImage(jpeg, for: r)
+            }
+            Library.shared.add(r)
         }
-        render("history-list.png", VStack(alignment: .leading, spacing: 8) {
-            ForEach(chats.prefix(4)) { ChatRow(chat: $0) }
-        }.padding(8), width: 320)
-        // The real window, in light mode (a snapshot can't mix the system's dark mode with the window's own blur).
-        let window = NSWindow(contentViewController: NSHostingController(rootView: LibraryView(state: state, onAsk: { _, _ in })))
-        window.styleMask = [.titled, .closable, .resizable]
-        window.appearance = NSAppearance(named: .aqua)
-        window.setContentSize(NSSize(width: 980, height: 600))
-        window.setFrameOrigin(NSPoint(x: 80, y: 80))
-        window.orderFrontRegardless() // never activates Margin, so it can't take your keyboard
+
+        // Things you deleted, so the Bin has something in it: a chat, a note, a screenshot and a finished agent.
+        var old = ChatRecord(title: "Draft of the ESL cover plan", sector: "Language", app: "Microsoft Teams", quote: "Cover work, week six",
+                             turns: [.init(question: "Summarize this plan", answer: "Three activities: warm-up, reading, discussion.")])
+        old.updated = Date().addingTimeInterval(-3 * 86_400)
+        Library.shared.save(old, touch: false)
+        Library.shared.delete(chat: old.id)
+        let oldNote = Note(title: "Elasticity", sector: "Economics", app: "Safari", quote: "price elasticity", question: "What is elasticity?",
+                           body: "How much the quantity demanded moves when the price moves.")
+        Library.shared.add(oldNote)
+        Library.shared.delete(note: oldNote.id)
+        if let first = Library.shared.screenshots.last { Library.shared.delete(screenshot: first.id) }
+        let agent = BackgroundTask(kind: .tidy, title: "Tidy Desktop")
+        agent.state = .done
+        agent.report = TaskReport(headline: "Sorted 112 screenshots into 4 folders", lines: ["Moved 112 files to Screenshots/2026-10", "Left 4 files you changed today"])
+        TaskEngine.shared.debugTrack(agent)
+        TaskEngine.shared.dismiss(agent)
+
+        // The real window as ⌘⇧L shows it (a floating panel, sample library), photographed off the screen, in each of its views.
+        let live = LibraryWindow.shared
+        let state = live.debugState
+        live.show(mode: .chats, takeKeyboard: false) // never takes your typing
+        live.debugClickThrough(true) // ...or your clicks
+        if let w = live.debugWindow, let vf = NSScreen.main?.visibleFrame { // bottom-right, out of the way
+            w.setFrameOrigin(NSPoint(x: max(vf.minX, vf.maxX - w.frame.width - 20), y: vf.minY + 20))
+        }
         func snap(_ name: String) {
-            guard let view = window.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
-            view.cacheDisplay(in: view.bounds, to: rep)
-            try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent(name))
+            guard let id = live.debugWindow?.windowNumber else { return }
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-l", String(id), "-o", "-x", out.appendingPathComponent(name).path]
+            try? p.run()
+            p.waitUntilExit()
             print("  saved \(name)")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            state.selectedChat = Library.shared.chats.last?.id
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                snap("history-window.png")
+        let steps: [(String, () -> Void)] = [
+            ("dashboard-chats.png", { state.selectedChat = Library.shared.chats.first?.id }),
+            ("dashboard-notebook.png", { state.mode = .notebook; state.selectedNote = Library.shared.notes.first?.id }),
+            ("dashboard-screenshots.png", { state.mode = .screenshots; state.selectedScreenshot = Library.shared.screenshots.first?.id }),
+            ("dashboard-all.png", { state.mode = .all; state.selection = nil }),
+            ("dashboard-bin.png", { state.mode = .bin; state.selection = Library.shared.binned.first.map { ItemRef(kind: $0.kind, id: $0.id) } }),
+            ("dashboard-bin-agent.png", { state.selection = Library.shared.binned.first { $0.kind == .agent }.map { ItemRef(kind: $0.kind, id: $0.id) } }),
+            ("dashboard-cleared.png", {
                 state.mode = .notebook
-                state.selectedNote = Library.shared.notes.first?.id
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    snap("notebook-window.png")
-                    window.orderOut(nil)
-                    print("LIBDEMO DONE")
-                    exit(0)
+                if state.toast == nil, let n = Library.shared.notes.first { state.clear(ItemRef(kind: .note, id: n.id)) }
+            }),
+        ]
+        func run(_ i: Int) {
+            guard i < steps.count else {
+                live.toggle()
+                print("LIBDEMO DONE")
+                exit(0)
+            }
+            steps[i].1()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                steps[i].1() // again, in case a click on the demo window moved it
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    snap(steps[i].0)
+                    run(i + 1)
                 }
             }
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { run(0) }
         app.run()
         exit(0)
     }
@@ -1436,6 +1680,10 @@ extension FeatureTests {
         approvalChecks(check)
         customAgentChecks(check)
         savingChecks(check)
+        connectedChecks(check)
+        uiFixChecks(check)
+        binChecks(check)
+        sectorChecks(check)
     }
 }
 
@@ -1489,17 +1737,17 @@ extension FeatureTests {
 }
 
 extension FeatureTests {
-    /// Margin --catsheet <png>: every coat in every pose (sit, the 4 run frames, loaf), on white and on the bar's black.
+    /// Margin --catsheet <png>: every coat in every pose (standing, the 4 trot pictures, loaf, asleep), on white and on the bar's black.
+    /// Draws no window.
     static func catSheet(path: String) -> Never {
-        let poses: [PixelCat.Pose] = [.sit, .run(0), .run(1), .run(2), .run(3), .loaf]
-        let scale = 4
-        let cw = (PixelCat.width + 2 * PixelCat.pad) * scale, ch = (PixelCat.height + 2 * PixelCat.pad) * scale
+        let poses: [PixelCat.Pose] = [.sit, .run(0), .run(1), .run(2), .run(3), .loaf, .sleep]
+        let cw = Int(PixelCat.cell.width), ch = Int(PixelCat.cell.height)
         let gap = 8
         let cols = poses.count * 2, rows = PixelCat.coats.count
         let W = cols * (cw + gap) + gap, H = rows * (ch + gap) + gap
         guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-        ctx.interpolationQuality = .none
+        ctx.interpolationQuality = .high
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
         ctx.fill(CGRect(x: 0, y: 0, width: W / 2, height: H))
         ctx.setFillColor(CGColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1))
@@ -1507,7 +1755,7 @@ extension FeatureTests {
         for r in 0..<rows {
             for (i, pose) in poses.enumerated() {
                 for half in 0..<2 {
-                    guard let img = PixelCat.image(coat: r, pose: pose, scale: scale) else { continue }
+                    guard let img = PixelCat.image(coat: r, pose: pose) else { continue }
                     let c = half * poses.count + i
                     ctx.draw(img, in: CGRect(x: gap + c * (cw + gap), y: H - (r + 1) * (ch + gap), width: cw, height: ch))
                 }
@@ -1521,8 +1769,8 @@ extension FeatureTests {
 }
 
 extension FeatureTests {
-    /// Margin --agentbartest <dir>: the agent bar. Chats and agents are kept apart; minimized it's a strip on the right
-    /// edge, expanded it's a bar at the top centre; each agent has its own cat (sitting, running, loaf); an agent that
+    /// Margin --agentbartest <dir>: the agent bar. Chats and agents are kept apart; minimized the agents are cats asleep in the
+    /// bottom-right corner, expanded it's a bar at the top centre; each agent has its own cat (standing, running, loaf, asleep); an agent that
     /// needs your OK expands the bar and shows Allow and Deny right on its cat (and on its card); Allow carries the plan
     /// out, Deny changes nothing; the bar stays up while something waits on you. Uses temporary folders and no Claude.
     /// Saves pictures of the bar, the strip and the card to <dir>.
@@ -1556,6 +1804,8 @@ extension FeatureTests {
         }
         let first = messyFolder("Desktop"), second = messyFolder("Downloads")
         FileSafety.roots = [first, second]
+        // Dismissed agents go to the Bin: point it at a throwaway folder so your own Bin never sees the test's agents.
+        Library.shared.directory = base.appendingPathComponent("library")
 
         var failures = 0
         func check(_ name: String, _ ok: Bool) {
@@ -1595,12 +1845,12 @@ extension FeatureTests {
         func exists(_ name: String, in folder: URL) -> Bool { fm.fileExists(atPath: folder.appendingPathComponent(name).path) }
 
         Task { @MainActor in
-            // Minimized: a strip on the right edge, half-way down.
+            // Minimized: cats asleep in the bottom-right corner.
             bar.start()
-            let vfMain = (NSScreen.main ?? NSScreen.screens[0]).visibleFrame
+            let vfMain = (NSScreen.main ?? NSScreen.screens[0]).frame
             let s0 = bar.debugStrip
-            check("minimized, it's a strip on the right edge, half-way down (frame \(s0.frame))", s0.visible && s0.alpha > 0.95
-                  && abs(s0.frame.maxX - (vfMain.maxX - AgentBar.Layout.stripInset)) < 1.5 && abs(s0.frame.midY - vfMain.midY) < 1.5)
+            check("minimized, the cat sleeps in the bottom-right corner (frame \(s0.frame))", s0.visible && s0.alpha > 0.95
+                  && abs(s0.frame.maxX - (vfMain.maxX - AgentBar.Layout.restInset)) < 1.5 && abs(s0.frame.minY - (vfMain.minY - AgentBar.Layout.restSink)) < 1.5)
             check("  and the bar isn't showing", !bar.isShowing)
             stripShot("0-empty")
 
@@ -1627,7 +1877,7 @@ extension FeatureTests {
             check("  and the strip is gone meanwhile", !bar.debugStrip.visible || bar.debugStrip.alpha < 0.05)
             check("  at the top centre of the screen (frame \(f))", abs(f.maxY - (vf.maxY - AgentBar.Layout.topGap)) < 1.5 && abs(f.midX - vf.midX) < 1.5)
             check("  with three cats, each a different cat", bar.model.tasks.count == 3 && Set(bar.model.tasks.map { bar.model.coat($0) }).count == 3)
-            check("  running, sitting (needs OK) and loaf", AgentSlotView.mood(running) == .running && AgentSlotView.mood(tidy) == .idle
+            check("  running, standing (needs OK) and loaf", AgentSlotView.mood(running) == .running && AgentSlotView.mood(tidy) == .idle
                   && AgentSlotView.mood(done) == .done)
             let i = bar.model.tasks.firstIndex { $0 === tidy } ?? -1
             let r = bar.slotRect(i)
@@ -1672,7 +1922,7 @@ extension FeatureTests {
             await sleep(0.8)
             let st = bar.debugStrip
             check("minimizing flies it back to the strip", !bar.isShowing && bar.debugBarAlpha < 0.05 && st.visible && st.alpha > 0.95)
-            check("  which has a cat per agent (frame \(st.frame))", st.frame.height > s0.frame.height + 40)
+            check("  which has a cat per agent, side by side (frame \(st.frame), was \(s0.frame))", st.frame.width > s0.frame.width + 40)
             stripShot("1-three-agents")
             bar.stripClicked()
             await sleep(1.0)
@@ -1711,7 +1961,7 @@ extension FeatureTests {
             check("Deny stops the agent", other.state == .cancelled)
             check("  and says so on its cat (\(AgentSlotView.status(other).text))", AgentSlotView.status(other).text.contains("Denied"))
             check("  nothing was changed", exists("essay.docx", in: second) && exists("old.dmg", in: second) && !exists("Documents", in: second))
-            check("  its cat just sits there", AgentSlotView.mood(other) == .idle)
+            check("  its cat just stands there", AgentSlotView.mood(other) == .idle)
             check("  and it stays listed", bar.model.tasks.contains { $0 === other })
             let want4 = 2 * AgentBar.Layout.pad + 4 * AgentBar.Layout.slotWidth + 3 * AgentBar.Layout.gap + AgentBar.Layout.gap
                 + AgentBar.Layout.newJobWidth + AgentBar.Layout.minimizeWidth

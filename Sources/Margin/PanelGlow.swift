@@ -1,10 +1,10 @@
 import AppKit
 
-/// A soft light-orange glow around a chat popup. It lives in its own click-through window just
+/// The chat popup's lift: one soft black shadow (@0.4, y 12, r 32) with a faint accent halo hugging the edge. It lives in its own click-through window just
 /// behind the chat and follows it every frame (moves, resizes, fades), so the chat's own code
 /// doesn't have to know about it. It blooms out brighter each time the chat pops up, then settles.
 final class PanelGlow {
-    static let color = NSColor(srgbRed: 1.0, green: 0.71, blue: 0.47, alpha: 1) // light orange, #FFB578
+    static let color = Theme.accent.light // only used at 0 opacity now
     /// How far the glow can reach past the chat's edge.
     static let reach: CGFloat = 56
 
@@ -35,6 +35,12 @@ final class PanelGlow {
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in self.follow() }
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    /// The chat came to the front (you clicked it among several): its glow goes back to sitting right behind it.
+    func restack() {
+        guard let panel, panel.isVisible, window.isVisible else { return }
+        window.order(.below, relativeTo: panel.windowNumber)
     }
 
     func remove() {
@@ -70,7 +76,7 @@ final class PanelGlow {
                                          colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         rep.size = size
         guard let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext else { return nil } // already 2x
-        ctx.setFillColor(NSColor(white: 0.12, alpha: 1).cgColor)
+        ctx.setFillColor(Theme.canvas.dark.cgColor)
         ctx.fill(CGRect(origin: .zero, size: size))
         view.renderGlow(in: ctx)
         if let chat {
@@ -90,10 +96,12 @@ private final class GlowRectView: NSView {
     private let cornerRadius: CGFloat
     private let reach: CGFloat
     private let caster = CALayer()
+    private let dropShadow = CALayer()
     private let cutout = CAShapeLayer()
+    private var hostLayer = CALayer()
 
-    private static let restRadius: CGFloat = 18
-    private static let restOpacity: Float = 0.85
+    private static let restRadius: CGFloat = 10
+    private static let restOpacity: Float = 0 // no accent halo any more: only the neutral drop shadow remains
 
     init(cornerRadius: CGFloat, reach: CGFloat) {
         self.cornerRadius = cornerRadius
@@ -104,10 +112,18 @@ private final class GlowRectView: NSView {
         caster.shadowOffset = .zero
         caster.shadowRadius = Self.restRadius
         caster.shadowOpacity = Self.restOpacity
+        dropShadow.shadowColor = NSColor.black.cgColor
+        dropShadow.shadowOffset = CGSize(width: 0, height: -12) // AppKit layers are bottom-up: negative y falls downward
+        dropShadow.shadowRadius = 16 // CA radius is half the CSS blur: blur 32
+        dropShadow.shadowOpacity = 0.4
         cutout.fillRule = .evenOdd
         cutout.fillColor = NSColor.black.cgColor
-        caster.mask = cutout
-        layer?.addSublayer(caster)
+        let host = CALayer()
+        host.mask = cutout
+        host.addSublayer(dropShadow)
+        host.addSublayer(caster)
+        hostLayer = host
+        layer?.addSublayer(host)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -116,11 +132,14 @@ private final class GlowRectView: NSView {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        hostLayer.frame = bounds
         caster.frame = bounds
+        dropShadow.frame = bounds
         cutout.frame = bounds
         let chat = bounds.insetBy(dx: reach, dy: reach)
         let shape = CGPath(roundedRect: chat, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
         caster.shadowPath = shape
+        dropShadow.shadowPath = shape
         let hole = CGMutablePath()
         hole.addRect(bounds)
         hole.addPath(shape)
@@ -134,6 +153,12 @@ private final class GlowRectView: NSView {
         let now = caster.presentation() ?? caster
         guard let shape = caster.shadowPath else { return }
         ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -12), blur: 32, color: NSColor.black.withAlphaComponent(0.4).cgColor)
+        ctx.addPath(shape)
+        ctx.setFillColor(NSColor.black.cgColor)
+        ctx.fillPath()
+        ctx.restoreGState()
+        ctx.saveGState()
         ctx.setShadow(offset: .zero, blur: now.shadowRadius * 2,
                       color: PanelGlow.color.withAlphaComponent(CGFloat(now.shadowOpacity)).cgColor)
         ctx.addPath(shape)
@@ -142,18 +167,6 @@ private final class GlowRectView: NSView {
         ctx.restoreGState()
     }
 
-    /// Brighter and wider for a moment, then settles to a gentle steady glow.
-    func bloom() {
-        let radius = CABasicAnimation(keyPath: "shadowRadius")
-        radius.fromValue = 32
-        radius.toValue = Self.restRadius
-        let opacity = CABasicAnimation(keyPath: "shadowOpacity")
-        opacity.fromValue = 1
-        opacity.toValue = Self.restOpacity
-        let group = CAAnimationGroup()
-        group.animations = [radius, opacity]
-        group.duration = 1.1
-        group.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.7, 0.3, 1)
-        caster.add(group, forKey: "bloom")
-    }
+    /// The accent bloom is gone (lime is for one primary per view); kept so callers stay as they are.
+    func bloom() {}
 }

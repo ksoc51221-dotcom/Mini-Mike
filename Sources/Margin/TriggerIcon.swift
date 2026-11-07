@@ -1,25 +1,5 @@
 import AppKit
 
-enum Theme {
-    /// Claude-ish terracotta.
-    static let accent = NSColor(srgbRed: 0.85, green: 0.47, blue: 0.34, alpha: 1)
-    /// Warm off-white behind the spark.
-    static let ivory = NSColor(srgbRed: 0.96, green: 0.945, blue: 0.918, alpha: 1)
-
-    /// Stretchable rounded-rect mask for NSVisualEffectView (clips the blur, not just the content).
-    static func roundedMask(radius: CGFloat) -> NSImage {
-        let edge = radius * 2 + 1
-        let image = NSImage(size: NSSize(width: edge, height: edge), flipped: false) { rect in
-            NSColor.black.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
-            return true
-        }
-        image.capInsets = NSEdgeInsets(top: radius, left: radius, bottom: radius, right: radius)
-        image.resizingMode = .stretch
-        return image
-    }
-}
-
 /// Borderless panel that floats above everything and never activates Margin.
 class FloatingPanel: NSPanel {
     init(size: NSSize, canKey: Bool) {
@@ -85,7 +65,7 @@ final class TriggerIcon {
         }
         if let view = panel.contentView {
             Motion.reset(view)
-            Motion.popIn(view, from: 0.5, damping: 13, stiffness: 320)
+            Motion.popIn(view, from: 0.8, response: 0.32, damping: 0.7) // springs in with a little overshoot; never from 0
         }
         scheduleHide(after: 3)
     }
@@ -117,6 +97,17 @@ final class TriggerIcon {
                 self.hide()
             }
         }
+    }
+
+    /// For `--uishots`: the button drawn without a window, at 4×.
+    @MainActor
+    static func shotImage() -> CGImage? {
+        let view = BubbleView(frame: NSRect(x: 0, y: 0, width: 30, height: 30))
+        view.layoutSubtreeIfNeeded()
+        view.appearance = NSAppearance.currentDrawing()
+        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        return rep.cgImage
     }
 
     /// For `--demo`: the button rendered on its own, over a mid-gray backdrop.
@@ -154,28 +145,32 @@ final class TriggerIcon {
     }
 }
 
-/// Ivory disc with a terracotta spark. On hover the spark turns a little and the disc brightens.
+/// An accent rounded square with a dark spark. On hover the spark turns a little and the square brightens.
 private final class BubbleView: NSView {
     var onClick: (() -> Void)?
 
     private let host = NSView()
+    /// A plain layer holding the picture, so hover / press scaling is not fought by AppKit's own layer for the view.
+    private let scaler = CALayer()
     private let disc = CAShapeLayer()
     private let spark: CAShapeLayer
 
     override init(frame: NSRect) {
         let discRect = CGRect(origin: .zero, size: frame.size).insetBy(dx: 2, dy: 2)
         spark = ClaudeMark.layer(in: discRect.insetBy(dx: discRect.width * 0.2, dy: discRect.height * 0.2),
-                                 color: Theme.accent)
+                                 color: Theme.onAccent.ns)
         super.init(frame: frame)
         wantsLayer = true
         host.frame = bounds
         host.wantsLayer = true
-        disc.path = CGPath(ellipseIn: discRect, transform: nil)
-        disc.fillColor = Theme.ivory.cgColor
-        disc.strokeColor = NSColor.black.withAlphaComponent(0.14).cgColor
+        disc.path = CGPath(roundedRect: discRect, cornerWidth: 6, cornerHeight: 6, transform: nil)
+        disc.fillColor = Theme.accent.ns.cgColor
+        disc.strokeColor = Theme.onAccent.ns.withAlphaComponent(0.18).cgColor
         disc.lineWidth = 0.5
-        host.layer?.addSublayer(disc)
-        host.layer?.addSublayer(spark)
+        scaler.frame = host.bounds
+        host.layer?.addSublayer(scaler)
+        scaler.addSublayer(disc)
+        scaler.addSublayer(spark)
         addSubview(host)
         addTrackingArea(NSTrackingArea(rect: .zero,
                                        options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
@@ -185,15 +180,55 @@ private final class BubbleView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Layers keep the colours they were given, so a light/dark switch recolours them here.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            disc.fillColor = Theme.accent.ns.cgColor
+            disc.strokeColor = Theme.onAccent.ns.withAlphaComponent(0.18).cgColor
+            spark.strokeColor = Theme.onAccent.ns.cgColor
+        }
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseEntered(with event: NSEvent) { setHover(true) }
     override func mouseExited(with event: NSEvent) { setHover(false) }
-    override func mouseDown(with event: NSEvent) {}
+    override func mouseDown(with event: NSEvent) { pressed = true; settleScale() }
     override func mouseUp(with event: NSEvent) {
+        pressed = false
+        settleScale()
         if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
     }
 
+    private var hovering = false
+    private var pressed = false
+
+    /// The whole button: 1.06 under the pointer, 0.94 while pressed (a small spring; nothing without Reduce Motion off).
+    private func settleScale() {
+        guard !Motion.reduceMotion else { return }
+        let layer = scaler
+        let target: CGFloat = pressed ? 0.94 : (hovering ? 1.06 : 1)
+        let spring = CASpringAnimation(keyPath: "transform")
+        spring.fromValue = (layer.presentation() ?? layer).transform
+        spring.toValue = Motion.scale(target, layer)
+        let params = Motion.spring(response: 0.22, damping: 0.86)
+        spring.stiffness = params.stiffness
+        spring.damping = params.damping
+        spring.duration = spring.settlingDuration
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = Motion.scale(target, layer)
+        CATransaction.commit()
+        layer.add(spring, forKey: "press")
+    }
+
     private func setHover(_ on: Bool) {
+        hovering = on
+        settleScale()
+        guard !Motion.reduceMotion else {
+            disc.fillColor = (on ? (Theme.accent.ns.highlight(withLevel: 0.35) ?? Theme.accent.ns) : Theme.accent.ns).cgColor
+            return
+        }
         let target = on
             ? CATransform3DConcat(CATransform3DMakeRotation(-.pi / 6, 0, 0, 1), CATransform3DMakeScale(1.14, 1.14, 1))
             : CATransform3DIdentity
@@ -208,6 +243,6 @@ private final class BubbleView: NSView {
         spark.transform = target
         CATransaction.commit()
         spark.add(spring, forKey: "hover")
-        disc.fillColor = (on ? NSColor.white : Theme.ivory).cgColor // implicit fade
+        disc.fillColor = (on ? (Theme.accent.ns.highlight(withLevel: 0.35) ?? Theme.accent.ns) : Theme.accent.ns).cgColor // implicit fade
     }
 }

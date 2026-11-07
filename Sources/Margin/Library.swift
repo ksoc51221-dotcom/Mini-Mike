@@ -149,6 +149,29 @@ extension ChatRecord {
     }
 }
 
+extension ScreenshotRecord {
+    private enum CodingKeys: String, CodingKey {
+        case id, created, title, titleLocked, sector, sectorLocked, app, windowTitle, source, text, width, height, originalPath
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "Screenshot"
+        titleLocked = try c.decodeIfPresent(Bool.self, forKey: .titleLocked) ?? false
+        sector = try c.decodeIfPresent(String.self, forKey: .sector) ?? Sector.other
+        sectorLocked = try c.decodeIfPresent(Bool.self, forKey: .sectorLocked) ?? false
+        app = try c.decodeIfPresent(String.self, forKey: .app) ?? ""
+        windowTitle = try c.decodeIfPresent(String.self, forKey: .windowTitle) ?? ""
+        source = try c.decodeIfPresent(Source.self, forKey: .source) ?? .system
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        width = try c.decodeIfPresent(Int.self, forKey: .width) ?? 0
+        height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0
+        originalPath = try c.decodeIfPresent(String.self, forKey: .originalPath)
+    }
+}
+
 /// A saved answer in the notebook ("Keep it"), or a quiz question you missed.
 struct Note: Codable, Identifiable, Equatable {
     enum Kind: String, Codable { case answer, missed }
@@ -166,6 +189,46 @@ struct Note: Codable, Identifiable, Equatable {
     var chatID: UUID?
 }
 
+/// A screenshot kept in the dashboard: the picture (a JPEG in the library's folder), where it was taken, what's written in
+/// it, and a label saying what it shows.
+struct ScreenshotRecord: Codable, Identifiable, Equatable {
+    enum Source: String, Codable {
+        /// Margin's own snip (hold Tab, press \).
+        case snip
+        /// macOS's: ⌘⇧3, ⌘⇧4 or ⌘⇧5 (found in the screenshots folder).
+        case system
+    }
+
+    var id = UUID()
+    /// When it was taken.
+    var created = Date()
+    var title: String
+    /// You renamed it, so Margin stops labeling it.
+    var titleLocked = false
+    var sector: String = Sector.other
+    var sectorLocked = false
+    /// The app it was taken in, and that window's title (the page, document or chat it showed).
+    var app: String = ""
+    var windowTitle: String = ""
+    var source: Source = .system
+    /// The words found in the picture (clipped), for search.
+    var text: String = ""
+    var width = 0
+    var height = 0
+    /// The file macOS saved, left exactly where it was (nothing is moved or deleted there).
+    var originalPath: String?
+
+    var imageFile: String { "\(id.uuidString).jpg" }
+
+    /// The first words found in it, for the list.
+    var snippet: String {
+        let words = text.replacingOccurrences(of: "\n", with: " ").split(separator: " ").prefix(24).joined(separator: " ")
+        return words.isEmpty ? [app, windowTitle].filter { !$0.isEmpty }.joined(separator: " · ") : words
+    }
+
+    var sourceLabel: String { source == .snip ? "Snip (Tab+\\)" : "Screenshot" }
+}
+
 /// The outcome of one quiz.
 struct QuizResult: Codable, Equatable {
     var title: String
@@ -181,6 +244,125 @@ struct QuizResult: Codable, Equatable {
     }
 }
 
+extension ChatRecord {
+    /// When this chat's newest quiz was taken, if that quiz left questions missed. A chat leaves "To review" once its newest quiz is
+    /// all right (the older misses stay in its history). Nil: nothing to review.
+    var reviewDate: Date? {
+        guard let latest = quizzes.enumerated().max(by: { ($0.element.date, $0.offset) < ($1.element.date, $1.offset) })?.element,
+              !latest.missed.isEmpty else { return nil }
+        return latest.date
+    }
+}
+
+enum Review {
+    /// The chats to look at again, newest miss first. Uses the quiz results already stored on each chat; nothing else is saved.
+    static func chats(_ chats: [ChatRecord]) -> [(chat: ChatRecord, missed: Date)] {
+        chats.compactMap { c in c.reviewDate.map { (c, $0) } }.sorted { $0.1 > $1.1 }
+    }
+}
+
+// MARK: - The Bin
+
+/// What a dismissed agent leaves in the Bin: enough to show what it did, and to start it again.
+struct BinnedTask: Codable, Equatable {
+    enum Outcome: String, Codable { case done, failed, cancelled, unfinished }
+    struct Link: Codable, Equatable {
+        var title: String
+        var url: String
+    }
+
+    /// `BackgroundTask.Kind`'s raw value ("tidy", "study", "connected"…).
+    var kind: String
+    var title: String
+    var outcome: Outcome
+    /// The headline of its report, or why it failed.
+    var headline: String
+    var lines: [String] = []
+    var links: [Link] = []
+    var tokens = 0
+    /// What it was asked to do, so it can run again.
+    var spec: TaskSpec?
+    /// False for a job on your online accounts: what it read isn't written to disk, only that it ran.
+    var reportKept = true
+}
+
+/// Something you deleted, kept in the Bin for `Library.binDays` days so you can get it back.
+struct BinItem: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable, CaseIterable { case chat, note, screenshot, agent }
+
+    /// The deleted thing's own id.
+    var id: UUID
+    var kind: Kind
+    var deleted = Date()
+    var chat: ChatRecord?
+    var note: Note?
+    var screenshot: ScreenshotRecord?
+    var agent: BinnedTask?
+
+    init(chat: ChatRecord, deleted: Date = Date()) { id = chat.id; kind = .chat; self.deleted = deleted; self.chat = chat }
+    init(note: Note, deleted: Date = Date()) { id = note.id; kind = .note; self.deleted = deleted; self.note = note }
+    init(screenshot: ScreenshotRecord, deleted: Date = Date()) { id = screenshot.id; kind = .screenshot; self.deleted = deleted; self.screenshot = screenshot }
+    init(agent: BinnedTask, id: UUID, deleted: Date = Date()) { self.id = id; kind = .agent; self.deleted = deleted; self.agent = agent }
+
+    var title: String {
+        switch kind {
+        case .chat: return chat?.title ?? "Chat"
+        case .note: return note?.question ?? "Note"
+        case .screenshot: return screenshot?.title ?? "Screenshot"
+        case .agent: return agent?.title ?? "Agent"
+        }
+    }
+
+    var sector: String {
+        switch kind {
+        case .chat: return chat?.sector ?? Sector.other
+        case .note: return note?.sector ?? Sector.other
+        case .screenshot: return screenshot?.sector ?? Sector.other
+        case .agent: return BackgroundTask.Kind(rawValue: agent?.kind ?? "")?.title ?? "Agent"
+        }
+    }
+
+    /// A line or two of what it holds, for the list.
+    var snippet: String {
+        switch kind {
+        case .chat: return chat?.snippet ?? ""
+        case .note: return note?.body.replacingOccurrences(of: "\n", with: " ") ?? ""
+        case .screenshot: return screenshot?.snippet ?? ""
+        case .agent: return agent?.headline ?? ""
+        }
+    }
+
+    /// When the thing itself was made or last changed (the Bin lists by when you deleted it).
+    var made: Date {
+        switch kind {
+        case .chat: return chat?.updated ?? deleted
+        case .note: return note?.created ?? deleted
+        case .screenshot: return screenshot?.created ?? deleted
+        case .agent: return deleted
+        }
+    }
+
+    /// Everything a search can match.
+    var searchText: String {
+        switch kind {
+        case .chat: return [chat?.title, chat?.sector, chat?.quote, chat?.transcript].compactMap { $0 }.joined(separator: " ")
+        case .note: return [note?.title, note?.sector, note?.quote, note?.question, note?.body].compactMap { $0 }.joined(separator: " ")
+        case .screenshot:
+            return [screenshot?.title, screenshot?.sector, screenshot?.app, screenshot?.windowTitle, screenshot?.text].compactMap { $0 }.joined(separator: " ")
+        case .agent: return [agent?.title, agent?.headline, agent?.lines.joined(separator: " ")].compactMap { $0 }.joined(separator: " ")
+        }
+    }
+}
+
+/// What it takes to put sectors back after a multi-move, a re-file or a rename/merge/delete.
+struct SectorUndo {
+    var chats: [UUID: (sector: String, locked: Bool)] = [:]
+    var notes: [UUID: String] = [:]
+    var screenshots: [UUID: (sector: String, locked: Bool)] = [:]
+    var isEmpty: Bool { chats.isEmpty && notes.isEmpty && screenshots.isEmpty }
+    var count: Int { chats.count + notes.count + screenshots.count }
+}
+
 // MARK: - Store
 
 /// Chats and notes, kept on this Mac as small JSON files under Application Support/Margin/Library. Everything
@@ -188,6 +370,12 @@ struct QuizResult: Codable, Equatable {
 final class Library {
     static let shared = Library()
     static let changed = Notification.Name("MarginLibraryChanged")
+    /// How long a deleted thing waits in the Bin before it's deleted for good (the Library settings page sets it; 0 = until you empty it).
+    /// Where the Bin and retention settings come from; tests swap in a throwaway Settings.
+    static var settings: Settings = .shared
+    static var binDays: Int { max(0, settings.binAutoEmptyDays) }
+    /// "30 days", or "until you empty it" when auto-empty is off. For sentences like "waits here ...".
+    static var binWaitPhrase: String { binDays > 0 ? "\(binDays) days" : "until you empty it" }
 
     /// Where the files live (tests point this somewhere temporary).
     var directory: URL {
@@ -197,14 +385,28 @@ final class Library {
 
     private(set) var chats: [ChatRecord] = []
     private(set) var notes: [Note] = []
+    private(set) var screenshots: [ScreenshotRecord] = []
+    /// Everything you deleted that is still waiting in the Bin, newest first.
+    private(set) var binned: [BinItem] = []
+
+    /// The user's own sectors (names, colours, descriptions, rules). Tests give a Library its own; the shared one uses `SectorStore.shared`.
+    var sectorStore: SectorStore?
+    var activeSectorStore: SectorStore? { sectorStore ?? (self === Library.shared ? SectorStore.shared : nil) }
+
+    /// Set (before the first use of `Library.shared`) by `--uishots`, so the headless pictures never open the real library.
+    nonisolated(unsafe) static var overrideDirectory: URL?
 
     init(directory: URL? = nil) {
-        self.directory = directory ?? ClaudeSession.workingDirectory.appendingPathComponent("Library", isDirectory: true)
+        self.directory = directory ?? Library.overrideDirectory ?? ClaudeSession.workingDirectory.appendingPathComponent("Library", isDirectory: true)
         load()
     }
 
     private var chatsDirectory: URL { directory.appendingPathComponent("chats", isDirectory: true) }
     private var notesDirectory: URL { directory.appendingPathComponent("notes", isDirectory: true) }
+    private var screenshotsDirectory: URL { directory.appendingPathComponent("screenshots", isDirectory: true) }
+    private var binDirectory: URL { directory.appendingPathComponent("bin", isDirectory: true) }
+    /// The pictures themselves (one JPEG per screenshot).
+    var screenshotImagesDirectory: URL { directory.appendingPathComponent("screenshot-images", isDirectory: true) }
 
     private static let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -227,6 +429,9 @@ final class Library {
         }
         chats = read(chatsDirectory, ChatRecord.self).sorted { $0.updated > $1.updated }
         notes = read(notesDirectory, Note.self).sorted { $0.created > $1.created }
+        screenshots = read(screenshotsDirectory, ScreenshotRecord.self).sorted { $0.created > $1.created }
+        binned = read(binDirectory, BinItem.self).sorted { $0.deleted > $1.deleted }
+        purgeBin()
     }
 
     // MARK: Chats
@@ -238,6 +443,8 @@ final class Library {
         guard record.turns.contains(where: { !$0.answer.isEmpty }) else { return }
         var record = record
         if touch { record.updated = Date() }
+        // A rule you wrote beats Claude's guess; a chat you filed yourself is never re-filed.
+        if !record.sectorLocked, let ruled = activeSectorStore?.ruleMatch(for: record), ruled != record.sector { record.sector = ruled }
         if let i = chats.firstIndex(where: { $0.id == record.id }) {
             chats[i] = record
         } else {
@@ -264,6 +471,84 @@ final class Library {
         save(c)
     }
 
+    /// Files several chats at once (multi-select). Locked, like a single move. Returns what's needed to undo it.
+    @discardableResult
+    func move(ids: [UUID], toSector sector: String) -> SectorUndo {
+        let name = Sector.normalize(sector, known: allSectors)
+        return applySectors(Dictionary(ids.map { ($0, name) }, uniquingKeysWith: { a, _ in a }), lock: true)
+    }
+
+    /// Puts chats in sectors. `lock: true` marks them as filed by you; `nil` leaves each chat's lock as it was.
+    @discardableResult
+    func applySectors(_ changes: [UUID: String], lock: Bool?) -> SectorUndo {
+        var undo = SectorUndo()
+        for (id, name) in changes {
+            guard var c = chat(id) else { continue }
+            let target = Sector.normalize(name, known: allSectors)
+            let newLock = lock ?? c.sectorLocked
+            guard target != c.sector || newLock != c.sectorLocked else { continue }
+            undo.chats[id] = (c.sector, c.sectorLocked)
+            c.sector = target
+            c.sectorLocked = newLock
+            storeChat(c)
+        }
+        if !undo.isEmpty { announce() }
+        return undo
+    }
+
+    /// Renames a sector everywhere (chats, notes, screenshots) without touching any lock. Used by rename, merge and delete.
+    @discardableResult
+    func replaceSector(_ old: String, with new: String) -> SectorUndo {
+        var undo = SectorUndo()
+        guard old != new else { return undo }
+        for var c in chats where c.sector == old {
+            undo.chats[c.id] = (c.sector, c.sectorLocked)
+            c.sector = new
+            storeChat(c)
+        }
+        for i in notes.indices where notes[i].sector == old {
+            undo.notes[notes[i].id] = old
+            notes[i].sector = new
+            write(notes[i], to: notesDirectory.appendingPathComponent("\(notes[i].id.uuidString).json"))
+        }
+        for i in screenshots.indices where screenshots[i].sector == old {
+            undo.screenshots[screenshots[i].id] = (old, screenshots[i].sectorLocked)
+            screenshots[i].sector = new
+            write(screenshots[i], to: screenshotsDirectory.appendingPathComponent("\(screenshots[i].id.uuidString).json"))
+        }
+        if !undo.isEmpty { announce() }
+        return undo
+    }
+
+    /// Takes back a `move(ids:)`, a re-file or a `replaceSector`.
+    func undo(_ undo: SectorUndo) {
+        for (id, old) in undo.chats {
+            guard var c = chat(id) else { continue }
+            c.sector = old.sector
+            c.sectorLocked = old.locked
+            storeChat(c)
+        }
+        for (id, sector) in undo.notes {
+            guard let i = notes.firstIndex(where: { $0.id == id }) else { continue }
+            notes[i].sector = sector
+            write(notes[i], to: notesDirectory.appendingPathComponent("\(id.uuidString).json"))
+        }
+        for (id, old) in undo.screenshots {
+            guard let i = screenshots.firstIndex(where: { $0.id == id }) else { continue }
+            screenshots[i].sector = old.sector
+            screenshots[i].sectorLocked = old.locked
+            write(screenshots[i], to: screenshotsDirectory.appendingPathComponent("\(id.uuidString).json"))
+        }
+        if !undo.isEmpty { announce() }
+    }
+
+    /// Replaces a chat in place and writes it (no re-sorting, no timestamp change, no announcement).
+    private func storeChat(_ c: ChatRecord) {
+        guard let i = chats.firstIndex(where: { $0.id == c.id }) else { return }
+        chats[i] = c
+        write(c, to: chatsDirectory.appendingPathComponent("\(c.id.uuidString).json"))
+    }
+
     /// "Let Margin name this one again."
     func unlockTitle(_ id: UUID) {
         guard var c = chat(id), c.titleLocked else { return }
@@ -279,24 +564,33 @@ final class Library {
         var changed = false
         if !c.titleLocked, let t = ChatNaming.cleanTitle(title), t != c.title { c.title = t; changed = true }
         if !c.sectorLocked, let s = sector, !s.isEmpty {
-            let normalized = Sector.normalize(s, known: allSectors)
+            let normalized = activeSectorStore?.ruleMatch(for: c) ?? Sector.normalize(s, known: allSectors)
             if normalized != c.sector { c.sector = normalized; changed = true }
         }
         if changed { save(c, touch: false) } // renaming isn't new activity: it keeps its place in the list
         return changed
     }
 
+    /// Moves a chat to the Bin (it can be put back for `binDays` days).
     func delete(chat id: UUID) {
+        guard let c = chat(id) else { return }
+        keepInBin(BinItem(chat: c))
         chats.removeAll { $0.id == id }
         remove(chatsDirectory.appendingPathComponent("\(id.uuidString).json"))
         announce()
     }
 
-    func deleteAllChats() {
-        let ids = chats.map(\.id)
+    /// Moves every chat to the Bin. Returns their ids (so the dashboard can offer Undo).
+    @discardableResult
+    func deleteAllChats() -> [UUID] {
+        let all = chats
         chats.removeAll()
-        for id in ids { remove(chatsDirectory.appendingPathComponent("\(id.uuidString).json")) }
+        for c in all {
+            keepInBin(BinItem(chat: c))
+            remove(chatsDirectory.appendingPathComponent("\(c.id.uuidString).json"))
+        }
         announce()
+        return all.map(\.id)
     }
 
     // MARK: Notes
@@ -307,7 +601,10 @@ final class Library {
         announce()
     }
 
+    /// Moves a note to the Bin.
     func delete(note id: UUID) {
+        guard let n = notes.first(where: { $0.id == id }) else { return }
+        keepInBin(BinItem(note: n))
         notes.removeAll { $0.id == id }
         remove(notesDirectory.appendingPathComponent("\(id.uuidString).json"))
         announce()
@@ -318,12 +615,254 @@ final class Library {
         notes.first { $0.chatID == id && $0.question == question && $0.kind == .answer }
     }
 
+    // MARK: Screenshots
+
+    func screenshot(_ id: UUID) -> ScreenshotRecord? { screenshots.first { $0.id == id } }
+
+    func imageURL(for record: ScreenshotRecord) -> URL { screenshotImagesDirectory.appendingPathComponent(record.imageFile) }
+
+    /// Keeps a screenshot. Its picture must already be in `screenshotImagesDirectory` (see `writeScreenshotImage`).
+    func add(_ record: ScreenshotRecord) {
+        screenshots.removeAll { $0.id == record.id }
+        screenshots.append(record)
+        screenshots.sort { $0.created > $1.created }
+        write(record, to: screenshotsDirectory.appendingPathComponent("\(record.id.uuidString).json"))
+        announce()
+    }
+
+    /// Writes a screenshot's picture now (so it's there the moment the record is). Safe from any thread.
+    func writeScreenshotImage(_ jpeg: Data, for record: ScreenshotRecord) -> Bool {
+        let dir = screenshotImagesDirectory
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try jpeg.write(to: dir.appendingPathComponent(record.imageFile), options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    func rename(screenshot id: UUID, to title: String) {
+        guard var s = screenshot(id) else { return }
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        s.title = t
+        s.titleLocked = true
+        add(s)
+    }
+
+    func unlockTitle(screenshot id: UUID) {
+        guard var s = screenshot(id), s.titleLocked else { return }
+        s.titleLocked = false
+        add(s)
+    }
+
+    func move(screenshot id: UUID, toSector sector: String) {
+        guard var s = screenshot(id) else { return }
+        s.sector = Sector.normalize(sector, known: allSectors)
+        s.sectorLocked = true
+        add(s)
+    }
+
+    /// A better label for a screenshot (from the model on this Mac, or Claude when asked). Whatever you've set yourself is left alone.
+    @discardableResult
+    func applyScreenshotLabel(_ id: UUID, title: String?, sector: String?, force: Bool = false) -> Bool {
+        guard var s = screenshot(id) else { return false }
+        var changed = false
+        if (force || !s.titleLocked), let t = ChatNaming.cleanTitle(title), t != s.title { s.title = t; changed = true }
+        if !s.sectorLocked, let sec = sector, !sec.isEmpty {
+            let normalized = Sector.normalize(sec, known: allSectors)
+            if normalized != s.sector { s.sector = normalized; changed = true }
+        }
+        if changed { add(s) }
+        return changed
+    }
+
+    /// Moves a screenshot to the Bin. Its picture stays where it is until the Bin is emptied (or the item is deleted for good).
+    func delete(screenshot id: UUID) {
+        guard let s = screenshot(id) else { return }
+        keepInBin(BinItem(screenshot: s))
+        screenshots.removeAll { $0.id == id }
+        remove(screenshotsDirectory.appendingPathComponent("\(id.uuidString).json"))
+        announce()
+    }
+
+    /// Moves every screenshot to the Bin. Returns their ids (so the dashboard can offer Undo).
+    @discardableResult
+    func deleteAllScreenshots() -> [UUID] {
+        let all = screenshots
+        screenshots.removeAll()
+        for s in all {
+            keepInBin(BinItem(screenshot: s))
+            remove(screenshotsDirectory.appendingPathComponent("\(s.id.uuidString).json"))
+        }
+        announce()
+        return all.map(\.id)
+    }
+
+    func search(screenshots query: String, sector: String? = nil) -> [ScreenshotRecord] {
+        let terms = query.lowercased().split(separator: " ").map(String.init)
+        return screenshots.filter { s in
+            if let sector, s.sector != sector { return false }
+            guard !terms.isEmpty else { return true }
+            let haystack = (s.title + " " + s.sector + " " + s.app + " " + s.windowTitle + " " + s.text).lowercased()
+            return terms.allSatisfy { haystack.contains($0) }
+        }
+    }
+
+    /// Sectors that have screenshots in them, with how many.
+    var usedScreenshotSectors: [(name: String, count: Int)] {
+        allSectors.compactMap { name in
+            let n = screenshots.filter { $0.sector == name }.count
+            return n > 0 ? (name, n) : nil
+        }
+    }
+
+    // MARK: Bin
+
+    func binItem(_ id: UUID) -> BinItem? { binned.first { $0.id == id } }
+
+    private func binFile(_ item: BinItem) -> URL {
+        binDirectory.appendingPathComponent("\(item.kind.rawValue)-\(item.id.uuidString).json")
+    }
+
+    /// Puts something in the Bin (a chat, note or screenshot you delete goes here by itself; the agent bar adds a dismissed agent).
+    func keepInBin(_ item: BinItem) {
+        binned.removeAll { $0.id == item.id }
+        binned.append(item)
+        binned.sort { $0.deleted > $1.deleted }
+        write(item, to: binFile(item))
+    }
+
+    /// Same as `keepInBin`, for callers outside the library that need the dashboard to refresh.
+    func addToBin(_ item: BinItem) {
+        keepInBin(item)
+        announce()
+    }
+
+    /// Takes a chat, note or screenshot out of the Bin and puts it back where it was. (An agent goes back on the agent bar:
+    /// see `TaskEngine.restore`, which then calls `forget`.) False if it isn't in the Bin.
+    @discardableResult
+    func restore(_ id: UUID) -> Bool {
+        guard let item = binItem(id) else { return false }
+        switch item.kind {
+        case .chat:
+            guard var c = item.chat else { return false }
+            // If the chat carried on after you deleted it, that newer one is already back; this copy comes back beside it.
+            if chats.contains(where: { $0.id == c.id }) { c.id = UUID() }
+            chats.append(c)
+            chats.sort { $0.updated > $1.updated }
+            write(c, to: chatsDirectory.appendingPathComponent("\(c.id.uuidString).json"))
+        case .note:
+            guard var n = item.note else { return false }
+            if notes.contains(where: { $0.id == n.id }) { n.id = UUID() }
+            notes.append(n)
+            notes.sort { $0.created > $1.created }
+            write(n, to: notesDirectory.appendingPathComponent("\(n.id.uuidString).json"))
+        case .screenshot:
+            guard let s = item.screenshot else { return false }
+            screenshots.removeAll { $0.id == s.id }
+            screenshots.append(s)
+            screenshots.sort { $0.created > $1.created }
+            write(s, to: screenshotsDirectory.appendingPathComponent("\(s.id.uuidString).json"))
+        case .agent:
+            return false
+        }
+        forget(item)
+        announce()
+        return true
+    }
+
+    /// Takes it out of the Bin without putting anything back (the caller has done that, or means to delete it).
+    private func forget(_ item: BinItem) {
+        binned.removeAll { $0.id == item.id }
+        remove(binFile(item))
+    }
+
+    /// Takes an agent out of the Bin after the agent bar has put it back.
+    func forget(agent id: UUID) {
+        guard let item = binItem(id), item.kind == .agent else { return }
+        forget(item)
+        announce()
+    }
+
+    /// Deletes one thing for good (a screenshot's picture goes too).
+    func deleteForever(_ id: UUID) {
+        guard let item = binItem(id) else { return }
+        if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+        forget(item)
+        announce()
+    }
+
+    /// Deletes everything in the Bin for good. Returns the ids that went.
+    @discardableResult
+    func emptyBin() -> [UUID] {
+        let all = binned
+        for item in all {
+            if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+            forget(item)
+        }
+        if !all.isEmpty { announce() }
+        return all.map(\.id)
+    }
+
+    /// Deletes what has been in the Bin longer than `binDays`. Returns how many went.
+    @discardableResult
+    func purgeBin(now: Date = Date(), days: Int = Library.binDays) -> Int {
+        guard days > 0 else { return 0 }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+        let old = binned.filter { $0.deleted < cutoff }
+        for item in old {
+            if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+            forget(item)
+        }
+        return old.count
+    }
+
+    /// Whole days before it's deleted for good (at least 1 while it's still here).
+    func daysLeft(_ item: BinItem, now: Date = Date()) -> Int {
+        guard Self.binDays > 0 else { return Int.max }
+        let gone = item.deleted.addingTimeInterval(Double(Self.binDays) * 86_400)
+        return max(1, Int((gone.timeIntervalSince(now) / 86_400).rounded(.up)))
+    }
+
+    /// Applies the two retention settings: the Bin's auto-empty days (see `binDays`) and "Keep screenshots for" (a screenshot
+    /// older than that is deleted for good, picture included; 0 = keep). Cheap; called at launch and when the Library opens.
+    @discardableResult
+    func applyRetention(now: Date = Date(), settings: Settings = Library.settings) -> (bin: Int, screenshots: Int) {
+        let binGone = purgeBin(now: now, days: max(0, settings.binAutoEmptyDays))
+        var shotsGone = 0
+        let days = settings.screenshotRetentionDays
+        if days > 0 {
+            let cutoff = now.addingTimeInterval(-Double(days) * 86_400)
+            for s in screenshots where s.created < cutoff {
+                delete(screenshot: s.id)
+                deleteForever(s.id)
+                shotsGone += 1
+            }
+        }
+        return (binGone, shotsGone)
+    }
+
+    /// Names of the picture files that belong to screenshots sitting in the Bin.
+    var binnedImageFiles: [String] { binned.compactMap { $0.screenshot?.imageFile } }
+
+    func search(bin query: String, kind: BinItem.Kind? = nil) -> [BinItem] {
+        let terms = query.lowercased().split(separator: " ").map(String.init)
+        return binned.filter { item in
+            if let kind, item.kind != kind { return false }
+            guard !terms.isEmpty else { return true }
+            let haystack = item.searchText.lowercased()
+            return terms.allSatisfy { haystack.contains($0) }
+        }
+    }
+
     // MARK: Sectors and search
 
     /// Every sector in use plus the defaults, defaults first.
     var allSectors: [String] {
-        var out = Sector.defaults
-        for name in (chats.map(\.sector) + notes.map(\.sector)) where !out.contains(name) { out.append(name) }
+        var out = activeSectorStore?.names ?? Sector.defaults
+        for name in (chats.map(\.sector) + notes.map(\.sector) + screenshots.map(\.sector)) where !out.contains(name) { out.append(name) }
         return out
     }
 
@@ -338,8 +877,12 @@ final class Library {
     /// Sectors to offer Claude when it files a new chat: the ones in use, then the rest of the defaults.
     var sectorsForPrompt: [String] {
         let used = usedSectors.map(\.name)
-        return used + Sector.defaults.filter { !used.contains($0) && $0 != Sector.other } + [Sector.other]
+        let base = activeSectorStore?.names ?? Sector.defaults
+        return used + base.filter { !used.contains($0) && $0 != Sector.other } + [Sector.other]
     }
+
+    /// One short description per sector that has one (empty ones are left out), for the prompt.
+    var sectorHintsForPrompt: [String: String] { activeSectorStore?.hints ?? [:] }
 
     func search(chats query: String, sector: String? = nil) -> [ChatRecord] {
         let terms = query.lowercased().split(separator: " ").map(String.init)

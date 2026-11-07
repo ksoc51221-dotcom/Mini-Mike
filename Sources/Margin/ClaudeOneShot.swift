@@ -23,21 +23,23 @@ enum ClaudeOneShot {
     }
 
     /// Runs on a background queue; `completion` is called on the main queue.
-    static func run(_ prompt: String, system: String, model: ModelChoice, timeout: TimeInterval = 180,
-                    completion: @escaping (Result<Reply, Failure>) -> Void) {
+    static func run(_ prompt: String, system: String, model: ModelChoice, modelID: String? = nil, effort: String? = nil,
+                    timeout: TimeInterval = 180, completion: @escaping (Result<Reply, Failure>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = runSync(prompt, system: system, model: model, timeout: timeout)
+            let result = runSync(prompt, system: system, model: model, modelID: modelID, effort: effort, timeout: timeout)
             DispatchQueue.main.async { completion(result) }
         }
     }
 
     /// Blocks until the answer is in. Never call it on the main thread.
-    static func runSync(_ prompt: String, system: String, model: ModelChoice, timeout: TimeInterval = 180) -> Result<Reply, Failure> {
+    static func runSync(_ prompt: String, system: String, model: ModelChoice, modelID: String? = nil, effort: String? = nil,
+                        timeout: TimeInterval = 180) -> Result<Reply, Failure> {
         guard let cli = ClaudeSession.claudePath else { return .failure(.cliNotFound) }
         let p = Process()
         p.executableURL = URL(fileURLWithPath: cli)
-        p.arguments = ["-p", "--output-format", "json", "--model", model.rawValue, "--tools", "",
+        p.arguments = ["-p", "--output-format", "json", "--model", modelID ?? model.rawValue, "--tools", "",
                        "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--system-prompt", system]
+        if let effort { p.arguments? += ["--effort", effort] }
         p.currentDirectoryURL = ClaudeSession.workingDirectory
         var env = ProcessInfo.processInfo.environment
         env.removeValue(forKey: "CLAUDECODE")

@@ -53,8 +53,8 @@ struct GraphView: View {
             card(spec)
         } else {
             Label("Couldn't draw this graph.", systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.mMeta)
+                .foregroundStyle(Theme.inkSecondary.color)
         }
     }
 
@@ -64,7 +64,7 @@ struct GraphView: View {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if let title = spec.title {
                         Text(title)
-                            .font(.callout.weight(.semibold))
+                            .font(.geist(12, .semibold))
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 4)
@@ -75,7 +75,7 @@ struct GraphView: View {
                             Label("Reset", systemImage: "arrow.counterclockwise")
                         }
                         .buttonStyle(.borderless)
-                        .font(.caption)
+                        .font(.mMeta)
                         .transition(.opacity)
                     }
                 }
@@ -102,21 +102,21 @@ struct GraphView: View {
             }
             if let caption = spec.caption {
                 Text(caption)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .font(.mMeta)
+                    .foregroundStyle(Theme.inkSecondary.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !spec.problems.isEmpty {
                 Text(spec.problems.count == 1 ? "Skipped 1 part that didn't make sense." :
                         "Skipped \(spec.problems.count) parts that didn't make sense.")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .font(.mMeta)
+                    .foregroundStyle(Theme.inkTertiary.color)
                     .help(spec.problems.joined(separator: "\n"))
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.045)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
     }
 
     private func sliderRow(_ s: GraphSpec.Slider) -> some View {
@@ -128,8 +128,8 @@ struct GraphView: View {
             })
         return HStack(spacing: 8) {
             Text(s.label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.mMeta)
+                .foregroundStyle(Theme.inkSecondary.color)
                 .lineLimit(1)
             Group {
                 if let step = s.step {
@@ -139,10 +139,11 @@ struct GraphView: View {
                 }
             }
             .controlSize(.small)
-            .tint(Color(nsColor: Theme.accent))
+            .tint(Theme.ink.color)
             Text(MathFormat.short(values[s.name] ?? s.value))
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .font(.mNum)
+                .contentTransition(.numericText())
+                .foregroundStyle(Theme.inkSecondary.color)
                 .frame(minWidth: 34, alignment: .trailing)
         }
     }
@@ -156,13 +157,13 @@ struct GraphView: View {
         let renderer = ImageRenderer(content:
             VStack(alignment: .leading, spacing: 8) {
                 if let title = spec.title {
-                    Text(title).font(.system(size: 15, weight: .semibold))
+                    Text(title).font(.geist(15, .semibold))
                 }
                 GraphCanvas(spec: spec, values: values, hover: nil, dark: scheme == .dark)
                     .frame(width: width, height: width * spec.aspect)
             }
             .padding(18)
-            .background(scheme == .dark ? Color(white: 0.12) : Color.white)
+            .background(Theme.canvas.color)
             .environment(\.colorScheme, scheme)
         )
         renderer.scale = 2
@@ -230,16 +231,16 @@ struct GraphRenderer {
     let hover: CGPoint?
     let dark: Bool
 
-    private var ink: Color { dark ? Color(white: 0.92) : Color(white: 0.12) }
-    private var halo: Color { dark ? Color(white: 0.15) : Color(white: 0.985) }
+    private var ink: Color { Color(nsColor: Theme.ink.resolved(dark: dark)) }
+    private var halo: Color { Color(nsColor: Theme.canvas.resolved(dark: dark)) }
 
     private func color(_ c: GraphColor?) -> Color {
         guard let c else { return ink }
         return Color(.sRGB, red: c.r, green: c.g, blue: c.b, opacity: 1)
     }
 
-    private func text(_ s: String, size: CGFloat = 10.5, weight: Font.Weight = .medium, color: Color? = nil) -> Text {
-        Text(s).font(.system(size: size, weight: weight)).foregroundStyle(color ?? ink.opacity(0.78))
+    private func text(_ s: String, size: CGFloat = 11, weight: Font.Weight = .medium, color: Color? = nil) -> Text {
+        Text(s).font(.geistMono(size - 0.5, weight)).foregroundStyle(color ?? ink.opacity(0.78))
     }
 
     /// Where things go on screen.
@@ -622,7 +623,7 @@ struct GraphRenderer {
             let a = L.pt(CGPoint(x: rect.minX, y: rect.maxY)), b = L.pt(CGPoint(x: rect.maxX, y: rect.minY))
             let r = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
             let shape = Path(roundedRect: r, cornerRadius: min(8, r.height / 3))
-            let tint = c.map(color) ?? Color(nsColor: Theme.accent)
+            let tint = c.map(color) ?? ink
             ctx.fill(shape, with: .color(tint.opacity(0.16)))
             ctx.stroke(shape, with: .color(tint.opacity(0.9)), style: StrokeStyle(lineWidth: 1.4, dash: dashed ? [5, 4] : []))
             if let label {

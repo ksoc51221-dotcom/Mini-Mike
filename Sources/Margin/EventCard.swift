@@ -1,8 +1,8 @@
 import SwiftUI
 import AppKit
 
-private let accent = Color(nsColor: Theme.accent)
-private let good = Color(nsColor: AgentBubble.darkGreen)
+private let accent = Theme.accent.color
+private let good = Theme.done.color
 
 /// The event Margin understood from "add … to my calendar", shown for you to check and change before it's added.
 /// Nothing touches your calendar until you press Add.
@@ -36,9 +36,10 @@ struct EventCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(addedID == nil || removed ? "Add to your calendar" : "Added to your calendar", systemImage: "calendar.badge.plus")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(addedID != nil && !removed ? good : accent)
+                if addedID != nil && !removed { Glyph(kind: .check, size: 12, color: good) }
+                Text(addedID == nil || removed ? "Add to calendar" : "Added to calendar")
+                    .mLabelStyle()
+                    .foregroundStyle(addedID != nil && !removed ? good : Theme.inkSecondary.color)
                 Spacer()
             }
             if addedID != nil && !removed {
@@ -49,8 +50,8 @@ struct EventCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder((addedID != nil && !removed ? good : accent).opacity(0.35), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
         .onAppear(perform: loadDestinations)
     }
 
@@ -59,39 +60,41 @@ struct EventCard: View {
     private var editor: some View {
         VStack(alignment: .leading, spacing: 9) {
             TextField("Title", text: $draft.title)
-                .textFieldStyle(.plain).font(.callout.weight(.semibold))
+                .textFieldStyle(.plain).font(.geist(12, .semibold))
                 .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.07)))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surfaceRaised.color))
             HStack(spacing: 8) {
                 DatePicker("", selection: dayBinding, displayedComponents: .date).labelsHidden()
                 if !draft.allDay {
                     DatePicker("", selection: $draft.start, displayedComponents: .hourAndMinute).labelsHidden()
-                    Text("to").font(.caption).foregroundStyle(.secondary)
+                    Text("to").font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
                     DatePicker("", selection: $draft.end, displayedComponents: .hourAndMinute).labelsHidden()
                 }
                 Spacer(minLength: 0)
             }
+            Text(draft.start.formatted(.dateTime.weekday(.wide).day().month(.wide).year()))
+                .font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             HStack(spacing: 10) {
-                Toggle("All day", isOn: $draft.allDay.animation()).toggleStyle(.checkbox).font(.caption)
+                Toggle("All day", isOn: $draft.allDay.animation()).toggleStyle(.checkbox).font(.geist(11.5))
                 if draft.guessedMeridiem && !draft.allDay {
                     Button(isMorning ? "AM → PM" : "PM → AM") { flipHalfDay() }
-                        .buttonStyle(.link).font(.caption)
+                        .buttonStyle(.plain).font(.geist(12, .medium)).foregroundStyle(Theme.accentText.color)
                         .help("No am/pm was said, so Margin guessed. Tap to switch.")
                 }
             }
             if let note = guessNote {
-                Text(note).font(.caption2).foregroundStyle(.orange)
+                Text(note).font(.geist(11.5)).foregroundStyle(Theme.alert.color)
             }
             destinationRow
-            if let message { Text(message).font(.caption).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true) }
+            if let message { Text(message).font(.geist(11.5)).foregroundStyle(Theme.alert.color).fixedSize(horizontal: false, vertical: true) }
             HStack(spacing: 8) {
                 Button { add() } label: { Label(working ? "Adding…" : "Add to Calendar", systemImage: "plus") }
-                    .buttonStyle(CardButton(fill: accent, text: .white))
+                    .buttonStyle(CardButton(fill: accent, text: Theme.onAccent.color))
                     .disabled(working || draft.title.trimmingCharacters(in: .whitespaces).isEmpty)
                 Button { NSWorkspace.shared.open(CalendarStore.googleURL(draft)) } label: {
                     Label("Open in Google Calendar", systemImage: "arrow.up.right.square")
                 }
-                .buttonStyle(CardButton(fill: accent.opacity(0.16), text: accent))
+                .buttonStyle(CardButton(fill: Theme.surfaceRaised.color, text: Theme.ink.color, border: true))
                 .help("Opens Google's new-event page in your browser with everything filled in")
             }
         }
@@ -99,37 +102,37 @@ struct EventCard: View {
 
     private var destinationRow: some View {
         HStack(spacing: 6) {
-            Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
+            Image(systemName: "calendar").font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             if let destination, destinations.count > 1 {
                 Picker("", selection: Binding(get: { destination }, set: { self.destination = $0; CalendarStore.remember($0) })) {
                     ForEach(destinations) { Text($0.label).tag($0) }
                 }
-                .labelsHidden().fixedSize().font(.caption)
+                .labelsHidden().fixedSize().font(.geist(11.5))
             } else if let destination {
-                Text(destination.label).font(.caption).foregroundStyle(.secondary)
+                Text(destination.label).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             } else if CalendarStore.isDenied {
-                Text("Calendar access is off for Margin.").font(.caption).foregroundStyle(.secondary)
+                Text("Calendar access is off for Margin.").font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
                 Button("Open Settings") {
                     NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!)
-                }.buttonStyle(.link).font(.caption)
+                }.buttonStyle(.plain).font(.geist(12, .medium)).foregroundStyle(Theme.accentText.color)
             } else {
                 Text(CalendarStore.hasAccess ? "No calendar to add to. Turn Calendars on for your account in System Settings."
                                               : "Your Mac will ask once to let Margin add events.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
             }
         }
     }
 
     private var added: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(draft.title).font(.callout.weight(.semibold))
-            Text(summary).font(.caption).foregroundStyle(.secondary)
-            if let destination { Text(destination.label).font(.caption).foregroundStyle(.secondary) }
+            Text(draft.title).font(.geist(12, .semibold))
+            Text(summary).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color)
+            if let destination { Text(destination.label).font(.geist(11.5)).foregroundStyle(Theme.inkSecondary.color) }
             HStack(spacing: 8) {
                 Button { openCalendarApp() } label: { Label("Open Calendar", systemImage: "calendar") }
                     .buttonStyle(CardButton(fill: good.opacity(0.18), text: good))
                 Button { undo() } label: { Label("Undo", systemImage: "arrow.uturn.backward") }
-                    .buttonStyle(CardButton(fill: Color.primary.opacity(0.08), text: .secondary))
+                    .buttonStyle(CardButton(fill: Theme.surfaceRaised.color, text: Theme.inkSecondary.color))
             }
         }
     }
@@ -215,13 +218,15 @@ struct EventCard: View {
 private struct CardButton: ButtonStyle {
     let fill: Color
     let text: Color
+    var border = false
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.caption.weight(.semibold))
+            .font(.geist(12, .semibold))
             .foregroundStyle(text)
             .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Capsule().fill(fill))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(fill).padding(border ? 1 : 0)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(border ? Theme.hairline.color : Color.clear)))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }

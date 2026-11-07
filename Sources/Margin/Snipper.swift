@@ -9,8 +9,9 @@ enum Snipper {
     /// True while the picker is up, and briefly after, so the selection watcher ignores the drag.
     static var isActive: Bool { running || Date() < quietUntil }
 
-    /// `completion` gets a JPEG of the snipped area and where the mouse ended up. Not called on cancel.
-    static func run(completion: @escaping (_ jpeg: Data, _ mouse: NSPoint) -> Void) {
+    /// `completion` gets a JPEG of the snipped area (sized for Claude), the full-size PNG, and where the mouse ended up. Not
+    /// called on cancel. `finished` is called either way, first, when the picker is gone.
+    static func run(finished: (() -> Void)? = nil, completion: @escaping (_ jpeg: Data, _ png: Data, _ mouse: NSPoint) -> Void) {
         guard !running else { return }
         let url = ClaudeSession.workingDirectory.appendingPathComponent("snip-\(UUID().uuidString).png")
         let p = Process()
@@ -21,8 +22,9 @@ enum Snipper {
                 running = false
                 quietUntil = Date().addingTimeInterval(0.6)
                 defer { try? FileManager.default.removeItem(at: url) }
+                finished?()
                 guard let png = try? Data(contentsOf: url), let jpeg = downscaledJPEG(png) else { return }
-                completion(jpeg, NSEvent.mouseLocation)
+                completion(jpeg, png, NSEvent.mouseLocation)
             }
         }
         do {
@@ -30,6 +32,7 @@ enum Snipper {
             running = true
         } catch {
             running = false
+            finished?()
         }
     }
 

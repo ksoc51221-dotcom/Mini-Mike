@@ -9,6 +9,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     var onChat: (() -> Void)?
     var onToggleSidebar: (() -> Void)?
     var onHistory: ((_ notebook: Bool) -> Void)?
+    var onScreenshots: (() -> Void)?
+    var onBin: (() -> Void)?
     var onTaskBox: (() -> Void)?
     var onAgentBar: (() -> Void)?
     var onQuickTask: ((TaskSpec) -> Void)?
@@ -43,7 +45,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let trusted = AXIsProcessTrusted()
 
         let status = !trusted ? "Needs Accessibility permission"
-            : settings.paused ? "Paused" : "Active: highlight text anywhere"
+            : settings.paused ? "Paused" : "Active: select text anywhere"
         let statusItem = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
         menu.addItem(statusItem)
@@ -87,7 +89,16 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         history.keyEquivalent = "l" // shown as ⌘⇧L; the global shortcut itself lives in Hotkeys
         history.keyEquivalentModifierMask = [.command, .shift]
         menu.addItem(history)
-        menu.addItem(action("Notebook…", #selector(notebookFromMenu)))
+        menu.addItem(action("Notes…", #selector(notebookFromMenu)))
+        menu.addItem(action("Screenshots…", #selector(screenshotsFromMenu)))
+        let binned = Library.shared.binned.count
+        menu.addItem(action(binned > 0 ? "Bin (\(binned))…" : "Bin…", #selector(binFromMenu)))
+        if settings.saveScreenshots, let problem = ScreenshotInbox.shared.folderProblem {
+            let warn = NSMenuItem(title: problem, action: nil, keyEquivalent: "")
+            warn.isEnabled = false
+            warn.indentationLevel = 1
+            menu.addItem(warn)
+        }
 
         let snip = action("Snip & Ask…   (hold Tab, press \\)", #selector(snipFromMenu))
         snip.isEnabled = trusted && !settings.paused
@@ -122,7 +133,15 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         web.state = settings.webSearch ? .on : .off
         menu.addItem(web)
 
-        let local = action("Local Mode (Ollama)", #selector(toggleLocalMode))
+        let stay = action("Chats Stay Open Until I Close Them", #selector(toggleChatsStayOpen))
+        stay.state = settings.chatsStayOpen ? .on : .off
+        menu.addItem(stay)
+
+        let shots = action("Save My Screenshots to the Dashboard", #selector(toggleSaveScreenshots))
+        shots.state = settings.saveScreenshots ? .on : .off
+        menu.addItem(shots)
+
+        let local = action(settings.localIsOnMac ? "Local Mode (Ollama)" : "Quick Answers (\(EngineLabel.full(settings.localModel)))", #selector(toggleLocalMode))
         local.state = settings.localMode ? .on : .off
         menu.addItem(local)
         let localInfo = NSMenuItem(title: Self.localInfo(for: settings.localMode ? OllamaClient.shared.status : nil),
@@ -159,6 +178,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     /// The grey line under the Local Mode switch: what it does, or what's wrong with it.
     private static func localInfo(for status: OllamaClient.Status?) -> String {
         let model = Settings.shared.localModel
+        if Settings.isClaudeModel(model) {
+            let effort = Settings.shared.localEffort
+            switch status {
+            case nil: return "Quick questions go to \(EngineLabel.full(model)), \(effort) effort"
+            case .notRunning?: return "The Claude command wasn't found"
+            default: return "Ready · \(EngineLabel.full(model)) · \(effort) effort"
+            }
+        }
         switch status {
         case nil: return "Quick questions answered on this Mac"
         case .unknown?: return "Checking Ollama…"
@@ -201,6 +228,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
     @objc private func historyFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(false) } }
     @objc private func notebookFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(true) } }
+    @objc private func screenshotsFromMenu() { DispatchQueue.main.async { [weak self] in self?.onScreenshots?() } }
+    @objc private func binFromMenu() { DispatchQueue.main.async { [weak self] in self?.onBin?() } }
 
     @objc private func chatFromMenu() {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.onChat?() }
@@ -213,6 +242,16 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     @objc private func toggleWebSearch() {
         settings.webSearch.toggle()
+    }
+
+    @objc private func toggleChatsStayOpen() {
+        settings.chatsStayOpen.toggle()
+    }
+
+    @objc private func toggleSaveScreenshots() {
+        settings.saveScreenshots.toggle()
+        // Turning it back on: pick up from now (screenshots taken while it was off aren't brought in).
+        if settings.saveScreenshots { settings.lastScreenshotScan = Date() }
     }
 
     @objc private func toggleLocalMode() {
@@ -257,7 +296,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
     @objc private func showHelp() {
         alert("How to use Margin", """
-        1. Highlight text in any app, by dragging or double-clicking.
+        1. Select text in any app, by dragging or double-clicking.
         2. Click the small spark that appears next to your cursor.
         3. Ask what's confusing, or just press Return for a simpler explanation.
 
@@ -270,21 +309,32 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         Want to see it? Tap "Visualize" (or ask for a graph) and Claude draws an interactive graph or \
         diagram: drag its sliders to see what changes, hover to read values, and drag it out to keep it.
 
-        Want to ask without highlighting anything? Press Option-Shift-Tab for a chat right at your \
-        mouse (anything you've highlighted comes along). Press it again to put the chat away.
+        Want to ask without selecting anything? Press Option-Shift-Tab for a chat right at your \
+        mouse (anything you've selected comes along). Press it again to put the chat away.
 
-        Can't highlight it (a scanned PDF, an image, a diagram)? Hold Tab and press \\, then drag \
+        Can't select it (a scanned PDF, an image, a diagram)? Hold Tab and press \\, then drag \
         a box around it. Press Space to pick a whole window, or Esc to cancel.
 
-        Your chats rest in the black sidebar at the top-right of your screen, up to 4 at once. Each \
-        row has a circle that glows purple while the chat works and green when the answer is ready. \
+        Your chats rest in the black sidebar at the top-right of your screen, up to 10 at once. Each \
+        row has a circle that pulses while the chat works and shows a check when the answer is ready. \
         Click a row to open that chat; click it again to put it back. Hover a row and click × to \
-        delete it. Fold the sidebar with the button in its header (or from this menu) to leave just a \
+        close it (it stays in your History). Fold the sidebar with the button in its header (or from this menu) to leave just a \
         strip of dots.
 
-        Drag the top of a chat to put it anywhere on your screen; it stays there. Clicking anywhere \
-        else, pressing Esc, or the Minimize button puts the chat back in the sidebar, never deletes it. \
-        Only the × on the chat or on its sidebar row deletes a chat.
+        Drag the sidebar's header to move it anywhere (double-click it to send it back to the corner), \
+        and drag the top of a chat to put it anywhere on your screen; it stays there. Chats stay open, \
+        as many as you like at once, until you close them: clicking elsewhere doesn't touch them. Esc, \
+        or the Minimize button puts a chat back in the sidebar, never closes it. The × on the \
+        chat or on its sidebar row closes it, and a saved chat stays in History.
+
+        Delete something in the dashboard (the trash button on any row, the Delete key, or the buttons on a \
+        page) and it moves to the Bin instead of vanishing. The Bin is in the dashboard's sidebar and in this \
+        menu: restore anything, or delete it for good. Things wait there 30 days. An agent you dismiss with \
+        its × goes there too (a job on your online accounts keeps only that it ran, never what it read).
+
+        Every screenshot you take (Cmd-Shift-3, 4 or 5, or a Tab-\\ snip) is saved on its own to \
+        Screenshots in the History window (Cmd-Shift-L), labeled by what's in it. Cmd-Shift-L opens \
+        over your work without switching you away from it.
 
         Talk to it: hold Cmd-Shift-V, say it, let go. It starts recording the instant you press. Ask a \
         question, say "add dinner to my calendar tomorrow 7 to 8" for a calendar card, or hold A as well \
@@ -292,26 +342,29 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
         Agents (Cmd-Shift-A): a black bar at the top of your screen with a pixel cat for each background \
         agent (Tidy, Find, Study, Batch, or anything you say about your files, like "scatter these \
-        screenshots around the desktop"). A sitting cat is waiting, a running cat is working, a loaf is done. \
-        When an agent needs your OK, Allow and Deny are right on its cat, and a big job tells you its token \
-        cost first. Minimized, the agents are a small strip on the right edge of your screen.
+        screenshots around the desktop"). A standing cat is waiting for you, a running cat is working, a loaf \
+        is done, and a cat curled up asleep is waiting its turn. When an agent needs your OK, Allow and \
+        Deny are right on its cat, and a big job tells you its token cost first. Minimized, the agents are \
+        cats asleep in the bottom-right corner of your screen: click one to open the bar.
 
         Cmd-Shift-L opens your chat history. Type or say "summarize this video" in any chat to summarize the \
-        YouTube video in your browser. With Local Mode on, summaries (including videos in English) are \
-        written on your Mac; if one needs deeper analysis, press Control-Shift-L to move just that chat to \
-        Claude (press it again to move it back). Other chats and new chats are not affected.
+        YouTube video in your browser. With Quick Answers on, summaries (including videos in English) are \
+        written by the quick model (Haiku, medium effort); if one needs deeper analysis, press Control-Shift-L \
+        to move just that chat to your main Claude model (press it again to move it back). Other chats and new \
+        chats are not affected.
 
         Your chats are saved on this Mac, filed into sectors (Math, Language…) and named when you close them (never one you renamed yourself): see \
-        "Chat History…" and "Notebook…" in this menu. Tap "Quiz me" to be quizzed on a chat, "Keep" to save an \
-        answer to your notebook.
+        "Chat History…" and "Notes…" in this menu. Tap "Quiz me" to be quizzed on a chat, "Keep" to save an \
+        answer to your library.
 
-        Want to use fewer Claude tokens? Turn on Local Mode (needs the free Ollama app and its qwen3:8b model). \
-        Quick questions and short summaries are then answered by a model on your Mac, with a note saying so and \
-        an "Ask Claude" button if you want a better answer. Pronunciation, graphs, fact checks, snips and videos \
+        Want to use fewer Claude tokens? Turn on Quick Answers. Quick questions and short summaries are then \
+        answered by Claude Haiku 5.5 at medium effort (no screenshot, no web), with a note saying so and an \
+        "Ask Claude" button if you want a better answer. (To run them on your Mac instead, install the free \
+        Ollama app and its qwen3:8b model, then run: defaults write com.kien.margin localModel qwen3:8b.) Pronunciation, graphs, fact checks, snips and videos \
         always go to Claude. "Token Savings…" shows what this saved.
 
-        Your highlighted text and screenshot are only sent to Claude after you click the ? and ask, and not at all \
-        for a question your Mac answers itself.
+        Your selected text and screenshot are only sent to Claude after you click the ? and ask, and not at all \
+        for a question that stays on your Mac (only when you've switched to Ollama).
         """)
     }
 

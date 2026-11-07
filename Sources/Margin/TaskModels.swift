@@ -80,7 +80,7 @@ struct TaskReport {
 
 /// One thing a background agent is doing. The sidebar shows a row for it; its card shows the plan and the report.
 final class BackgroundTask: ObservableObject, Identifiable {
-    enum Kind: String { case tidy, study, find, batch, custom
+    enum Kind: String { case tidy, study, find, batch, custom, connected
 
         var title: String {
             switch self {
@@ -89,6 +89,7 @@ final class BackgroundTask: ObservableObject, Identifiable {
             case .find: return "Find"
             case .batch: return "Batch"
             case .custom: return "Custom"
+            case .connected: return "Connected"
             }
         }
         var symbol: String {
@@ -98,6 +99,7 @@ final class BackgroundTask: ObservableObject, Identifiable {
             case .find: return "magnifyingglass"
             case .batch: return "square.stack.3d.up"
             case .custom: return "wand.and.stars"
+            case .connected: return "link"
             }
         }
     }
@@ -112,6 +114,8 @@ final class BackgroundTask: ObservableObject, Identifiable {
 
     let id = UUID()
     let kind: Kind
+    /// What it was asked to do (so a dismissed agent can be started again from the Bin).
+    var spec: TaskSpec?
     @Published var title: String
     @Published var state: State = .working
     /// What it's doing right now ("Reading screenshots 40 of 150").

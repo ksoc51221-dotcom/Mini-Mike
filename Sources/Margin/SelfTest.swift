@@ -140,7 +140,7 @@ enum SelfTest {
     /// Margin --youtubetest [id]: reads a real video's transcript and has Claude summarize it.
     private static var liveSession: ClaudeSession?
 
-    /// Margin --placetest [dir]: shows the sidebar with all 4 agents (finished) on your real screen and checks each
+    /// Margin --placetest [dir]: shows the sidebar with all 10 agents (finished) on your real screen and checks each
     /// circle sits where the dock expects it, each aura is centered on its circle, the sidebar fits on the screen,
     /// and the painted check is centered inside the circle. With a folder, saves a picture of the sidebar.
     static func placeTest(outputDirectory: String?) -> Never {
@@ -150,7 +150,7 @@ enum SelfTest {
         let owners = (0..<Settings.shared.maxAgents).map { _ in NSObject() }
         let titles = ["What does by reference mean here?", "Explain supply and demand", "Snip from Preview", "Summarize this video"]
         sidebar.sync(owners.enumerated().map { i, o in
-            AgentSidebar.Row(id: ObjectIdentifier(o), title: titles[i], subtitle: "Done. Click to read",
+            AgentSidebar.Row(id: ObjectIdentifier(o), title: titles[i % titles.count], subtitle: "Done. Click to read",
                              phase: i == 1 ? .working : .done, isOpen: i == 0)
         })
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { // after the check has painted itself in
@@ -269,13 +269,17 @@ enum SelfTest {
 
     /// Margin --sidebartest [dir]: runs the sidebar's rules on your real screen with test chats (no Claude questions
     /// are asked): clicking away keeps a chat, a row reopens it, dragging places it, only × deletes, the sidebar folds
-    /// and fits 4 chats. With a folder, saves a picture of the sidebar.
+    /// and fits 10 chats, chats stay open side by side, the sidebar can be dragged. With a folder, saves a picture of the sidebar.
     static func sidebarTest(outputDirectory: String?) -> Never {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         AskPanelController.demoMode = true
         let wasOpen = Settings.shared.sidebarOpen
+        let wasAnchor = Settings.shared.sidebarAnchor
+        let wasStay = Settings.shared.chatsStayOpen
         Settings.shared.sidebarOpen = true
+        Settings.shared.sidebarAnchor = nil
+        Settings.shared.chatsStayOpen = true
         let dock = AgentDock()
         let sidebar = dock.debugSidebar
         var failures = 0
@@ -286,6 +290,8 @@ enum SelfTest {
         func after(_ s: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
         func finish() -> Never {
             Settings.shared.sidebarOpen = wasOpen
+            Settings.shared.sidebarAnchor = wasAnchor
+            Settings.shared.chatsStayOpen = wasStay
             print(failures == 0 ? "SIDEBARTEST PASS" : "SIDEBARTEST FAIL (\(failures))")
             exit(failures == 0 ? 0 : 1)
         }
@@ -374,32 +380,100 @@ enum SelfTest {
                 }
             }
         }
-        func four() {
-            let questions = ["Explain supply and demand", "Graph y = x² − 4x + 3", "Summarize this video", "What is opportunity cost?"]
+        func four() { ten() }
+        /// Ten chats fit, all open at once and not on top of each other; an eleventh is refused; a snip hides them for a moment.
+        func ten() {
+            let questions = (1...10).map { "Question number \($0) about supply and demand" }
             for q in questions {
                 dock.open(selection(q), iconFrame: icon)
                 dock.debugAgents.last?.debugInject(question: q, answer: "Answer.")
             }
-            after(1.2) {
-                check("four chats fit", dock.count == 4 && sidebar.debugTitles().count == 4)
+            after(1.5) {
+                check("ten chats fit", dock.count == 10 && sidebar.debugTitles().count == 10)
                 let frame = sidebar.debugPanelFrame
                 let visible = (NSScreen.screens.first { $0.isBuiltIn } ?? screen).visibleFrame
-                check("the sidebar fits on screen with four rows", visible.insetBy(dx: -0.5, dy: -0.5).contains(frame))
+                check("the sidebar fits on screen with ten rows", visible.insetBy(dx: -0.5, dy: -0.5).contains(frame))
                 let rows = sidebar.debugRows
                 check("every circle is in its slot with its aura centered",
-                      rows.count == 4 && rows.allSatisfy {
+                      rows.count == 10 && rows.allSatisfy {
                           hypot($0.disc.x - $0.expected.x, $0.disc.y - $0.expected.y) < 0.5
                               && hypot($0.aura.x - $0.disc.x, $0.aura.y - $0.disc.y) < 0.5
                       })
-                check("only the newest chat is open", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 1)
+                let open = dock.debugOpenAgents
+                check("all ten chats are open at once", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 10 && open.count == 10)
+                check("none of them is hidden or faded", dock.debugAgents.allSatisfy { $0.debugPanelAlpha > 0.9 })
+                var distinct = true
+                for (i, a) in open.enumerated() {
+                    for b in open[(i + 1)...] where abs(a.frame.minX - b.frame.minX) < 20 && abs(a.frame.maxY - b.frame.maxY) < 20 { distinct = false }
+                }
+                check("they don't sit exactly on top of each other", distinct)
+                check("a chat has no timer to fade or tuck itself away", dock.debugAgents.allSatisfy { !$0.debugDecayActive })
                 if let outputDirectory, let rep = sidebar.debugSnapshot() {
-                    let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("sidebar-four.png")
+                    let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("sidebar-ten.png")
                     try? rep.representation(using: .png, properties: [:])?.write(to: url)
                     print("saved \(url.path)")
                 }
-                dock.open(selection("a fifth"), iconFrame: icon)
-                check("a fifth chat is refused", dock.count == 4)
-                check("…and the open chat is left alone", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 1)
+                dock.open(selection("an eleventh"), iconFrame: icon)
+                check("an eleventh chat is refused", dock.count == 10)
+                check("…and the open chats are left alone", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 10)
+                dock.prepareForSnip()
+                check("a snip hides every open chat for a moment", dock.debugAgents.allSatisfy { $0.debugHiddenForCapture && $0.debugPanelAlpha < 0.01 })
+                dock.finishSnip()
+                check("…and brings them all back", dock.debugAgents.allSatisfy { !$0.debugHiddenForCapture && $0.debugPanelAlpha > 0.9 })
+                dock.debugAgents.forEach { $0.close() }
+                after(0.8) {
+                    check("deleting them all empties the dock", dock.count == 0)
+                    moveSidebar()
+                }
+            }
+        }
+        /// The sidebar moves when its header is dragged, stays where it's put as chats come and go, and goes home on a double-click.
+        func moveSidebar() {
+            dock.open(selection("one"), iconFrame: icon)
+            dock.debugAgents.last?.debugInject(question: "one", answer: "Answer.")
+            after(0.9) {
+                let before = sidebar.debugPanelFrame
+                check("the header is a drag handle", sidebar.debugDragHeader(by: NSSize(width: -240, height: -160)))
+                let moved = sidebar.debugPanelFrame
+                check("the sidebar moves where it's dragged", abs(moved.minX - (before.minX - 240)) < 1.5 && abs(moved.minY - (before.minY - 160)) < 1.5)
+                check("…and the spot is remembered", sidebar.debugHasSavedPosition)
+                dock.open(selection("two"), iconFrame: icon)
+                dock.debugAgents.last?.debugInject(question: "two", answer: "Answer.")
+                after(0.9) {
+                    let grown = sidebar.debugPanelFrame
+                    check("a new chat grows it downward from the same top-right corner", abs(grown.maxX - moved.maxX) < 1.5 && abs(grown.maxY - moved.maxY) < 1.5 && grown.height > moved.height)
+                    check("its circles still line up where it was dropped", sidebar.debugRows.allSatisfy { hypot($0.disc.x - $0.expected.x, $0.disc.y - $0.expected.y) < 0.5 })
+                    sidebar.setOpen(false)
+                    after(0.6) {
+                        let folded = sidebar.debugPanelFrame
+                        check("folding it keeps its right edge and top where they were", abs(folded.maxX - moved.maxX) < 1.5 && abs(folded.maxY - moved.maxY) < 1.5)
+                        sidebar.setOpen(true)
+                        after(0.6) {
+                            check("a double-click on the header sends it home", sidebar.debugDoubleClickHeader())
+                            after(0.6) {
+                                let home = sidebar.debugPanelFrame
+                                let visible = (NSScreen.screens.first { $0.isBuiltIn } ?? screen).visibleFrame
+                                check("…to the top-right corner", !sidebar.debugHasSavedPosition && abs(home.maxX - (visible.maxX - AgentSidebar.margin)) < 1.5
+                                      && abs(home.maxY - (visible.maxY - AgentSidebar.margin)) < 1.5)
+                                dock.debugAgents.forEach { $0.close() }
+                                after(0.8) { oldWay() }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        /// With "Chats stay open" off, it works the old way: one chat open at a time, the rest in the sidebar.
+        func oldWay() {
+            Settings.shared.chatsStayOpen = false
+            dock.open(selection("first"), iconFrame: icon)
+            dock.debugAgents.last?.debugInject(question: "first", answer: "Answer.")
+            dock.open(selection("second"), iconFrame: icon)
+            dock.debugAgents.last?.debugInject(question: "second", answer: "Answer.")
+            after(1.2) {
+                check("old way: only the newest chat is open", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 1)
+                check("old way: a chat has its fade timer back", dock.debugAgents.last?.debugDecayActive == true)
+                Settings.shared.chatsStayOpen = true
                 dock.debugAgents.forEach { $0.close() }
                 after(0.8) {
                     check("deleting them all empties the dock", dock.count == 0)

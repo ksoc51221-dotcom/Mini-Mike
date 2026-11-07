@@ -282,7 +282,7 @@ final class VoicePill {
     }
 }
 
-private let accent = Color(nsColor: Theme.accent)
+private let accent = Theme.accent.color
 
 struct VoicePillView: View {
     @ObservedObject var voice: VoiceController
@@ -291,18 +291,20 @@ struct VoicePillView: View {
         HStack(spacing: 12) {
             icon
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.callout.weight(.semibold)).lineLimit(1)
+                Text(title).font(.mUI.weight(.semibold)).foregroundStyle(Theme.ink.color).lineLimit(1)
                 if let sub = subtitle {
-                    Text(sub).font(.caption).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    Text(sub).font(.mMeta).foregroundStyle(Theme.inkSecondary.color).lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 0)
             action
         }
         .padding(.horizontal, 14)
+        .foregroundStyle(Theme.ink.color)
         .frame(width: 380, height: 64)
-        .background(RoundedRectangle(cornerRadius: 16).fill(.regularMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color(nsColor: PanelGlow.color).opacity(0.55), lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(.regularMaterial))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Theme.surfaceTint.color))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(Theme.hairline.color, lineWidth: 1))
         .onChange(of: voice.phase) { _, phase in
             switch phase {
             case .needsModel, .micDenied: voice.debugPill.setClickable(true)
@@ -321,19 +323,19 @@ struct VoicePillView: View {
                 .animation(.easeOut(duration: 0.09), value: voice.level)
         case .listening:
             ZStack {
-                Circle().fill(accent.opacity(0.18 + Double(voice.level) * 0.5)).frame(width: 36, height: 36)
+                RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(accent.opacity(0.35 + Double(voice.level) * 0.5)).frame(width: 36, height: 36)
                     .scaleEffect(1 + CGFloat(voice.level) * 0.35)
                     .animation(.easeOut(duration: 0.09), value: voice.level)
-                Image(systemName: "mic.fill").foregroundStyle(accent)
+                Image(systemName: "mic.fill").foregroundStyle(Theme.onAccent.color)
             }
         case .working:
             ProgressView().controlSize(.small).frame(width: 36, height: 36)
         case .needsModel:
-            Image(systemName: "arrow.down.circle").font(.title2).foregroundStyle(accent).frame(width: 36, height: 36)
+            Image(systemName: "arrow.down.circle").font(.geist(17)).foregroundStyle(Theme.inkSecondary.color).frame(width: 36, height: 36)
         case .micDenied:
-            Image(systemName: "mic.slash.fill").font(.title3).foregroundStyle(.red).frame(width: 36, height: 36)
+            Image(systemName: "mic.slash.fill").font(.geist(17)).foregroundStyle(Theme.alert.color).frame(width: 36, height: 36)
         case .message, .idle:
-            Image(systemName: "mic").font(.title3).foregroundStyle(.secondary).frame(width: 36, height: 36)
+            Image(systemName: "mic").font(.geist(17)).foregroundStyle(Theme.inkSecondary.color).frame(width: 36, height: 36)
         }
     }
 
@@ -341,7 +343,7 @@ struct VoicePillView: View {
         switch voice.phase {
         case .listening: return voice.text.isEmpty ? (voice.forAgent ? "Tell an agent what to do…" : "Listening…") : voice.text
         case .working(let s): return s
-        case .needsModel(let lang): return "Download the \(lang) voice model?"
+        case .needsModel(let lang): return "Get the \(lang) voice model?"
         case .micDenied: return "Microphone is off for Margin"
         case .message(let m): return m
         case .idle: return ""
@@ -362,14 +364,29 @@ struct VoicePillView: View {
     private var action: some View {
         switch voice.phase {
         case .needsModel:
-            Button("Download") { voice.downloadModel() }.buttonStyle(.borderedProminent).tint(accent)
+            Button("Download") { voice.downloadModel() }.buttonStyle(PillAction(fill: accent))
         case .micDenied:
             Button("Open Settings") {
                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
                 voice.dismiss()
-            }.buttonStyle(.bordered)
+            }.buttonStyle(PillAction(fill: accent))
         default:
             EmptyView()
         }
+    }
+}
+
+
+/// A filled accent button for the voice pill. The system's prominent style draws grey here, because the pill's
+/// panel never becomes the key window.
+private struct PillAction: ButtonStyle {
+    let fill: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.geist(12, .semibold))
+            .foregroundStyle(Theme.onAccent.color)
+            .padding(.horizontal, 14).padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(fill.opacity(configuration.isPressed ? 0.75 : 1)))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
     }
 }

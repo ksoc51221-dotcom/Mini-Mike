@@ -1,6 +1,10 @@
 import AppKit
 
-/// Tracks every agent (up to `Settings.maxAgents`): which one is open, and the sidebar they rest in.
+/// Tracks every agent (up to `Settings.maxAgents`): which ones are open, and the sidebar they rest in.
+///
+/// Chats stay where you put them. Any number can be open at once (each is its own window), clicking elsewhere doesn't tuck
+/// them away, and nothing closes a chat but you: the × deletes it, the minimize button (or Esc) sends it to the sidebar.
+/// (With "Chats stay open" off in the menu, it works the old way: one chat at a time, put away when you click off it.)
 final class AgentDock {
     private final class Entry {
         let agent: AskPanelController
@@ -9,11 +13,20 @@ final class AgentDock {
     }
 
     private var entries: [Entry] = []
-    private weak var expanded: AskPanelController?
+    /// The chats on screen, least recently used first; the last one is the one you used most recently.
+    private var openIDs: [ObjectIdentifier] = []
     private let sidebar = AgentSidebar()
+    /// Chats hidden while a snip is being taken.
+    private var hiddenForSnip: [AskPanelController] = []
+
+    private var stayOpen: Bool { Settings.shared.chatsStayOpen }
+    private var openAgents: [AskPanelController] { openIDs.compactMap { id in entries.first { $0.id == id }?.agent } }
+    /// The chat you used last.
+    private var front: AskPanelController? { openAgents.last }
 
     var count: Int { entries.count }
-    var hasRoom: Bool { entries.count < Settings.shared.maxAgents }
+    /// Room for another chat (a chat that's open and still empty makes way for it).
+    var hasRoom: Bool { entries.count - openAgents.filter(\.isEmptyChat).count < Settings.shared.maxAgents }
     var sidebarIsOpen: Bool { sidebar.isOpen }
 
     // Background agents live in their own window at the top of the screen (AgentBar), not in this sidebar.
@@ -26,9 +39,32 @@ final class AgentDock {
 
     func toggleSidebar() { sidebar.toggle() }
 
-    /// Clears the stage before a snip: the open chat goes to the sidebar.
+    private func markOpen(_ agent: AskPanelController) {
+        let id = ObjectIdentifier(agent)
+        openIDs.removeAll { $0 == id }
+        openIDs.append(id)
+    }
+
+    private func markClosed(_ agent: AskPanelController) {
+        let id = ObjectIdentifier(agent)
+        openIDs.removeAll { $0 == id }
+    }
+
+    /// Clears the way for a snip so the picture is of your screen, not of Margin: open chats hide for a moment (and come
+    /// back in `finishSnip`). With chats set to the old way, the open one goes to the sidebar.
     func prepareForSnip() {
-        expanded?.dismissGesture()
+        if stayOpen {
+            hiddenForSnip = openAgents
+            hiddenForSnip.forEach { $0.setHiddenForCapture(true) }
+        } else {
+            front?.dismissGesture()
+        }
+    }
+
+    /// The snip is over (taken or cancelled): the chats that hid for it come back.
+    func finishSnip() {
+        hiddenForSnip.forEach { $0.setHiddenForCapture(false) }
+        hiddenForSnip = []
     }
 
     /// Opens an agent for a Tab+\ snip.
@@ -39,10 +75,16 @@ final class AgentDock {
         open(selection, iconFrame: NSRect(x: mouse.x + 6, y: mouse.y - 32, width: 26, height: 26))
     }
 
-    /// Option+Shift+Tab. If you're typing in the open chat, it's put away (into the sidebar);
-    /// if a chat is open but you're elsewhere, it takes the keyboard; otherwise a new chat opens at the mouse.
+    /// Option+Shift+Tab. With the mouse over an open chat: that chat takes the keyboard (or, if you're already typing in
+    /// it, is put away). Anywhere else: a new chat opens at the mouse, next to the ones already open.
     func chatShortcut(newChat: () -> Selection?) {
-        if let current = expanded {
+        if stayOpen {
+            let mouse = NSEvent.mouseLocation
+            if let under = openAgents.last(where: { $0.frame.contains(mouse) }) {
+                if under.isFocused { under.dismissGesture() } else { markOpen(under); syncSidebar(); under.focus() }
+                return
+            }
+        } else if let current = front {
             if current.isFocused { current.dismissGesture() } else { current.focus() }
             return
         }
@@ -51,9 +93,9 @@ final class AgentDock {
         open(selection, iconFrame: NSRect(x: m.x + 6, y: m.y - 32, width: 26, height: 26))
     }
 
-    /// ⌃⇧L: the open chat (only that one) moves between Claude and the model on this Mac, and a short note says so.
+    /// ⌃⇧L: the chat you're using (only that one) moves between Claude and the model on this Mac, and a short note says so.
     func toggleEngineOfOpenChat() {
-        guard let current = expanded, !current.isEmptyChat else {
+        guard let current = openAgents.last(where: \.isFocused) ?? front, !current.isEmptyChat else {
             Toast.show("Open a chat first. ⌃⇧L moves one chat between Claude and your Mac.", near: NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y, width: 1, height: 1))
             return
         }
@@ -69,10 +111,13 @@ final class AgentDock {
         open(selection, iconFrame: NSRect(x: point.x - 13, y: point.y - 13, width: 26, height: 26))
     }
 
-    /// A spoken question: a chat that's open takes it as a follow-up; otherwise a new chat opens (with whatever is
-    /// highlighted) and asks it.
+    /// A spoken question. It goes to the chat you're typing in as a follow-up; with nothing highlighted it goes to the chat
+    /// you used last; otherwise (new text highlighted) a new chat opens about it and asks.
     func openChat(_ selection: Selection, asking question: String) {
-        if let current = expanded, !current.isEmptyChat {
+        let target = stayOpen ? (openAgents.last(where: \.isFocused) ?? (selection.isBlank ? front : nil)) : front
+        if let current = target, !current.isEmptyChat {
+            markOpen(current)
+            syncSidebar()
             current.ask(question, display: question)
             return
         }
@@ -89,16 +134,39 @@ final class AgentDock {
         debugAgents.last?.ask(prompt, display: prompt == Prompts.quiz ? Prompts.quizLabel : prompt)
     }
 
+    /// A chat about a screenshot from the dashboard (the picture is sent with the first question).
+    func openChat(aboutImage jpeg: Data, appName: String) {
+        openSnip(jpeg: jpeg, mouse: NSEvent.mouseLocation, app: nil, appName: appName)
+    }
+
+    private func openSnip(jpeg: Data, mouse: NSPoint, app: NSRunningApplication?, appName: String) {
+        let selection = Selection(text: "", appName: appName, context: ContextBox(resolved: nil),
+                                  pid: app?.processIdentifier ?? 0, mouse: mouse, regionImage: jpeg)
+        open(selection, iconFrame: NSRect(x: mouse.x + 6, y: mouse.y - 32, width: 26, height: 26))
+    }
+
     func open(_ selection: Selection, iconFrame: NSRect) {
-        // Full house: say so, and leave the chat you have open alone (unless it's empty and about to go away).
+        // Full house: say so, and leave the chats you have open alone. (A chat that's open but still empty has nothing to
+        // keep, so it makes way for the new one.)
         let limit = Settings.shared.maxAgents
-        guard entries.count < limit || expanded?.isEmptyChat == true else {
+        let empties = openAgents.filter(\.isEmptyChat)
+        guard entries.count - empties.count < limit else {
             Toast.show(Self.fullMessage, near: iconFrame)
             return
         }
-        // Only one chat is open at a time; the one on screen goes to the sidebar (an empty one just goes away).
-        expanded?.dismissGesture()
+        empties.forEach { $0.close() }
+        // Old way: only one chat is open at a time; the one on screen goes to the sidebar.
+        if !stayOpen { front?.dismissGesture() }
         let agent = AskPanelController(selection: selection, iconFrame: iconFrame)
+        wire(agent, iconFrame: iconFrame)
+        agent.cascade = cascadeOffset(for: agent)
+        entries.append(Entry(agent))
+        markOpen(agent)
+        syncSidebar()
+        agent.show()
+    }
+
+    private func wire(_ agent: AskPanelController, iconFrame: NSRect) {
         agent.onMinimizeRequest = { [weak self, weak agent] in
             if let agent { self?.minimize(agent) }
         }
@@ -106,15 +174,35 @@ final class AgentDock {
         agent.onClosed = { [weak self, weak agent] in
             if let agent { self?.remove(agent) }
         }
+        agent.onFocused = { [weak self, weak agent] in
+            guard let self, let agent, self.openIDs.contains(ObjectIdentifier(agent)) else { return }
+            self.markOpen(agent) // the chat you click or type in becomes the one you "used last"
+        }
         agent.onOpenVideo = { [weak self, weak agent] source in
             agent?.close() // this chat becomes a video agent in the same spot
             self?.openVideo(source, near: NSPoint(x: iconFrame.midX, y: iconFrame.midY))
         }
-        entries.append(Entry(agent))
-        expanded = agent
-        syncSidebar()
-        agent.show()
     }
+
+    /// How far to nudge a chat so it doesn't sit on another open chat's corner: down and to the right, a step at a time (like
+    /// windows cascade). Near a screen edge, where that would pile them up, it tries the other diagonals.
+    private func cascadeOffset(for agent: AskPanelController) -> NSPoint {
+        let others = openAgents.filter { $0 !== agent }
+        func taken(_ offset: NSPoint) -> Bool {
+            let spot = agent.candidateTopLeft(cascade: offset)
+            return others.contains { abs($0.frame.minX - spot.x) < 24 && abs($0.frame.maxY - spot.y) < 24 }
+        }
+        if !taken(.zero) { return .zero }
+        let directions: [(CGFloat, CGFloat)] = [(1, -1), (-1, -1), (1, 1), (-1, 1)]
+        for k in 1...10 {
+            for (dx, dy) in directions {
+                let offset = NSPoint(x: dx * Self.cascadeStep * CGFloat(k), y: dy * Self.cascadeStep * CGFloat(k))
+                if !taken(offset) { return offset }
+            }
+        }
+        return .zero
+    }
+    static let cascadeStep: CGFloat = 32
 
     static var fullMessage: String {
         "All \(Settings.shared.maxAgents) chats are in use. Hover one in the sidebar and click × to delete it."
@@ -125,7 +213,7 @@ final class AgentDock {
     private func syncSidebar() {
         sidebar.sync(entries.map { entry in
             let agent = entry.agent
-            let isOpen = agent === expanded
+            let isOpen = openIDs.contains(entry.id)
             let subtitle: String
             switch agent.phase {
             case .idle: subtitle = isOpen ? "Open" : "Waiting for your question"
@@ -133,16 +221,17 @@ final class AgentDock {
             case .done: subtitle = isOpen ? "Open" : "Done. Click to read"
             case .failed: subtitle = "Something went wrong"
             }
-            // Once Claude has filed the chat, its sector leads the status line ("Math · Done. Click to read").
-            let filed = agent.sector.map { "\($0) · " } ?? ""
-            return AgentSidebar.Row(id: entry.id, title: agent.title, subtitle: filed + subtitle, phase: agent.phase, isOpen: isOpen)
+            // The status leads and, once Claude has filed the chat, its sector trails ("Done. Click to read · Math"),
+            // so a narrow row clips the sector, never the status.
+            let filed = agent.sector.map { " · \($0)" } ?? ""
+            return AgentSidebar.Row(id: entry.id, title: agent.title, subtitle: subtitle + filed, phase: agent.phase, isOpen: isOpen)
         })
     }
 
-    /// A click on a row: opens that chat, or puts it away if it's the one already open.
+    /// A click on a row: opens that chat, or puts it away if it's already open.
     private func select(_ id: ObjectIdentifier) {
         guard let agent = entries.first(where: { $0.id == id })?.agent else { return }
-        if expanded === agent { minimize(agent) } else { expand(agent) }
+        if openIDs.contains(id) { minimize(agent) } else { expand(agent) }
     }
 
     // MARK: - Minimize / expand
@@ -150,17 +239,18 @@ final class AgentDock {
     private func minimize(_ agent: AskPanelController) {
         guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
         let id = entries[index].id
-        if expanded === agent { expanded = nil }
+        markClosed(agent)
         syncSidebar()
         // The chat flies into its row's circle; the row lights up where it lands.
         agent.minimize(into: sidebar.discFrame(at: index)) { [weak self] in self?.sidebar.flash(id) }
     }
 
     private func expand(_ agent: AskPanelController) {
-        if let current = expanded, current !== agent { current.dismissGesture() }
+        if !stayOpen, let current = front, current !== agent { current.dismissGesture() }
         guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
         let from = sidebar.discFrame(at: index)
-        expanded = agent
+        agent.cascade = cascadeOffset(for: agent)
+        markOpen(agent)
         syncSidebar()
         agent.expand(from: from, beside: sidebar.frame)
     }
@@ -168,13 +258,15 @@ final class AgentDock {
     private func remove(_ agent: AskPanelController) {
         guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
         entries.remove(at: index)
-        if expanded === agent { expanded = nil }
+        markClosed(agent)
         syncSidebar()
     }
 
     // MARK: - Debug hooks for --demo
 
     var debugAgents: [AskPanelController] { entries.map(\.agent) }
+    /// The chats on screen now (not minimized), least recently used first.
+    var debugOpenAgents: [AskPanelController] { openAgents }
     func debugMinimize(_ agent: AskPanelController) { minimize(agent) }
     func debugExpand(_ agent: AskPanelController) { expand(agent) }
     var debugSidebar: AgentSidebar { sidebar }
@@ -221,7 +313,7 @@ enum Toast {
         effect.state = .active
         effect.maskImage = Theme.roundedMask(radius: 10)
         let f = NSTextField(wrappingLabelWithString: "")
-        f.font = .systemFont(ofSize: 12)
+        f.font = .margin(12)
         f.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(f)
         NSLayoutConstraint.activate([

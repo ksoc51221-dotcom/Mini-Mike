@@ -2,13 +2,15 @@ import AppKit
 import Combine
 
 /// What a typed or spoken request asks an agent to do.
-enum TaskSpec: Equatable {
+enum TaskSpec: Equatable, Codable {
     case tidy(URL)
     case study(URL?, hint: String)
     case find(String)
     case batch(BatchKind, [URL])
     /// Anything else you can put in words ("scatter these screenshots"): Claude plans it, you approve it.
     case custom(String)
+    /// A job on your online accounts (Gmail, Google Drive and Docs, Teams): always Claude, read-only until you Allow.
+    case connected(String, files: [URL])
 }
 
 /// Runs the background agents. Up to three at once; more wait their turn. Each is a `BackgroundTask` the sidebar shows.
@@ -53,7 +55,12 @@ final class TaskEngine {
             task = BackgroundTask(kind: .custom, title: CustomAgent.title(for: request))
             let agent = CustomAgent(request: request)
             launch = { agent.run(task) }
+        case .connected(let request, let files):
+            task = BackgroundTask(kind: .connected, title: ConnectedAgent.title(for: request))
+            let agent = ConnectedAgent(request: request, files: files)
+            launch = { agent.run(task) }
         }
+        task.spec = spec
         track(task)
         if runningCount > Self.maxRunning {
             task.detail = "Waiting for another task to finish…"
@@ -110,15 +117,87 @@ final class TaskEngine {
         task.state = .cancelled
     }
 
-    /// The × on a row: stops the task if it's still going, then takes it off the list.
+    /// The × on a row: stops the task if it's still going, then takes it off the list. It goes to the Bin, so a slip of
+    /// the mouse isn't the end of it.
     func dismiss(_ task: BackgroundTask) {
-        if !task.isFinished { task.cancelRequested = true; task.onCancel?() }
+        let wasFinished = task.isFinished
+        if !wasFinished { task.cancelRequested = true; task.onCancel?() }
         waiting.removeAll { $0.0.id == task.id }
         tasks.removeAll { $0.id == task.id }
         bags[task.id] = nil
+        keepInBin(task, wasFinished: wasFinished)
         onChange?()
         startWaiting()
     }
+
+    // MARK: The Bin (dismissed agents)
+
+    /// The agents dismissed since Margin started, whole (report, links and Undo included), so putting one back is exact.
+    /// After a restart only the saved summary is left.
+    private var binnedLive: [UUID: BackgroundTask] = [:]
+    /// For tests: what starts an unfinished agent again (so a test never runs a real one).
+    var restarter: ((TaskSpec) -> BackgroundTask?)?
+
+    private func keepInBin(_ task: BackgroundTask, wasFinished: Bool) {
+        let outcome: BinnedTask.Outcome
+        switch task.state {
+        case .done: outcome = .done
+        case .failed: outcome = .failed
+        case .cancelled: outcome = wasFinished ? .cancelled : .unfinished
+        case .working, .needsApproval: outcome = .unfinished
+        }
+        // What a job on your online accounts read isn't written to disk. (It stays in memory until Margin quits.)
+        let keep = task.kind != .connected
+        var failure = ""
+        if case .failed(let message) = task.state { failure = message }
+        let headline = keep ? (task.report?.headline ?? (failure.isEmpty ? task.detail : failure))
+                            : "Its results come from your online accounts, so they aren't kept."
+        let binned = BinnedTask(
+            kind: task.kind.rawValue, title: task.title, outcome: outcome, headline: String(headline.prefix(300)),
+            lines: keep ? (task.report?.lines ?? []).prefix(40).map { String($0.prefix(300)) } : [],
+            links: keep ? (task.report?.links ?? []).prefix(10).map { .init(title: $0.title, url: $0.url.absoluteString) } : [],
+            tokens: task.tokens, spec: task.spec, reportKept: keep)
+        binnedLive[task.id] = task
+        Library.shared.addToBin(BinItem(agent: binned, id: task.id))
+    }
+
+    /// Puts a dismissed agent back on the bar. The same task, report and Undo included, if Margin hasn't been quit since;
+    /// otherwise a cat showing what it reported. An agent that hadn't finished starts again from what it was asked.
+    @discardableResult
+    func restore(_ id: UUID) -> BackgroundTask? {
+        guard let item = Library.shared.binItem(id), item.kind == .agent, let binned = item.agent else { return nil }
+        var restored: BackgroundTask?
+        if binned.outcome == .unfinished, let spec = binned.spec {
+            if let restarter { restored = restarter(spec) } else { restored = start(spec) }
+        } else if let live = binnedLive[id], live.isFinished {
+            track(live)
+            restored = live
+        } else {
+            let kind = BackgroundTask.Kind(rawValue: binned.kind) ?? .custom
+            let task = BackgroundTask(kind: kind, title: binned.title)
+            task.spec = binned.spec
+            task.tokens = binned.tokens
+            switch binned.outcome {
+            case .failed: task.state = .failed(binned.headline)
+            case .cancelled, .unfinished: task.state = .cancelled
+            case .done: task.state = .done
+            }
+            task.detail = binned.headline
+            if binned.outcome == .done || !binned.lines.isEmpty {
+                task.report = TaskReport(headline: binned.headline, lines: binned.lines,
+                                         links: binned.links.compactMap { l in URL(string: l.url).map { TaskLink(title: l.title, url: $0) } })
+            }
+            track(task)
+            restored = task
+        }
+        guard restored != nil else { return nil }
+        binnedLive[id] = nil
+        Library.shared.forget(agent: id)
+        return restored
+    }
+
+    /// An agent deleted from the Bin for good: its whole task isn't needed any more.
+    func forgetBinned(_ id: UUID) { binnedLive[id] = nil }
 
     func task(_ id: UUID) -> BackgroundTask? { tasks.first { $0.id == id } }
 

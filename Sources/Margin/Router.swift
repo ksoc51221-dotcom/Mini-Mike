@@ -19,6 +19,8 @@ enum Router {
         var lean: Bool
         /// Why, in a few words (for tests and the log).
         var why: String
+        /// A local plan whose model can look at pictures (a Claude model, such as Haiku): a snip, or the screenshot.
+        var sees = false
 
         var isLocal: Bool { engine == .local }
     }
@@ -36,6 +38,8 @@ enum Router {
         var localMode = false
         /// Ollama looks reachable and has the model (or hasn't been checked yet).
         var localUsable = true
+        /// The local model is a Claude model: it can be sent a snip or the screenshot too.
+        var localSeesImages = false
         /// Screen Context is "Smart": a highlight is enough for most questions, so the screenshot and web tools stay out unless asked for.
         var smart = false
     }
@@ -53,8 +57,18 @@ enum Router {
         let chipLean = i.prompt == Prompts.pronounce || i.prompt == Prompts.visualize || i.prompt == Prompts.quiz
             || Prompts.isSummary(i.prompt)
         if i.hasDocument { return Plan(engine: .claude, lean: true, why: "document") }
-        if i.hasSnip { return Plan(engine: .claude, lean: chipLean, why: "snip") }
-        if i.isBlank { return Plan(engine: .claude, lean: false, why: "nothing highlighted: needs the screenshot") }
+        // A model that can look at pictures (Haiku) takes snips, blank chats and questions about the screen, unless the question
+        // needs the web or a skill it doesn't have.
+        let sees = i.localSeesImages && i.localMode && i.localUsable
+        let seesOK = sees && !needsClaude(i.prompt, seesScreen: true)
+        if i.hasSnip {
+            if seesOK { return Plan(engine: .local, lean: false, why: "snip", sees: true) }
+            return Plan(engine: .claude, lean: chipLean, why: "snip")
+        }
+        if i.isBlank {
+            if seesOK { return Plan(engine: .local, lean: false, why: "nothing highlighted: the screenshot", sees: true) }
+            return Plan(engine: .claude, lean: false, why: "nothing highlighted: needs the screenshot")
+        }
 
         if i.prompt == Prompts.pronounce { return Plan(engine: .claude, lean: true, why: "pronunciation") }
         if i.prompt == Prompts.visualize { return Plan(engine: .claude, lean: true, why: "graphs") }
@@ -64,12 +78,12 @@ enum Router {
         let latin = nonLatinLetterCount(i.selection) + nonLatinLetterCount(i.context ?? "") + nonLatinLetterCount(i.prompt) < nonLatinLimit
 
         if Prompts.isSummary(i.prompt) {
-            if localOK, latin, i.selection.count <= maxLocalSummary { return Plan(engine: .local, lean: false, why: "summary") }
+            if localOK, latin, i.selection.count <= maxLocalSummary { return Plan(engine: .local, lean: false, why: "summary", sees: sees) }
             return Plan(engine: .claude, lean: true, why: i.selection.count > maxLocalSummary ? "long summary" : "summary")
         }
 
-        if localOK, latin, i.selection.count <= maxLocalSelection, !needsClaude(i.prompt) {
-            return Plan(engine: .local, lean: false, why: "quick question")
+        if localOK, latin, i.selection.count <= maxLocalSelection, !needsClaude(i.prompt, seesScreen: sees) {
+            return Plan(engine: .local, lean: false, why: needsScreen(i.prompt) ? "question about the screen" : "quick question", sees: sees)
         }
         if i.smart, !i.selection.isEmpty, !needsScreen(i.prompt), !needsWeb(i.prompt) {
             return Plan(engine: .claude, lean: true, why: "the highlight is enough")
@@ -83,21 +97,23 @@ enum Router {
     /// follow-up needs the web or the screen.
     static func needsEscalation(_ prompt: String, from plan: Plan) -> Bool {
         switch plan.engine {
-        case .local: return needsClaude(prompt)
+        case .local: return needsClaude(prompt, seesScreen: plan.sees)
         case .claude: return plan.lean && (needsWeb(prompt) || needsScreen(prompt))
         }
     }
 
     /// Whether Margin should warm up the local model when a chat opens (it can only be used for a text highlight).
-    static func mayGoLocal(selection: String, hasSnip: Bool, isVideo: Bool, localMode: Bool) -> Bool {
-        localMode && !hasSnip && !isVideo && !selection.isEmpty && selection.count <= maxLocalSelection
+    static func mayGoLocal(selection: String, hasSnip: Bool, isVideo: Bool, localMode: Bool, seesImages: Bool = false) -> Bool {
+        if seesImages { return localMode && !isVideo && selection.count <= maxLocalSelection && nonLatinLetterCount(selection) < nonLatinLimit }
+        return localMode && !hasSnip && !isVideo && !selection.isEmpty && selection.count <= maxLocalSelection
             && nonLatinLetterCount(selection) < nonLatinLimit
     }
 
     // MARK: - What only Claude can do
 
-    static func needsClaude(_ prompt: String) -> Bool {
-        prompt == Prompts.quiz || needsWeb(prompt) || needsScreen(prompt) || needsSkill(prompt)
+    /// `seesScreen`: the local model is sent the screenshot or snip, so a question about the screen isn't Claude-only.
+    static func needsClaude(_ prompt: String, seesScreen: Bool = false) -> Bool {
+        prompt == Prompts.quiz || needsWeb(prompt) || (!seesScreen && needsScreen(prompt)) || needsSkill(prompt)
     }
 
     /// Facts that change, or that should be checked: the local model has no web and may guess.
@@ -159,5 +175,30 @@ enum Router {
             n += 1
         }
         return n
+    }
+}
+
+/// What the engine button in the chat says: "Claude", or the local model's family ("qwen3:8b" → "Qwen").
+enum EngineLabel {
+    static func name(local: Bool, model: String) -> String {
+        guard local else { return "Claude" }
+        if Settings.isClaudeModel(model) { return family(ofClaude: model) }
+        let family = String(model.prefix { $0.isLetter })
+        return family.isEmpty ? "Local" : family.prefix(1).uppercased() + family.dropFirst()
+    }
+
+    /// "claude-haiku-5-5" → "Haiku".
+    private static func family(ofClaude id: String) -> String {
+        let parts = id.split(separator: "-")
+        guard parts.count > 1 else { return "Claude" }
+        return parts[1].prefix(1).uppercased() + parts[1].dropFirst()
+    }
+
+    /// What the model is called when it's spelled out: "claude-haiku-5-5" → "Haiku 5.5", "qwen3:8b" → "qwen3:8b".
+    static func full(_ model: String) -> String {
+        guard Settings.isClaudeModel(model) else { return model }
+        let parts = model.split(separator: "-")
+        guard parts.count >= 4 else { return family(ofClaude: model) }
+        return "\(family(ofClaude: model)) \(parts[2]).\(parts[3])"
     }
 }
