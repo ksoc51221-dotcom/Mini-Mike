@@ -10,3 +10,9 @@ build/
 .swiftpm/
 *.xcodeproj/xcuserdata/
 xcuserdata/
+
+# Personal / showcase material, kept local
+PITCH.md
+Margin.md
+design/
+Resources/art/
