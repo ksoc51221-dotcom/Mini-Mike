@@ -105,9 +105,7 @@ final class TriggerIcon {
         let view = BubbleView(frame: NSRect(x: 0, y: 0, width: 30, height: 30))
         view.layoutSubtreeIfNeeded()
         view.appearance = NSAppearance.currentDrawing()
-        guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return nil }
-        view.cacheDisplay(in: view.bounds, to: rep)
-        return rep.cgImage
+        return view.snapshotRep()?.cgImage
     }
 
     /// For `--demo`: the button rendered on its own, over a mid-gray backdrop.
@@ -120,16 +118,13 @@ final class TriggerIcon {
         view.layoutSubtreeIfNeeded()
         view.displayIfNeeded()
         defer { window.orderOut(nil) }
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 120, pixelsHigh: 120, bitsPerSample: 8,
-                                         samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+        guard let rep = NSBitmapImageRep.rgba(pixelsWide: 120, pixelsHigh: 120),
               let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext else { return nil }
         rep.size = NSSize(width: 30, height: 30)
         ctx.scaleBy(x: 4, y: 4)
         ctx.setFillColor(NSColor(white: 0.45, alpha: 1).cgColor)
         ctx.fill(CGRect(x: 0, y: 0, width: 30, height: 30))
-        guard let cached = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return rep }
-        view.cacheDisplay(in: view.bounds, to: cached)
+        guard let cached = view.snapshotRep() else { return rep }
         if let image = cached.cgImage { ctx.draw(image, in: CGRect(x: 0, y: 0, width: 30, height: 30)) }
         return rep
     }
@@ -146,7 +141,7 @@ final class TriggerIcon {
 }
 
 /// An accent rounded square with a dark spark. On hover the spark turns a little and the square brightens.
-private final class BubbleView: NSView {
+private final class BubbleView: FirstMouseView {
     var onClick: (() -> Void)?
 
     private let host = NSView()
@@ -190,7 +185,6 @@ private final class BubbleView: NSView {
         }
     }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseEntered(with event: NSEvent) { setHover(true) }
     override func mouseExited(with event: NSEvent) { setHover(false) }
     override func mouseDown(with event: NSEvent) { pressed = true; settleScale() }
@@ -244,5 +238,26 @@ private final class BubbleView: NSView {
         CATransaction.commit()
         spark.add(spring, forKey: "hover")
         disc.fillColor = (on ? (Theme.accent.ns.highlight(withLevel: 0.35) ?? Theme.accent.ns) : Theme.accent.ns).cgColor // implicit fade
+    }
+}
+
+extension NSPanel {
+    /// For tests: a press at `local` (panel coordinates), a six-step drag by `delta` and a release, as real mouse events.
+    func debugPlayDrag(from local: NSPoint, by delta: NSSize) {
+        let start = NSPoint(x: frame.minX + local.x, y: frame.minY + local.y)
+        func send(_ type: NSEvent.EventType, at screen: NSPoint) {
+            let location = NSPoint(x: screen.x - frame.minX, y: screen.y - frame.minY)
+            guard let e = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                                             timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: windowNumber, context: nil,
+                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return }
+            sendEvent(e)
+        }
+        send(.leftMouseDown, at: start)
+        for i in 1...6 {
+            let f = CGFloat(i) / 6
+            send(.leftMouseDragged, at: NSPoint(x: start.x + delta.width * f, y: start.y + delta.height * f))
+        }
+        send(.leftMouseUp, at: NSPoint(x: start.x + delta.width, y: start.y + delta.height))
     }
 }

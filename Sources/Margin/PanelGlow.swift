@@ -71,9 +71,7 @@ final class PanelGlow {
     /// The glow as it looks right now, with `chat` (a snapshot of the chat) drawn over it, on a dark backdrop.
     func debugImage(chat: CGImage?) -> NSBitmapImageRep? {
         let size = view.bounds.size
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        guard let rep = NSBitmapImageRep.rgba(pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2)) else { return nil }
         rep.size = size
         guard let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext else { return nil } // already 2x
         ctx.setFillColor(Theme.canvas.dark.cgColor)

@@ -121,8 +121,7 @@ struct QuizView: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
+        .cardSurface()
     }
 
     // MARK: A question
@@ -186,12 +185,12 @@ struct QuizView: View {
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surfaceRaised.color))
                         .onSubmit { withAnimation(.snappy(duration: 0.25)) { revealed = true } }
                     Button("Show answer") { withAnimation(.snappy(duration: 0.25)) { revealed = true } }
-                        .buttonStyle(QuizChip(fill: Theme.surfaceRaised.color, text: Theme.ink.color, border: true))
+                        .buttonStyle(CardButton(fill: Theme.surfaceRaised.color, text: Theme.ink.color, border: true))
                 }
             }
             if canAdvance(q) {
                 Button(index + 1 < spec.questions.count ? "Next" : "See my score") { advance(spec) }
-                    .buttonStyle(QuizChip(fill: accent, text: Theme.onAccent.color))
+                    .buttonStyle(CardButton(fill: accent, text: Theme.onAccent.color))
                     .keyboardShortcut(.defaultAction)
             }
         }
@@ -211,7 +210,7 @@ struct QuizView: View {
 
     private func gradeButton(_ title: String, _ symbol: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
         Button { withAnimation(.snappy(duration: 0.2), action) } label: { Label(title, systemImage: symbol) }
-            .buttonStyle(QuizChip(fill: color.opacity(0.2), text: color))
+            .buttonStyle(CardButton(fill: color.opacity(0.2), text: color))
     }
 
     private func optionMark(_ i: Int, _ q: QuizSpec.Question) -> (symbol: String, color: Color)? {
@@ -291,25 +290,8 @@ struct QuizView: View {
                     index = 0; picked = nil; typed = ""; revealed = false; marks = [:]; reported = false
                 }
             }
-            .buttonStyle(QuizChip(fill: Theme.surfaceRaised.color, text: Theme.ink.color, border: true))
+            .buttonStyle(CardButton(fill: Theme.surfaceRaised.color, text: Theme.ink.color, border: true))
         }
         .onAppear { kept = !r.missed.isEmpty }
-    }
-}
-
-private struct QuizChip: ButtonStyle {
-    let fill: Color
-    let text: Color
-    var border = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.geist(12, .semibold))
-            .foregroundStyle(text)
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(fill).padding(border ? 1 : 0)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(border ? Theme.hairline.color : Color.clear)))
-            .opacity(configuration.isPressed ? 0.7 : 1)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }

@@ -89,8 +89,6 @@ final class ClaudeSession: AnswerSession {
     func start() throws {
         guard let cli = Self.claudePath else { throw StartError.cliNotFound }
 
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: cli)
         let tools = webSearch ? ["WebSearch", "WebFetch"] : []
         var args = [
             "-p",
@@ -109,19 +107,8 @@ final class ClaudeSession: AnswerSession {
             "--no-session-persistence",
             "--system-prompt", startingSystemPrompt,
         ]
-        p.arguments = args
-        p.currentDirectoryURL = Self.workingDirectory
-        var env = ProcessInfo.processInfo.environment
-        env.removeValue(forKey: "CLAUDECODE")
-        let home = NSHomeDirectory()
-        env["PATH"] = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", env["PATH"] ?? "/usr/bin:/bin"]
-            .joined(separator: ":")
-        p.environment = env
-
-        let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
-        p.standardInput = inPipe
-        p.standardOutput = outPipe
-        p.standardError = errPipe
+        let p = Self.cliProcess(cli, longLived: true, arguments: args)
+        let (inPipe, outPipe, errPipe) = p.attachPipes()
 
         outPipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
@@ -310,6 +297,23 @@ final class ClaudeSession: AnswerSession {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }()
 
+    /// A `claude` process set up the way every call here wants it: an empty working folder, the app's own
+    /// `CLAUDECODE`-free environment, and the usual install folders on PATH (Finder-launched apps get a bare one).
+    /// `longLived` routes it through the local proxy when that is running (chats; not one-shots).
+    static func cliProcess(_ cli: String, longLived: Bool = false, arguments: [String]) -> Process {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: cli)
+        p.arguments = arguments
+        p.currentDirectoryURL = workingDirectory
+        var env = ProcessInfo.processInfo.environment
+        env.removeValue(forKey: "CLAUDECODE")
+        let home = NSHomeDirectory()
+        env["PATH"] = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", env["PATH"] ?? "/usr/bin:/bin"].joined(separator: ":")
+        if longLived { BiliProxy.apply(to: &env) }
+        p.environment = env
+        return p
+    }
+
     /// An empty folder so no project CLAUDE.md gets picked up.
     static let workingDirectory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -317,4 +321,15 @@ final class ClaudeSession: AnswerSession {
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         return base
     }()
+}
+
+extension Process {
+    /// Wires fresh pipes to stdin, stdout and stderr.
+    func attachPipes() -> (stdin: Pipe, stdout: Pipe, stderr: Pipe) {
+        let pipes = (stdin: Pipe(), stdout: Pipe(), stderr: Pipe())
+        standardInput = pipes.stdin
+        standardOutput = pipes.stdout
+        standardError = pipes.stderr
+        return pipes
+    }
 }

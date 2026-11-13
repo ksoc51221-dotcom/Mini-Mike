@@ -1,7 +1,6 @@
 import Foundation
 
-/// One question to Claude with no conversation: the engine behind the background agents (naming screenshots, writing
-/// study notes). No tools, no settings files, no saved session, and the answer comes back as text with its token count.
+/// One question to Claude with no conversation (naming chats and screenshots, summaries, reading a request). No tools, no settings files, no saved session, and the answer comes back as text with its token count.
 enum ClaudeOneShot {
     struct Reply {
         var text: String
@@ -35,21 +34,11 @@ enum ClaudeOneShot {
     static func runSync(_ prompt: String, system: String, model: ModelChoice, modelID: String? = nil, effort: String? = nil,
                         timeout: TimeInterval = 180) -> Result<Reply, Failure> {
         guard let cli = ClaudeSession.claudePath else { return .failure(.cliNotFound) }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: cli)
-        p.arguments = ["-p", "--output-format", "json", "--model", modelID ?? model.rawValue, "--tools", "",
-                       "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--system-prompt", system]
-        if let effort { p.arguments? += ["--effort", effort] }
-        p.currentDirectoryURL = ClaudeSession.workingDirectory
-        var env = ProcessInfo.processInfo.environment
-        env.removeValue(forKey: "CLAUDECODE")
-        let home = NSHomeDirectory()
-        env["PATH"] = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin", env["PATH"] ?? "/usr/bin:/bin"].joined(separator: ":")
-        p.environment = env
-        let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
-        p.standardInput = inPipe
-        p.standardOutput = outPipe
-        p.standardError = errPipe
+        var args = ["-p", "--output-format", "json", "--model", modelID ?? model.rawValue, "--tools", "",
+                    "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--system-prompt", system]
+        if let effort { args += ["--effort", effort] }
+        let p = ClaudeSession.cliProcess(cli, arguments: args)
+        let (inPipe, outPipe, errPipe) = p.attachPipes()
         do { try p.run() } catch { return .failure(.failed(error.localizedDescription)) }
 
         // Read the output while it runs (a full pipe would stall the process).

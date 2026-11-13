@@ -52,6 +52,22 @@ final class Transcription: NSObject, SCStreamOutput, SCStreamDelegate {
         locale = Locale(identifier: language.rawValue)
     }
 
+    /// Downloads the model behind `module` unless it is already installed, reporting 0...1 while it comes down.
+    static func install(_ module: any SpeechModule, reserving locale: Locale, progress: @escaping (Double) -> Void) async throws {
+        guard await AssetInventory.status(forModules: [module]) != .installed,
+              let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) else { return }
+        _ = try? await AssetInventory.reserve(locale: locale)
+        let poll = Task {
+            while !Task.isCancelled {
+                let fraction = request.progress.fractionCompleted
+                await MainActor.run { progress(fraction) }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        defer { poll.cancel() }
+        try await request.downloadAndInstall()
+    }
+
     /// Picks the engine and makes sure its model is on this Mac (downloading it the first time).
     func prepare(progress: @escaping (Double) -> Void) async throws {
         let module: any SpeechModule
@@ -84,19 +100,7 @@ final class Transcription: NSObject, SCStreamOutput, SCStreamDelegate {
         self.module = module
 
         // Only ask macOS to install when the model really isn't there: asking when it is cost about 3 seconds every time.
-        if await AssetInventory.status(forModules: [module]) != .installed,
-           let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
-            _ = try? await AssetInventory.reserve(locale: locale)
-            let poll = Task {
-                while !Task.isCancelled {
-                    let fraction = request.progress.fractionCompleted
-                    await MainActor.run { progress(fraction) }
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                }
-            }
-            defer { poll.cancel() }
-            try await request.downloadAndInstall()
-        }
+        try await Self.install(module, reserving: locale, progress: progress)
         analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module])
     }
 
@@ -242,19 +246,6 @@ final class Transcription: NSObject, SCStreamOutput, SCStreamDelegate {
             converter = AVAudioConverter(from: buffer.format, to: target)
         }
         guard let converter else { return nil }
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * target.sampleRate / buffer.format.sampleRate) + 32
-        guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return nil }
-        var fed = false
-        var error: NSError?
-        converter.convert(to: out, error: &error) { _, status in
-            if fed {
-                status.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            status.pointee = .haveData
-            return buffer
-        }
-        return error == nil && out.frameLength > 0 ? out : nil
+        return Dictation.convert(buffer, with: converter, to: target)
     }
 }

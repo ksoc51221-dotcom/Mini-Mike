@@ -115,8 +115,7 @@ struct GraphView: View {
             }
         }
         .padding(10)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
+        .cardSurface()
     }
 
     private func sliderRow(_ s: GraphSpec.Slider) -> some View {

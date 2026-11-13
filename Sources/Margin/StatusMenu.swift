@@ -11,9 +11,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     var onHistory: ((_ notebook: Bool) -> Void)?
     var onScreenshots: (() -> Void)?
     var onBin: (() -> Void)?
-    var onTaskBox: (() -> Void)?
-    var onAgentBar: (() -> Void)?
-    var onQuickTask: ((TaskSpec) -> Void)?
     var sidebarIsOpen: () -> Bool = { true }
     var onSummarizeVideo: ((VideoMenuChoice) -> Void)?
 
@@ -66,25 +63,10 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         chat.keyEquivalentModifierMask = [.option, .shift]
         menu.addItem(chat)
         menu.addItem(action(sidebarIsOpen() ? "Fold Chat Sidebar" : "Unfold Chat Sidebar", #selector(toggleSidebarFromMenu)))
-        let tasksItem = NSMenuItem(title: "Agents", action: nil, keyEquivalent: "")
-        let tasksMenu = NSMenu()
-        let bar = action("Show Agents", #selector(agentBarFromMenu))
-        bar.keyEquivalent = "a" // shown as ⌘⇧A; the global shortcut itself lives in Hotkeys
-        bar.keyEquivalentModifierMask = [.command, .shift]
-        tasksMenu.addItem(bar)
-        tasksMenu.addItem(action("New Job…", #selector(taskBoxFromMenu)))
-        tasksMenu.addItem(.separator())
-        tasksMenu.addItem(action("Tidy Desktop", #selector(tidyDesktopFromMenu)))
-        tasksMenu.addItem(action("Tidy Downloads", #selector(tidyDownloadsFromMenu)))
-        tasksItem.submenu = tasksMenu
-        menu.addItem(tasksItem)
         // Voice has no set-up: hold the keys and talk (English).
         let talk = NSMenuItem(title: "Voice: hold ⌘⇧V to talk", action: nil, keyEquivalent: "")
         talk.isEnabled = false
         menu.addItem(talk)
-        let talkAgent = NSMenuItem(title: "Add A to talk to an agent", action: nil, keyEquivalent: "")
-        talkAgent.isEnabled = false
-        menu.addItem(talkAgent)
         let history = action("Chat History…", #selector(historyFromMenu))
         history.keyEquivalent = "l" // shown as ⌘⇧L; the global shortcut itself lives in Hotkeys
         history.keyEquivalentModifierMask = [.command, .shift]
@@ -218,14 +200,6 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleSidebarFromMenu() { onToggleSidebar?() }
-    @objc private func agentBarFromMenu() { DispatchQueue.main.async { [weak self] in self?.onAgentBar?() } }
-    @objc private func taskBoxFromMenu() { DispatchQueue.main.async { [weak self] in self?.onTaskBox?() } }
-    @objc private func tidyDesktopFromMenu() { quickTidy(.desktopDirectory) }
-    @objc private func tidyDownloadsFromMenu() { quickTidy(.downloadsDirectory) }
-    private func quickTidy(_ dir: FileManager.SearchPathDirectory) {
-        guard let url = FileManager.default.urls(for: dir, in: .userDomainMask).first else { return }
-        DispatchQueue.main.async { [weak self] in self?.onQuickTask?(.tidy(url)) }
-    }
     @objc private func historyFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(false) } }
     @objc private func notebookFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(true) } }
     @objc private func screenshotsFromMenu() { DispatchQueue.main.async { [weak self] in self?.onScreenshots?() } }
@@ -329,23 +303,14 @@ final class StatusMenu: NSObject, NSMenuDelegate {
 
         Delete something in the dashboard (the trash button on any row, the Delete key, or the buttons on a \
         page) and it moves to the Bin instead of vanishing. The Bin is in the dashboard's sidebar and in this \
-        menu: restore anything, or delete it for good. Things wait there 30 days. An agent you dismiss with \
-        its × goes there too (a job on your online accounts keeps only that it ran, never what it read).
+        menu: restore anything, or delete it for good. Things wait there 30 days.
 
         Every screenshot you take (Cmd-Shift-3, 4 or 5, or a Tab-\\ snip) is saved on its own to \
         Screenshots in the History window (Cmd-Shift-L), labeled by what's in it. Cmd-Shift-L opens \
         over your work without switching you away from it.
 
         Talk to it: hold Cmd-Shift-V, say it, let go. It starts recording the instant you press. Ask a \
-        question, say "add dinner to my calendar tomorrow 7 to 8" for a calendar card, or hold A as well \
-        (Cmd-Shift-V then A) to give an agent a job like "organize my downloads".
-
-        Agents (Cmd-Shift-A): a black bar at the top of your screen with a pixel cat for each background \
-        agent (Tidy, Find, Study, Batch, or anything you say about your files, like "scatter these \
-        screenshots around the desktop"). A standing cat is waiting for you, a running cat is working, a loaf \
-        is done, and a cat curled up asleep is waiting its turn. When an agent needs your OK, Allow and \
-        Deny are right on its cat, and a big job tells you its token cost first. Minimized, the agents are \
-        cats asleep in the bottom-right corner of your screen: click one to open the bar.
+        question, or say "add dinner to my calendar tomorrow 7 to 8" for a calendar card.
 
         Cmd-Shift-L opens your chat history. Type or say "summarize this video" in any chat to summarize the \
         YouTube video in your browser. With Quick Answers on, summaries (including videos in English) are \

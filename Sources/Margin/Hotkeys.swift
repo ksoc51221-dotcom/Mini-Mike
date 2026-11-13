@@ -4,65 +4,43 @@ import AppKit
 /// - Tab+\ (hold Tab, press \): snip an area of the screen.
 /// - Option+Shift+Tab: open (or put away) a chat at the mouse.
 /// - Hold Cmd+Shift+V: talk to Margin (release to send). It replaces "paste and match style" while Margin runs.
-/// - Hold Cmd+Shift+V and press A (or hold Cmd+Shift+A and press V): talk to the agents: what you say is a job.
 /// - Cmd+Shift+L: open (or put away) the chat history.
 /// - Control+Shift+L: move the open chat (just that one) between Claude and the model on this Mac.
-/// - Cmd+Shift+C: call the cat back after it has run away (it passes straight through to the app you're in while the cat is here).
-/// - Cmd+Shift+A: show or hide the agent bar (on key-up, so it can wait to see if V joins it).
 /// - Cmd+Shift+3/4/5 (macOS's screenshots) are never touched: Margin just notes which app and window you were in, so the
 ///   screenshot that follows can be labeled by it.
 /// Normal typing is never delayed: only the chord's final key is swallowed, so it never types into your document.
 final class Hotkeys {
     var onSnip: (() -> Void)?
     var onChat: (() -> Void)?
-    /// `true` when it's for the agents (⌘⇧A was already held).
-    var onTalkStart: ((Bool) -> Void)?
-    /// A was pressed while talking: what's being said is now a job for an agent.
-    var onTalkAgent: (() -> Void)?
+    var onTalkStart: (() -> Void)?
     var onTalkEnd: (() -> Void)?
-    var onTasks: (() -> Void)?
     var onHistory: (() -> Void)?
     var onEngine: (() -> Void)?
-    var onCat: (() -> Void)?
-    /// The cat has run away, so ⌘⇧C is Margin's. Read on the tap's thread, written on the main one: a plain flag is enough.
-    nonisolated(unsafe) static var catGone = false
+    /// Settings → Shortcuts is recording a new chord: every key is left alone so the window can see it.
+    nonisolated(unsafe) static var paused = false
     /// ⌘⇧3, ⌘⇧4 or ⌘⇧5 was pressed. It's macOS's own shortcut, so it's passed on untouched; Margin only notes which window you're in.
     var onSystemShot: (() -> Void)?
 
-    enum Action: Equatable { case snip, chat, talk, tasks, history, engine, cat }
+    /// Tap Shift twice: add a screenshot of the screen to the open chat.
+    var onDoubleShift: (() -> Void)?
+
+    enum Action: String, CaseIterable, Equatable { case snip, chat, talk, history, engine }
 
     private static let tabKey: Int64 = 48            // kVK_Tab
-    private static let backslashKey: Int64 = 42      // kVK_ANSI_Backslash
-    private static let vKey: Int64 = 9               // kVK_ANSI_V
-    private static let lKey: Int64 = 37              // kVK_ANSI_L
-    private static let cKey: Int64 = 8              // kVK_ANSI_C
-    private static let aKey: Int64 = 0               // kVK_ANSI_A
     /// The talk key is down (touched only on the tap thread).
     private var talking = false
-    /// A is down as part of ⌘⇧A or ⌘⇧V+A (its key-up is swallowed too).
-    private var aHeld = false
-    /// ⌘⇧A was pressed; the bar toggles when A comes up, unless V joined it first.
-    private var tasksPending = false
+    /// Two quick Shift taps (touched only on the tap thread).
+    private var doubleShift = DoubleShift()
 
     fileprivate var tap: CFMachPort?
     private var thread: Thread?
     /// The key whose keyDown we swallowed, so its keyUp is swallowed too.
     private var swallowedKey: Int64?
 
-    /// Which chord (if any) a keyDown completes. `tabHeld` is whether Tab is physically down.
-    static func action(keyCode: Int64, flags: CGEventFlags, tabHeld: Bool) -> Action? {
-        if keyCode == backslashKey && tabHeld { return .snip }
-        if keyCode == tabKey && flags.contains(.maskAlternate) && flags.contains(.maskShift)
-            && !flags.contains(.maskCommand) && !flags.contains(.maskControl) { return .chat }
-        let cmdShiftOnly = flags.contains(.maskCommand) && flags.contains(.maskShift)
-            && !flags.contains(.maskAlternate) && !flags.contains(.maskControl)
-        if keyCode == aKey && cmdShiftOnly { return .tasks }
-        if keyCode == vKey && cmdShiftOnly { return .talk }
-        if keyCode == lKey && cmdShiftOnly { return .history }
-        if keyCode == cKey && cmdShiftOnly { return .cat }
-        if keyCode == lKey && flags.contains(.maskControl) && flags.contains(.maskShift)
-            && !flags.contains(.maskCommand) && !flags.contains(.maskAlternate) { return .engine }
-        return nil
+    /// Which chord (if any) a keyDown completes. `tabHeld` is whether Tab is physically down. `binds` are the chords in
+    /// use (the defaults unless you've changed them in Settings → Shortcuts).
+    static func action(keyCode: Int64, flags: CGEventFlags, tabHeld: Bool, binds: Keybinds = .defaults) -> Action? {
+        binds.action(keyCode: keyCode, flags: flags, tabHeld: tabHeld)
     }
 
     private static let screenshotKeys: Set<Int64> = [20, 21, 23] // kVK_ANSI_3, _4, _5
@@ -78,6 +56,8 @@ final class Hotkeys {
     func start() -> Bool {
         guard tap == nil else { return true }
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
+            | CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+            | CGEventMask(1 << CGEventType.leftMouseDown.rawValue) | CGEventMask(1 << CGEventType.rightMouseDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                           options: .defaultTap, eventsOfInterest: mask,
                                           callback: hotkeysCallback,
@@ -101,57 +81,57 @@ final class Hotkeys {
     /// Runs on the tap thread (and in the unit tests, with made-up key events).
     func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         let pass = Unmanaged.passUnretained(event)
+        if Self.paused { return pass }
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+        let binds = KeybindStore.shared.current
+        let talkKey = binds.chord(.talk).keyCode
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return pass
 
+        case .flagsChanged:
+            // Shift on its own, twice, quickly. Nothing is swallowed: Shift still does what it always does.
+            let f = event.flags
+            let others = f.contains(.maskCommand) || f.contains(.maskAlternate) || f.contains(.maskControl)
+            if doubleShift.flagsChanged(shift: f.contains(.maskShift), others: others, at: ProcessInfo.processInfo.systemUptime),
+               binds.doubleShift {
+                DispatchQueue.main.async { [weak self] in self?.onDoubleShift?() }
+            }
+            return pass
+
+        case .leftMouseDown, .rightMouseDown:
+            doubleShift.interrupt() // a click means that Shift was for selecting
+            return pass
+
         case .keyDown:
+            doubleShift.interrupt() // a typed key means that Shift was for a capital or a chord
             let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
             // While talking, the key's auto-repeats are swallowed even if Cmd or Shift were let go first. A fresh press
             // (not a repeat) can't happen while the key is still down, so it means a key-up was missed: let go, carry on.
-            if talking && keyCode == Self.vKey {
+            if talking && keyCode == talkKey {
                 if isRepeat { return nil }
                 talking = false
                 DispatchQueue.main.async { [weak self] in self?.onTalkEnd?() }
-            }
-            // ⌘⇧V+A: A while talking makes it a job for an agent.
-            if talking && keyCode == Self.aKey {
-                if !aHeld && !isRepeat { DispatchQueue.main.async { [weak self] in self?.onTalkAgent?() } }
-                aHeld = true
-                return nil
-            }
-            if aHeld && keyCode == Self.aKey {
-                if isRepeat { return nil } // A held down
-                aHeld = false // a fresh press means its key-up was missed: forget it, so a typed "a" is never swallowed
-                tasksPending = false
             }
             if !isRepeat, Self.isSystemScreenshotChord(keyCode: keyCode, flags: event.flags) {
                 DispatchQueue.main.async { [weak self] in self?.onSystemShot?() }
                 return pass // macOS takes the screenshot; Margin only notes where you were
             }
             let tabHeld = CGEventSource.keyState(.hidSystemState, key: CGKeyCode(Self.tabKey))
-            guard let action = Self.action(keyCode: keyCode, flags: event.flags, tabHeld: tabHeld) else { return pass }
-            if action == .cat && !Self.catGone { return pass } // the cat is here: ⌘⇧C is the app's own
+            guard let action = Self.action(keyCode: keyCode, flags: event.flags, tabHeld: tabHeld, binds: binds) else { return pass }
             if isRepeat { return nil }
             switch action {
-            case .tasks:
-                aHeld = true
-                tasksPending = true
             case .talk:
                 talking = true
-                let forAgent = aHeld // ⌘⇧A+V
-                tasksPending = false
-                DispatchQueue.main.async { [weak self] in self?.onTalkStart?(forAgent) }
-            case .snip, .chat, .history, .engine, .cat:
+                DispatchQueue.main.async { [weak self] in self?.onTalkStart?() }
+            case .snip, .chat, .history, .engine:
                 swallowedKey = keyCode
                 DispatchQueue.main.async { [weak self] in
                     switch action {
                     case .snip: self?.onSnip?()
                     case .history: self?.onHistory?()
                     case .engine: self?.onEngine?()
-                    case .cat: self?.onCat?()
                     default: self?.onChat?()
                     }
                 }
@@ -159,15 +139,7 @@ final class Hotkeys {
             return nil
 
         case .keyUp:
-            if keyCode == Self.aKey && aHeld {
-                aHeld = false
-                if tasksPending {
-                    tasksPending = false
-                    DispatchQueue.main.async { [weak self] in self?.onTasks?() }
-                }
-                return nil
-            }
-            if keyCode == Self.vKey && talking {
+            if keyCode == talkKey && talking {
                 talking = false
                 DispatchQueue.main.async { [weak self] in self?.onTalkEnd?() }
                 return nil

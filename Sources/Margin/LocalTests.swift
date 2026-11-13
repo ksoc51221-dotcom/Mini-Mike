@@ -455,3 +455,248 @@ enum LocalTests {
         exit(0)
     }
 }
+
+// MARK: - Token savings
+
+extension FeatureTests {
+    static func savingChecks(_ check: (String, Bool) -> Void) {
+        // Quick Answers on Haiku: what the quick model may see and answer.
+        func plan(_ prompt: String, selection: String = "a parabola", snip: Bool = false, blank: Bool = false, sees: Bool = true) -> Router.Plan {
+            Router.plan(.init(prompt: prompt, selection: selection, hasSnip: snip, isBlank: blank, localMode: true, localSeesImages: sees))
+        }
+        check("haiku: a snip goes to the quick model, which can see it", plan("What is this?", selection: "", snip: true).isLocal && plan("What is this?", selection: "", snip: true).sees)
+        check("haiku: a blank chat goes to the quick model, with the screenshot", plan("What's on my screen?", selection: "", blank: true).isLocal)
+        check("haiku: a question about the screen stays with the quick model", plan("What does this button do on my screen?").isLocal)
+        check("haiku: the web, quizzes and pronunciation still go to Claude",
+              !plan("What's the latest version?", snip: true).isLocal && !plan(Prompts.quiz).isLocal && !plan(Prompts.pronounce, snip: true).isLocal)
+        check("haiku: a model that can't see (Ollama) still sends snips and the screen to Claude",
+              !plan("What is this?", selection: "", snip: true, sees: false).isLocal && !plan("What does this button do on my screen?", sees: false).isLocal)
+        check("haiku: a chat that sees isn't moved to Claude for a screen question",
+              !Router.needsEscalation("What about this button on my screen?", from: plan("Explain this")) && Router.needsEscalation("latest price?", from: plan("Explain this")))
+
+        // The Qwen/Claude button's words.
+        check("button: Claude says Claude", EngineLabel.name(local: false, model: "qwen3:8b") == "Claude")
+        check("button: qwen3:8b says Qwen", EngineLabel.name(local: true, model: "qwen3:8b") == "Qwen")
+        check("button: llama3.2:3b says Llama, an odd name still says something", EngineLabel.name(local: true, model: "llama3.2:3b") == "Llama"
+              && EngineLabel.name(local: true, model: "3b") == "Local")
+
+        // Graph templates: drawn on the Mac, no Claude.
+        for t in GraphTemplates.all {
+            let spec = GraphSpec.parse(t.json)
+            check("graph template: “\(t.name)” draws with nothing skipped (\(spec?.problems ?? ["unreadable"]))", spec != nil && spec?.problems.isEmpty == true && !(spec?.plots.isEmpty ?? true))
+        }
+        func tpl(_ prompt: String, _ selection: String) -> String? { GraphTemplates.match(prompt: prompt, selection: selection)?.name }
+        check("graph template: Visualize on supply and demand", tpl(Prompts.visualize, "When demand rises while supply stays fixed, the equilibrium price goes up.") == "Supply and demand")
+        check("graph template: a typed request", tpl("draw the parabola for me", "") == "Parabola" && tpl("show me the sine wave", "") == "Wave")
+        check("graph template: the highlight can carry it", tpl(Prompts.visualize, "The vertex of a quadratic is where the parabola turns; its roots are where it crosses zero.") == "Parabola")
+        check("graph template: derivative and bell curve and growth", tpl(Prompts.visualize, "The derivative is the slope of the tangent line at a point.") == "Tangent line"
+              && tpl(Prompts.visualize, "A normal distribution is a bell curve set by its mean and standard deviation.") == "Bell curve"
+              && tpl("graph this", "Compound interest is exponential growth.") == "Exponential")
+        check("graph template: one passing word isn't enough", tpl(Prompts.visualize, "The supply chain was disrupted last year by a storm.") == nil)
+        check("graph template: no graph asked, no graph drawn", tpl("explain this simpler", "supply and demand curves shift when demand rises") == nil)
+        check("graph template: anything unrelated goes to Claude", tpl(Prompts.visualize, "The French Revolution began in 1789.") == nil)
+        check("graph template: a tie goes to Claude", tpl(Prompts.visualize, "A surplus and a shortage, and a quadratic with a vertex.") == nil)
+        let tAnswer = GraphTemplates.answer(GraphTemplates.all[0])
+        check("graph template: the answer reads as a graph piece", Answer.pieces(tAnswer).contains { if case .graph = $0 { return true } else { return false } })
+        let ts = TemplateSession(GraphTemplates.all[1])
+        var got: [String] = []
+        ts.onEvent = { e in switch e { case .delta(let t): got.append("delta:\(t.count)"); case .turnDone: got.append("done"); case .unavailable: got.append("unavailable"); default: got.append("other") } }
+        ts.send("Visualize", images: [])
+        ts.send("what about a bigger a?", images: [])
+        pump(2) { got.count >= 3 }
+        check("graph template: the session answers at once and hands follow-ups to Claude (\(got))", got.count == 3 && got[0].hasPrefix("delta:") && got[1] == "done" && got[2] == "unavailable")
+
+        // ⌃⇧L and the new video summary
+        check("hotkey: ⌃⇧L switches the chat's engine", Hotkeys.action(keyCode: 37, flags: [.maskControl, .maskShift], tabHeld: false) == .engine)
+        check("hotkey: …and only that chord", Hotkeys.action(keyCode: 37, flags: .maskControl, tabHeld: false) == nil
+              && Hotkeys.action(keyCode: 37, flags: [.maskControl, .maskShift, .maskCommand], tabHeld: false) == nil
+              && Hotkeys.action(keyCode: 37, flags: [.maskControl, .maskShift, .maskAlternate], tabHeld: false) == nil
+              && Hotkeys.action(keyCode: 37, flags: [.maskCommand, .maskShift], tabHeld: false) == .history)
+        let req = Prompts.videoRequest(.english, language: "English", link: "https://youtu.be/abc")
+        check("video: the model picks the shape from the video's type", req.contains("what kind of video it is") && req.contains("not a fixed template")
+              && !req.contains("Executive Summary") && !req.contains("📌"))
+        check("video: …keeps timestamps as links and stays proportionate", req.contains("https://youtu.be/abc?t=") && req.contains("scale the length to the video"))
+        let lines = (0..<400).map { VideoTranscript.Segment(start: TimeInterval($0 * 10), text: "Sentence number \($0) says something about the topic of the talk.") }
+        let long = VideoTranscript(title: "Talk", channel: "Chan", duration: 4000, languageCode: "en", origin: "captions", segments: lines)
+        let parts = VideoDigest.chunks(long, limit: 3000)
+        check("video: a long transcript is read in parts (\(parts.count)), each within the limit", parts.count > 3 && parts.allSatisfy { $0.count <= 3000 })
+        check("video: …and nothing is lost or cut mid-line", parts.joined(separator: "\n") == long.formatted() )
+        let short = VideoTranscript(title: "Short", channel: nil, duration: 60, languageCode: "en", origin: "captions", segments: Array(lines.prefix(6)))
+        check("video: a short one is a single part", VideoDigest.chunks(short).count == 1)
+        let final = VideoDigest.finalPrompt(transcript: long, link: nil, notes: ["[0:00] a", "[1:00] b"], request: "REQ")
+        check("video: the final prompt carries the notes, not the transcript", final.contains("[1:00] b") && !final.contains("Sentence number 5") && final.hasSuffix("REQ"))
+        check("video: a short video sends its transcript", VideoDigest.finalPrompt(transcript: short, link: nil, notes: nil, request: "REQ").contains("Sentence number 5"))
+        let linked = VideoDigest.linkify("**[1:05]** a, [0:07] b, [1:02:03] c, [4:05](https://x.y?t=245) d, [12] e", link: "https://youtu.be/abc")
+        check("video: plain times become links from the time itself (\(linked))", linked.contains("[1:05](https://youtu.be/abc?t=65)") && linked.contains("[0:07](https://youtu.be/abc?t=7)")
+              && linked.contains("[1:02:03](https://youtu.be/abc?t=3723)") && linked.contains("[4:05](https://x.y?t=245) d") && linked.contains("[12] e"))
+        check("video: the link instruction is swapped for plain times on the Mac", Prompts.videoRequest(.english, language: "English", link: "https://youtu.be/abc")
+              .replacingOccurrences(of: Prompts.stampPhrase(link: "https://youtu.be/abc"), with: Prompts.stampPhrase(link: nil)).contains("the time in brackets"))
+        let idx = VideoDigest.index(long)
+        let fu = VideoDigest.followUp("what does sentence number 321 say", index: idx)
+        check("video: a follow-up gets only the matching passages", fu.contains("Sentence number 321") && fu.count < 6000 && fu.hasSuffix("what does sentence number 321 say"))
+
+        // Chat naming: the on-Mac model first, Haiku only if it can't.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("margin-savenaming-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let library = Library(directory: dir)
+        func chat() -> ChatRecord {
+            ChatRecord(title: "Chat from Safari", sector: "Other", app: "Safari", quote: "Opportunity cost",
+                       turns: (0..<3).map { .init(question: "Question \($0)", answer: "Answer \($0) about trade-offs.") })
+        }
+        let savedLocal = ChatNaming.useLocal, savedGen = ChatNaming.localGenerate, savedClaude = ChatNaming.claudeRun
+        defer { ChatNaming.useLocal = savedLocal; ChatNaming.localGenerate = savedGen; ChatNaming.claudeRun = savedClaude }
+        var claudeCalls = 0
+        ChatNaming.claudeRun = { _, _, _, done in claudeCalls += 1; done(.success(.init(text: #"{"title":"Haiku title","sector":"Economics"}"#, usage: .init(inputTokens: 500, outputTokens: 100)))) }
+
+        let a = chat()
+        library.save(a)
+        ChatNaming.useLocal = { true }
+        ChatNaming.localGenerate = { _, _, done in done(#"{"title":"Opportunity cost and trade-offs","sector":"economics"}"#) }
+        var cost = -1
+        ChatNaming.rename(a.id, in: library) { cost = $0 }
+        check("saving: with Local Mode on, the Mac names the chat for 0 Claude tokens", cost == 0 && claudeCalls == 0 && library.chat(a.id)?.title == "Opportunity cost and trade-offs" && library.chat(a.id)?.sector == "Economics")
+
+        let b = chat()
+        library.save(b)
+        ChatNaming.localGenerate = { _, _, done in done("I think it's about economics.") }
+        ChatNaming.rename(b.id, in: library) { cost = $0 }
+        check("saving: a useless local answer falls back to Haiku (\(cost) tokens)", cost == 600 && claudeCalls == 1 && library.chat(b.id)?.title == "Haiku title")
+
+        let c = chat()
+        library.save(c)
+        ChatNaming.localGenerate = { _, _, done in done(nil) }
+        ChatNaming.rename(c.id, in: library) { cost = $0 }
+        check("saving: Ollama not answering falls back to Haiku too", cost == 600 && claudeCalls == 2)
+
+        let d = chat()
+        library.save(d)
+        ChatNaming.useLocal = { false }
+        var localCalls = 0
+        ChatNaming.localGenerate = { _, _, done in localCalls += 1; done(nil) }
+        ChatNaming.rename(d.id, in: library) { cost = $0 }
+        check("saving: with Local Mode off, it's Haiku and Ollama is never asked", localCalls == 0 && claudeCalls == 3 && cost == 600)
+    }
+}
+
+// MARK: - Live: ⌃⇧L and local video summaries
+
+extension FeatureTests {
+    /// Margin --switchtest: with Local Mode on, real Ollama and real Claude: (1) ⌃⇧L moves ONE chat to Claude and back while
+    /// another chat, Local Mode and a brand-new chat stay local; (2) a long summary of highlighted text is answered on this
+    /// Mac; (3) a real TED talk is summarized on this Mac in the five-section structure with no Claude call.
+    static func liveSwitchTest() -> Never {
+        setvbuf(stdout, nil, _IONBF, 0)
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        AskPanelController.demoMode = true
+        let settings = Settings.shared
+        let wasLocal = settings.localMode
+        settings.localMode = true
+        var failures = 0
+        func check(_ name: String, _ ok: Bool) {
+            print((ok ? "ok   " : "FAIL ") + name)
+            if !ok { failures += 1 }
+        }
+        let screen = NSScreen.main ?? NSScreen.screens[0]
+        let mouse = TestSpot.mouse(on: screen)
+        let icon = NSRect(x: mouse.x, y: mouse.y, width: 22, height: 22)
+        let passage = "Opportunity cost is the value of the next-best alternative you give up when you make a choice. "
+            + "Because time and money are scarce, every decision involves a trade-off."
+        func newChat(_ text: String = passage, video: VideoSource? = nil) -> AskPanelController {
+            let chat = AskPanelController(selection: Selection(text: text, appName: "Safari", context: ContextBox(resolved: nil),
+                                                               pid: 0, mouse: mouse, video: video), iconFrame: icon)
+            chat.show()
+            return chat
+        }
+        func settled(_ chat: AskPanelController, _ seconds: Double = 120) async -> Bool {
+            let end = Date().addingTimeInterval(seconds)
+            while Date() < end {
+                if chat.phase == .done || chat.phase == .failed { return chat.phase == .done }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+            return false
+        }
+        func finish() -> Never {
+            settings.localMode = wasLocal
+            print(failures == 0 ? "SWITCHTEST PASS" : "SWITCHTEST FAIL (\(failures))")
+            exit(failures == 0 ? 0 : 1)
+        }
+
+        Task { @MainActor in
+            OllamaClient.shared.refresh { _ in }
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            check("Ollama is ready", OllamaClient.shared.status == .ready)
+
+            // 1. One chat moves; nothing else does.
+            let a = newChat(), b = newChat()
+            a.debugAsk(Prompts.chips[0].prompt)
+            b.debugAsk(Prompts.chips[0].prompt)
+            check("chat A answered on the Mac", await settled(a) && a.debugEngine == "local")
+            check("chat B answered on the Mac", await settled(b) && b.debugEngine == "local")
+            let message = a.toggleEngine()
+            print("   ⌃⇧L → \(message)")
+            check("⌃⇧L tells you it's Claude now", message.contains("uses Claude") && message.contains("unchanged"))
+            check("chat A is answered again by Claude", await settled(a) && a.debugEngine == "claude" && a.debugTurns.last?.localModel == nil
+                  && (a.debugTurns.last?.answer.count ?? 0) > 20 && a.debugTurns.count == 1)
+            check("chat B is still on the Mac", b.debugEngine == "local" && b.debugPlan?.isLocal == true)
+            check("Local Mode itself wasn't switched off", settings.localMode)
+            let c = newChat()
+            c.debugAsk(Prompts.chips[0].prompt)
+            check("a brand-new chat still starts on the Mac", await settled(c) && c.debugEngine == "local")
+            a.debugAsk("Why does that matter for a student?")
+            check("a follow-up in A stays on Claude", await settled(a) && a.debugEngine == "claude")
+            let back = a.toggleEngine()
+            print("   ⌃⇧L → \(back)")
+            let backDone = await settled(a)
+            check("⌃⇧L again returns A to the Mac", back.contains("runs on your Mac") && backDone && a.debugEngine == "local" && a.debugTurns.count == 2)
+            let needsClaude = newChat()
+            needsClaude.debugAsk("Search the web for the latest news about this")
+            _ = await settled(needsClaude)
+            check("a question that needs the web starts on Claude", needsClaude.debugEngine == "claude")
+            let stay = needsClaude.toggleEngine()
+            check("…and ⌃⇧L won't force it onto the Mac (\(stay))", stay.contains("needs Claude") && needsClaude.debugEngine == "claude")
+            [a, b, c, needsClaude].forEach { $0.close() }
+
+            // 2. A long summary, on the Mac.
+            let long = String(repeating: passage + " ", count: 25)
+            let s = newChat(long)
+            s.debugSummarize(.meaning)
+            check("a \(long.count)-character summary is answered on the Mac", await settled(s) && s.debugEngine == "local" && (s.debugTurns.last?.answer.count ?? 0) > 80)
+            s.close()
+
+            // 3. A real talk, summarized on the Mac.
+            let t0 = Date()
+            let v = newChat("", video: .youtube(id: "arj7oStGLkU"))
+            var sawParts = false
+            let end = Date().addingTimeInterval(400)
+            while Date() < end, v.phase != .done, v.phase != .failed {
+                if v.debugVideoStatus?.contains("Reading part") == true { sawParts = true }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+            while v.debugTurns.last?.done != true, Date() < end { try? await Task.sleep(nanoseconds: 300_000_000) } // the answer is still being typed out
+            let answer = v.debugTurns.last?.answer ?? ""
+            print("   video summary in \(Int(Date().timeIntervalSince(t0))) s:\n" + answer)
+            check("the talk was summarized on the Mac, not by Claude", v.debugEngine == "local" && v.debugVideoLocal && v.debugTurns.last?.localModel != nil)
+            check("it read the transcript in parts first", sawParts)
+            check("the summary has real content", answer.count > 200)
+            check("…with timestamps that link to the right moment", answer.contains("youtu.be/arj7oStGLkU?t="))
+            v.debugAsk("What are the three characters he talks about?")
+            check("a follow-up about it is answered too", await settled(v, 180) && (v.debugTurns.last?.answer.lowercased().contains("monkey") ?? false))
+
+            // 4. The same video chat, moved to Claude with ⌃⇧L (it re-reads the whole transcript: a few thousand tokens).
+            let turnsBefore = v.debugTurns.count
+            let moved = v.toggleEngine()
+            print("   ⌃⇧L → \(moved)")
+            let movedDone = await settled(v, 240)
+            let redone = v.debugTurns.last?.answer ?? ""
+            check("⌃⇧L moves the video chat to Claude, which answers that question again", moved.contains("uses Claude") && movedDone && v.debugEngine == "claude"
+                  && !v.debugVideoLocal && v.debugTurns.count == turnsBefore)
+            check("…the answer is Claude's (it has a model label of nil) and about this video", v.debugTurns.last?.localModel == nil && redone.lowercased().contains("monkey"))
+            v.close()
+            finish()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1500) { print("SWITCHTEST FAIL: timed out"); exit(2) }
+        app.run()
+        exit(0)
+    }
+}

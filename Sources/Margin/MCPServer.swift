@@ -85,10 +85,7 @@ final class MCPServer {
     // MARK: Data (read-only)
 
     private func read<T: Decodable>(_ sub: String, _ type: T.Type) -> [T] {
-        let dir = directory.appendingPathComponent(sub, isDirectory: true)
-        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension == "json" }.compactMap { u in (try? Data(contentsOf: u)).flatMap { try? d.decode(T.self, from: $0) } }
+        Library.readRecords(in: directory.appendingPathComponent(sub, isDirectory: true), type)
     }
     private func chats() -> [ChatRecord] { read("chats", ChatRecord.self).sorted { $0.updated > $1.updated } }
     private func notes() -> [Note] { read("notes", Note.self).sorted { $0.created > $1.created } }

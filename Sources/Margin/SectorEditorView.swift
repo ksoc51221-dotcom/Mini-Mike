@@ -763,7 +763,7 @@ private struct RefilePreview: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(isOn ? accent : Theme.canvas.color).padding(1)
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(isOn ? accent : inkTertiary))
-                    if isOn { Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.onAccent.color) }
+                    if isOn { MarginSparkMark(color: Theme.onAccent.color, size: 9) }
                 }
                 .frame(width: 15, height: 15)
                 Text(m.title).font(.mUI).foregroundStyle(ink).lineLimit(1)
@@ -865,12 +865,7 @@ extension SectorEditorView {
         let host = NSHostingView(rootView: view)
         host.appearance = appearance
         host.frame = NSRect(origin: .zero, size: size)
-        for _ in 0..<4 {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.12))
-        }
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: rep)
-        return rep.cgImage
+        host.settleLayout(passes: 4, interval: 0.12)
+        return host.snapshotRep()?.cgImage
     }
 }

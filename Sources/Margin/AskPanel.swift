@@ -98,7 +98,7 @@ final class AskPanelController {
     private let panel: ChatPanel
     /// The light-orange glow around the chat (its own window, which follows this one).
     private let glow: PanelGlow
-    private let hosting: NSHostingView<AskView>
+    private let hosting: NSHostingView<ThemedRoot<AskView>>
     private let model: AskModel
     /// Whatever is answering this chat. It's created at the first question (Claude, or the model on this Mac
     /// in Local mode), so a chat that is never asked anything starts nothing.
@@ -188,13 +188,8 @@ final class AskPanelController {
         model = askModel
         panel = ChatPanel(size: NSSize(width: askModel.width, height: 140), canKey: !Self.demoMode) // test windows can never take your typing
 
-        let effect = NSVisualEffectView()
-        effect.material = .popover
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        effect.wantsLayer = true
-        effect.maskImage = Theme.roundedMask(radius: Self.cornerRadius)
-        hosting = NSHostingView(rootView: AskView(model: model))
+        let effect = NSVisualEffectView.popoverBackdrop(radius: Self.cornerRadius)
+        hosting = NSHostingView(rootView: ThemedRoot { AskView(model: askModel) })
         hosting.sizingOptions = []
         hosting.autoresizingMask = [.width, .height]
         effect.addSubview(hosting)
@@ -220,6 +215,9 @@ final class AskPanelController {
         model.onMeta = { [weak self] in self?.onUpdate?() } // the sidebar row takes the new name
         model.onTurnComplete = { [weak self] in self?.turnCompleted() }
         model.onKeep = { [weak self] id in self?.keep(turn: id) }
+        model.onToggleStar = { [weak self] in self?.toggleStar() }
+        model.onToggleReview = { [weak self] in self?.toggleReview() }
+        model.onAttachScreenshot = { [weak self] in self?.attachScreenshot() }
         model.onUseDocument = { [weak self] in self?.useDocument() }
         model.onDropDocument = { [weak self] in self?.dropDocument() }
         model.onQuizFinished = { [weak self] result in self?.quizFinished(result) }
@@ -530,11 +528,30 @@ final class AskPanelController {
                           app: selection.appName, quote: libraryQuote, turns: turns)
         if !record.titleLocked { record.title = String(title.prefix(80)) }
         // A sector you moved the chat to stays; otherwise it follows the chat.
-        if library.chat(recordID) == nil { record.sector = model.sector ?? Sector.other }
+        if library.chat(recordID) == nil { record.sector = model.sector ?? Sector.other; record.starred = model.starred; if model.inReview { record.reviewMarked = Date() } }
         else if !record.sectorLocked, let named = model.sector { record.sector = named }
         record.turns = turns
         library.save(record)
     }
+
+    /// The star in the header. The Library's copy is the truth once the chat is saved (you may have starred it there).
+    func toggleStar() {
+        let library = Library.shared
+        let now = !isStarred
+        model.starred = now
+        library.setStarred(recordID, now) // nothing to do yet if it isn't saved: saveToLibrary applies it then
+        onUpdate?() // the sidebar row shows it too
+    }
+
+    /// The bookmark in the header: put this chat in "To review", or take it out.
+    func toggleReview() {
+        let now = !(Library.shared.chat(recordID)?.inReview ?? model.inReview)
+        model.inReview = now
+        Library.shared.setReview(recordID, now)
+        onUpdate?()
+    }
+
+    var isStarred: Bool { Library.shared.chat(recordID)?.starred ?? model.starred }
 
     /// "Keep" under an answer: it goes into the notebook (and its sector's Markdown file).
     private func keep(turn id: UUID) {
@@ -756,7 +773,6 @@ final class AskPanelController {
         onUpdate?()
     }
 
-    func debugStartVideo(_ source: VideoSource) { startVideo(source) }
     func debugSetVideoStage(_ stage: VideoState.Stage) { model.video?.stage = stage }
     func debugTranscriptReady(_ t: VideoTranscript) { transcriptReady(t) }
 
@@ -799,11 +815,35 @@ final class AskPanelController {
         return parts.joined(separator: " · ")
     }
 
+    /// Screenshots that go with the question being sent (taken by double-tapping Shift, or the camera button).
+    private var pendingImages: [Data] = []
+    private static let screenshotNote = "\n\n(I attached a screenshot of my screen for context.)"
+
+    /// Adds a screenshot of the screen under the mouse to the next question. Margin's own windows aren't in it.
+    func attachScreenshot() {
+        let spot = debugPanelFrame
+        func say(_ text: String) { Toast.show(text, near: NSRect(x: spot.midX, y: spot.maxY, width: 1, height: 1)) }
+        guard model.attachments.count < AskModel.maxAttachments else { return say("That's the most screenshots for one question (\(AskModel.maxAttachments)).") }
+        guard ScreenCapture.hasPermission else {
+            ScreenCapture.requestPermission()
+            return say("Turn on Screen Recording for Margin in System Settings, then tap Shift twice again.")
+        }
+        ScreenCapture.capture(.screen, at: NSEvent.mouseLocation, pid: selection.pid) { [weak self] data in
+            guard let self else { return }
+            guard let data else { return say("Couldn't capture the screen.") }
+            withAnimation(Motion.animation(Motion.functional)) {
+                self.model.attachments.append(.init(data: data, thumb: NSImage(data: data)))
+            }
+        }
+    }
+
     private func send(_ prompt: String) {
         // "Add … to my calendar" is understood here, on this Mac: no Claude call, and nothing is added until you say so.
         if let draft = CalendarIntent.parse(prompt) { return answerWithEvent(draft) }
         // "Summarize this video": the video summarizer takes over (a video chat itself is already one, so it's left alone).
         if model.video == nil, docIndex == nil, let intent = VideoIntent.parse(prompt), answerWithVideo(intent) { return }
+        pendingImages = model.attachments.map(\.data) // screenshots added for this question
+        model.attachments = []
         phase = .working
         touch()
         lastPrompt = prompt
@@ -885,7 +925,7 @@ final class AskPanelController {
             return
         }
         let chosen = Router.plan(.init(prompt: prompt, selection: selection.text, context: context,
-                                       hasSnip: selection.regionImage != nil, isBlank: selection.isBlank,
+                                       hasSnip: selection.regionImage != nil || !pendingImages.isEmpty, isBlank: selection.isBlank && pendingImages.isEmpty,
                                        isVideo: selection.video != nil, hasDocument: docIndex != nil,
                                        localMode: effectiveLocalMode, localUsable: OllamaClient.shared.status.isUsable,
                                        localSeesImages: Settings.isClaudeModel(settings.localModel), smart: screenMode == .smart))
@@ -1084,7 +1124,7 @@ final class AskPanelController {
 
     /// Later questions go to whoever started the chat, unless they need something it doesn't have.
     private func sendFollowUp(_ prompt: String) {
-        if let plan, Router.needsEscalation(prompt, from: plan) {
+        if let plan, Router.needsEscalation(prompt, from: plan) || (!pendingImages.isEmpty && plan.isLocal && !plan.sees) {
             // A quiz needs nothing but the conversation, so it moves over as a lean call.
             let lean = prompt == Prompts.quiz && !Router.needsWeb(prompt) && !Router.needsScreen(prompt)
             escalate(prompt: prompt, earlier: model.earlierExchanges(), lean: lean)
@@ -1104,7 +1144,10 @@ final class AskPanelController {
             text = extra.text + "\n\n" + text
             claude.didSendExtra(extra.added)
         }
-        session?.send(text, images: [])
+        let images = pendingImages
+        pendingImages = []
+        if !images.isEmpty { text += Self.screenshotNote }
+        session?.send(text, images: images)
     }
 
     private func startLocal(_ prompt: String, earlier: [(question: String, answer: String)] = []) {
@@ -1118,6 +1161,7 @@ final class AskPanelController {
         // is kept in case the chat moves to Claude.
         var images: [Data] = []
         if sees, let snip = selection.regionImage { images.append(snip) }
+        if sees { images.append(contentsOf: pendingImages) }
         let shot = sees && Self.localWantsScreenshot(prompt, blank: selection.isBlank) ? screenshot : nil
         if let shot { images.append(shot) }
         let text = Prompts.first(app: selection.appName, selection: selection.text, context: context, question: prompt,
@@ -1153,6 +1197,7 @@ final class AskPanelController {
         guard !closed, let claude = startClaudeSession(lean: plan.lean, features: features) else { return }
         var images: [Data] = []
         if let snip = selection.regionImage { images.append(snip) }
+        images.append(contentsOf: pendingImages)
         // A lean chat doesn't get the whole-screen screenshot; it's kept in case the chat moves to a full one.
         let shot = plan.lean ? nil : screenshot
         if let shot { images.append(shot) }
@@ -1165,6 +1210,7 @@ final class AskPanelController {
             text = Prompts.firstWithDocument(app: selection.appName, doc: docIndex, selection: selection.text,
                                              passages: doc.passages, question: prompt, overview: doc.overview)
         }
+        if !pendingImages.isEmpty { text += Self.screenshotNote; pendingImages = [] }
         claude.send(text, images: images)
         if shot != nil { screenshot = nil }
     }
@@ -1517,22 +1563,9 @@ final class AskPanelController {
     /// Drags the chat by its top edge with mouse events sent through the window (the same path a real drag
     /// takes; in demo mode the chat doesn't take the keyboard). False if that spot doesn't start a drag.
     func debugDragHeader(by delta: NSSize) -> Bool {
-        let start = NSPoint(x: panel.frame.minX + 60, y: panel.frame.maxY - 22)
-        guard panel.startsDrag(at: NSPoint(x: 60, y: panel.frame.height - 22)) else { return false }
-        func send(_ type: NSEvent.EventType, at screen: NSPoint) {
-            let location = NSPoint(x: screen.x - panel.frame.minX, y: screen.y - panel.frame.minY)
-            guard let e = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-                                             timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: panel.windowNumber, context: nil,
-                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return }
-            panel.sendEvent(e)
-        }
-        send(.leftMouseDown, at: start)
-        for i in 1...6 {
-            let f = CGFloat(i) / 6
-            send(.leftMouseDragged, at: NSPoint(x: start.x + delta.width * f, y: start.y + delta.height * f))
-        }
-        send(.leftMouseUp, at: NSPoint(x: start.x + delta.width, y: start.y + delta.height))
+        let local = NSPoint(x: 60, y: panel.frame.height - 22)
+        guard panel.startsDrag(at: local) else { return false }
+        panel.debugPlayDrag(from: local, by: delta)
         return true
     }
     var debugIsPlaced: Bool { placedTopLeft != nil }
@@ -1552,14 +1585,10 @@ final class AskPanelController {
     private func snapshot() -> CGImage? {
         let bounds = hosting.bounds
         guard bounds.width > 1, bounds.height > 1,
-              let rep = hosting.bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
-        hosting.cacheDisplay(in: bounds, to: rep)
+              let rep = hosting.snapshotRep() else { return nil }
 
         let scale = panel.backingScaleFactor
-        guard let out = NSBitmapImageRep(bitmapDataPlanes: nil,
-                                         pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale),
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        guard let out = NSBitmapImageRep.rgba(pixelsWide: Int(bounds.width * scale), pixelsHigh: Int(bounds.height * scale)) else { return nil }
         out.size = bounds.size // must be set before the context exists, or drawing lands at 1x in a corner
         guard let ctx = NSGraphicsContext(bitmapImageRep: out) else { return nil }
         NSGraphicsContext.saveGraphicsState()

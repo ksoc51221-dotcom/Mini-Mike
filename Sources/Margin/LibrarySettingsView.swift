@@ -24,7 +24,6 @@ extension EnvironmentValues {
     }
 }
 
-private func lsFont(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font { .geist(size, weight) }
 private func lsMono(_ size: CGFloat = 12, _ weight: Font.Weight = .regular) -> Font { .geistMono(size, weight).monospacedDigit() }
 
 // MARK: - Data
@@ -50,13 +49,16 @@ struct LibrarySettingsData {
 
 struct LibrarySettingsView: View {
     enum Section: String, CaseIterable, Identifiable {
-        case general, answers, usage, storage, sectors, privacy
+        case general, appearance, assistant, answers, shortcuts, usage, storage, sectors, privacy
         var id: String { rawValue }
         var title: String { rawValue.capitalized }
         var symbol: String {
             switch self {
             case .general: return "slider.horizontal.3"
+            case .appearance: return "paintpalette"
+            case .assistant: return "sparkles"
             case .answers: return "text.bubble"
+            case .shortcuts: return "keyboard"
             case .usage: return "chart.bar"
             case .storage: return "internaldrive"
             case .sectors: return "square.grid.2x2"
@@ -66,7 +68,10 @@ struct LibrarySettingsView: View {
         var blurb: String {
             switch self {
             case .general: return "How the Library looks and what it remembers."
+            case .appearance: return "Light or dark, and the colour Margin uses for buttons, links and highlights."
+            case .assistant: return "Tell Margin what to do with your Library."
             case .answers: return "What Margin knows about you and how it replies. Saved on this Mac, and sent to the model when a chat starts."
+            case .shortcuts: return "The keys that open Margin's things. Click Change, then press the keys you want."
             case .usage: return "What Margin's own calls to Claude have used."
             case .storage: return "What's on disk, and how long it stays."
             case .sectors: return "The subjects your chats are filed under."
@@ -86,6 +91,8 @@ struct LibrarySettingsView: View {
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// A new accent redraws the page's contents (not the page itself, so the open section and its data stay).
+    @ObservedObject private var themeStore = ThemeStore.shared
 
     @AppStorage("saveHistory") private var saveHistory = true
     @AppStorage("nameChatsOnClose") private var nameOnClose = true
@@ -119,6 +126,7 @@ struct LibrarySettingsView: View {
             Rectangle().fill(Theme.hairline.color).frame(width: 1).frame(maxHeight: .infinity)
             pane()
         }
+        .id(themeStore.revision)
         .frame(minWidth: 700, minHeight: shot ? 560 : 460)
         .background(Theme.canvas.color)
         .environment(\.lsShot, shot)
@@ -145,16 +153,16 @@ struct LibrarySettingsView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("Library").mLabelStyle()
                 .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 8)
-            ForEach(Array(Section.allCases.enumerated()), id: \.element.id) { _, s in
+            ForEach(Array(Section.allCases.filter { $0 != .assistant }.enumerated()), id: \.element.id) { _, s in
                 let on = s == section
                 Button {
                     withAnimation(spring) { section = s }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: s.symbol)
-                            .font(lsFont(12)).frame(width: 18)
+                            .font(.geist(12)).frame(width: 18)
                             .foregroundStyle(on ? Theme.ink.color : Theme.inkSecondary.color)
-                        Text(s.title).font(lsFont(13, on ? .medium : .regular)).foregroundStyle(on ? Theme.ink.color : Theme.inkSecondary.color)
+                        Text(s.title).font(.geist(13, on ? .medium : .regular)).foregroundStyle(on ? Theme.ink.color : Theme.inkSecondary.color)
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 10).frame(height: 30)
@@ -170,6 +178,8 @@ struct LibrarySettingsView: View {
                 .buttonStyle(LSPressStyle())
             }
             Spacer(minLength: 0)
+            Rectangle().fill(Theme.hairline.color).frame(height: 1).padding(.horizontal, 4).padding(.bottom, 6)
+            AssistantOrbButton(open: section == .assistant) { withAnimation(spring) { section = .assistant } }
         }
         .padding(.horizontal, 12).padding(.vertical, 24)
         .frame(width: 192)
@@ -180,7 +190,9 @@ struct LibrarySettingsView: View {
     private func pane() -> some View {
         ZStack {
             Group {
-                if section == .sectors {
+                if section == .assistant {
+                    LibraryAssistantView() // a chat that fills the pane, with its own header
+                } else if section == .sectors {
                     // The editor brings its own header and scrolling, so it fills the pane instead of sitting in a card.
                     SectorEditorView(store: sectorStore)
                 } else {
@@ -204,7 +216,10 @@ struct LibrarySettingsView: View {
             }
             switch section {
             case .general: general()
+            case .appearance: LSAppearance()
+            case .assistant: EmptyView()
             case .answers: LSAnswers(store: answersStore)
+            case .shortcuts: LSShortcuts()
             case .usage: usage()
             case .storage: storage()
             case .sectors: EmptyView()
@@ -366,13 +381,13 @@ struct LibrarySettingsView: View {
                 }
                 if confirmingDelete {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Delete everything").font(lsFont(13, .medium)).foregroundStyle(Theme.alert.color)
+                        Text("Delete everything").font(.geist(13, .medium)).foregroundStyle(Theme.alert.color)
                         Text("This removes every chat, note, screenshot, the Bin and the usage count. Markdown copies in Documents/Margin Notes stay. It can't be undone. Type DELETE to confirm.")
-                            .font(lsFont(12)).foregroundStyle(Theme.inkSecondary.color).lineSpacing(2)
+                            .font(.geist(12)).foregroundStyle(Theme.inkSecondary.color).lineSpacing(2)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack(spacing: 8) {
                             TextField("DELETE", text: $typed)
-                                .textFieldStyle(.plain).font(lsFont(13)).foregroundStyle(Theme.ink.color)
+                                .textFieldStyle(.plain).font(.geist(13)).foregroundStyle(Theme.ink.color)
                                 .padding(.horizontal, 10).padding(.vertical, 7)
                                 .lsInputBox()
                                 .frame(width: 150)
@@ -390,7 +405,7 @@ struct LibrarySettingsView: View {
                 }
             }
             if !message.isEmpty {
-                Text(message).font(lsFont(12)).foregroundStyle(Theme.inkSecondary.color)
+                Text(message).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color)
             }
         }
     }
@@ -512,7 +527,7 @@ private struct LSRow<Control: View>: View {
     var body: some View {
         HStack(alignment: .center, spacing: 20) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(lsFont(13, .medium)).foregroundStyle(Theme.ink.color)
+                Text(title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color)
             }
             .help(detail)
             Spacer(minLength: 8)
@@ -545,7 +560,7 @@ private struct LSButton: View {
         let destructive = role == .destructive
         let fg: Color = prominent ? Theme.onAccent.color : (destructive ? Theme.alert.color : Theme.ink.color)
         Button(action: action) {
-            Text(title).font(lsFont(13, .medium)).foregroundStyle(fg)
+            Text(title).font(.geist(13, .medium)).foregroundStyle(fg)
                 .padding(.horizontal, 12).frame(height: 26)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(prominent ? Theme.accent.color : Theme.surfaceRaised.color))
                 .padding(1)
@@ -589,24 +604,24 @@ private struct LSTextBox: View {
         let over = text.count > Prompts.maxPersonal
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text(title).font(lsFont(13, .medium)).foregroundStyle(Theme.ink.color)
+                Text(title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color)
                 Spacer(minLength: 8)
                 Text("\(text.count.formatted()) / \(Prompts.maxPersonal.formatted())")
-                    .font(lsFont(11).monospacedDigit())
+                    .font(.geist(11).monospacedDigit())
                     .foregroundStyle(over ? Theme.alert.color : Theme.inkTertiary.color)
                     .accessibilityLabel("\(text.count) of \(Prompts.maxPersonal) characters")
             }
             Text(over ? "Only the first \(Prompts.maxPersonal.formatted()) characters are sent." : detail)
-                .font(lsFont(12)).foregroundStyle(over ? Theme.alert.color : Theme.inkSecondary.color)
+                .font(.geist(12)).foregroundStyle(over ? Theme.alert.color : Theme.inkSecondary.color)
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
-                    .font(lsFont(13))
+                    .font(.geist(13))
                     .foregroundStyle(Theme.ink.color)
                     .scrollContentBackground(.hidden)
                     .padding(.horizontal, 7).padding(.vertical, 8)
                 if text.isEmpty {
                     Text(placeholder)
-                        .font(lsFont(13)).foregroundStyle(Theme.inkTertiary.color)
+                        .font(.geist(13)).foregroundStyle(Theme.inkTertiary.color)
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .allowsHitTesting(false)
                 }
@@ -646,7 +661,7 @@ private struct LSChoice: View {
             ForEach(options, id: \.0) { value, title in
                 let on = value == selection
                 Button { withAnimation(Motion.still ? nil : Motion.animation(Motion.snappy)) { selection = value } } label: {
-                    Text(title).font(lsFont(12, on ? .medium : .regular))
+                    Text(title).font(.geist(12, on ? .medium : .regular))
                         .foregroundStyle(on ? Theme.ink.color : Theme.inkSecondary.color)
                         .frame(maxWidth: .infinity).padding(.vertical, 5)
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(on ? Theme.surfaceSelected.color : Color.clear))
@@ -672,7 +687,7 @@ private struct LSPeriodCard: View {
             Text(title).mLabelStyle()
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(LibraryUsage.compact(totals.tokens)).font(lsMono(22, .medium)).foregroundStyle(Theme.ink.color).contentTransition(.numericText())
-                Text("tokens").font(lsFont(12, .medium)).foregroundStyle(Theme.inkSecondary.color)
+                Text("tokens").font(.geist(12, .medium)).foregroundStyle(Theme.inkSecondary.color)
             }
             VStack(spacing: 6) {
                 line("Input", LibraryUsage.compact(totals.input))
@@ -688,7 +703,7 @@ private struct LSPeriodCard: View {
     }
     private func line(_ name: String, _ value: String) -> some View {
         HStack {
-            Text(name).font(lsFont(12)).foregroundStyle(Theme.inkSecondary.color)
+            Text(name).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color)
             Spacer()
             Text(value).font(lsMono(12)).foregroundStyle(Theme.ink.color).contentTransition(.numericText())
         }
@@ -729,7 +744,7 @@ private struct LSBarChart: View {
                 Spacer()
                 Text("Today")
             }
-            .font(lsFont(12, .medium)).foregroundStyle(Theme.inkSecondary.color)
+            .font(.geist(12, .medium)).foregroundStyle(Theme.inkSecondary.color)
         }
         .onAppear {
             guard !Motion.still else { return }
@@ -773,11 +788,11 @@ private struct LSSplitLegend: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: 2).fill(color).frame(width: 8, height: 8)
-                Text(title).font(lsFont(12, .medium)).foregroundStyle(Theme.ink.color)
+                Text(title).font(.geist(12, .medium)).foregroundStyle(Theme.ink.color)
             }
             Text("\(LibraryUsage.compact(totals.tokens)) tokens · \(LibraryUsage.dollars(totals.cost))")
                 .font(lsMono(12)).foregroundStyle(Theme.ink.color).contentTransition(.numericText())
-            Text(note).font(lsFont(11)).foregroundStyle(Theme.inkTertiary.color)
+            Text(note).font(.geist(11)).foregroundStyle(Theme.inkTertiary.color)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -929,14 +944,8 @@ extension LibrarySettingsView {
                     let host = NSHostingView(rootView: view)
                     host.appearance = appearance
                     host.frame = NSRect(origin: .zero, size: size)
-                    for _ in 0..<4 {
-                        host.layoutSubtreeIfNeeded()
-                        RunLoop.main.run(until: Date().addingTimeInterval(0.12))
-                    }
-                    if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) {
-                        host.cacheDisplay(in: host.bounds, to: rep)
-                        image = rep.cgImage
-                    }
+                    host.settleLayout(passes: 4, interval: 0.12)
+                    image = host.snapshotRep()?.cgImage
                 }
                 let name = "settings-\(file)-\(mode).png"
                 guard let image,
@@ -946,6 +955,219 @@ extension LibrarySettingsView {
                 try? png.write(to: dir.appendingPathComponent(name))
                 print("  saved \(name)")
             }
+        }
+    }
+}
+
+
+/// The Shortcuts section: every chord Margin listens for, with a recorder to change it.
+private struct LSShortcuts: View {
+    @State private var binds = KeybindStore.shared.current
+    @State private var recording: Hotkeys.Action?
+    @State private var note = ""
+    @State private var monitor: Any?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LSGroup {
+                ForEach(Hotkeys.Action.allCases, id: \.self) { action in row(action) }
+            }
+            LSGroup {
+                LSRow("Tap Shift twice", "Adds a screenshot of your screen to the open chat, for your next question. Nothing else is typed or changed.") {
+                    LSSwitch(isOn: Binding(get: { binds.doubleShift },
+                                           set: { on in KeybindStore.shared.update { $0.doubleShift = on } }))
+                }
+            }
+            if !note.isEmpty {
+                Text(note).font(.geist(12, .medium)).foregroundStyle(Theme.alert.color).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Text("Chords need ⌘, ⌥ or ⌃ (or Tab held) so typing never triggers them. Esc cancels.")
+                    .font(.geist(12)).foregroundStyle(Theme.inkTertiary.color).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
+                LSButton("Reset all", enabled: !binds.isDefault) { stop(); note = ""; KeybindStore.shared.resetAll() }
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: KeybindStore.changed)) { _ in binds = KeybindStore.shared.current }
+        .onDisappear { stop() }
+    }
+
+    private func row(_ action: Hotkeys.Action) -> some View {
+        let chord = binds.chord(action)
+        let isRecording = recording == action
+        let isDefault = chord == Keybinds.defaults.chord(action)
+        return HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(action.title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color)
+                Text(action.detail).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Text(isRecording ? (tabDown ? "Tab + …" : "Press keys…") : chord.display)
+                .font(lsMono(13, .medium)).foregroundStyle(isRecording ? Theme.inkSecondary.color : Theme.ink.color)
+                .padding(.horizontal, 10).frame(minWidth: 70, minHeight: 26)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surfaceRaised.color))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                    .strokeBorder(isRecording ? Theme.ink.color : Theme.hairline.color, lineWidth: 1))
+            LSButton(isRecording ? "Cancel" : "Change") { isRecording ? stop() : start(action) }
+            if !isDefault && !isRecording { LSButton("Reset") { stop(); note = ""; KeybindStore.shared.reset(action) } }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @State private var tabDown = false
+
+    private func start(_ action: Hotkeys.Action) {
+        stop()
+        note = ""
+        recording = action
+        Hotkeys.paused = true // let the window see every key, including the ones Margin normally takes
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp]) { event in
+            let code = Int64(event.keyCode)
+            if event.type == .keyUp { if code == 48 { tabDown = false }; return event }
+            let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if code == 53, mods.isEmpty { stop(); return nil } // Esc
+            if code == 48, mods.isEmpty { tabDown = true; return nil } // Tab on its own: the first half of a hold-Tab chord
+            let chord = Chord(keyCode: code, command: mods.contains(.command), shift: mods.contains(.shift),
+                              option: mods.contains(.option), control: mods.contains(.control),
+                              holdTab: CGEventSource.keyState(.hidSystemState, key: 48) && code != 48)
+            if let why = KeybindStore.shared.set(chord, for: action) { note = why; tabDown = false } else { note = ""; stop() }
+            return nil
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        recording = nil
+        tabDown = false
+        Hotkeys.paused = false
+    }
+}
+
+
+// MARK: - Appearance
+
+/// Light or dark, and one accent colour anywhere on the wheel.
+private struct LSAppearance: View {
+    @ObservedObject private var store = ThemeStore.shared
+    @State private var draft = ThemeStore.shared.accent
+    @State private var dragging = false
+    @Environment(\.colorScheme) private var scheme
+
+    private var modeBinding: Binding<String> {
+        Binding(get: { store.mode.rawValue }, set: { store.setMode(AppearanceMode(rawValue: $0) ?? .system) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            LSGroup {
+                LSRow("Mode", "System follows your Mac's Light or Dark setting.") {
+                    LSChoice(options: AppearanceMode.allCases.map { ($0.rawValue, $0.title) }, selection: modeBinding, width: 210)
+                }
+            }
+            LSGroupTitle("Accent colour")
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 10) {
+                    ForEach(AccentTheme.presets, id: \.name) { preset in swatch(preset.name, preset.theme) }
+                }
+                HueSlider(hue: Binding(get: { draft.hue ?? AccentTheme.limeHue },
+                                       set: { draft = AccentTheme(hue: $0) }),
+                          onCommit: { store.setAccent(draft) })
+                    .frame(height: 28)
+                preview
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .lsCard()
+            HStack {
+                Text("Drag along the spectrum for any colour. Text and buttons adjust themselves to stay readable.")
+                    .font(.geist(12)).foregroundStyle(Theme.inkTertiary.color).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 12)
+                LSButton("Reset", enabled: store.accent != .lime || store.mode != .system) {
+                    store.setAccent(.lime); store.setMode(.system); draft = .lime
+                }
+            }
+        }
+        .onChange(of: store.accent) { _, new in draft = new }
+    }
+
+    private func swatch(_ name: String, _ theme: AccentTheme) -> some View {
+        let on = isSame(draft, theme)
+        return Button {
+            withAnimation(Motion.still ? nil : Motion.animation(Motion.snappy)) { draft = theme }
+            store.setAccent(theme)
+        } label: {
+            Circle().fill(Color(nsColor: theme.fill)).frame(width: 22, height: 22)
+                .padding(3)
+                .overlay(Circle().strokeBorder(on ? Theme.ink.color : Color.clear, lineWidth: 2))
+                .scaleEffect(on ? 1.06 : 1)
+        }
+        .buttonStyle(.plain).help(name).accessibilityLabel(name)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
+    private func isSame(_ a: AccentTheme, _ b: AccentTheme) -> Bool {
+        switch (a.hue, b.hue) {
+        case (nil, nil): return true
+        case let (x?, y?): return abs(x - y) < 0.004
+        default: return false
+        }
+    }
+
+    /// How the chosen colour looks in use: a fill with its ink, and a link.
+    private var preview: some View {
+        let dark = scheme == .dark
+        return HStack(spacing: 16) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up").font(.system(size: 11, weight: .semibold))
+                Text("Send").font(.geist(13, .medium))
+            }
+            .foregroundStyle(Color(nsColor: draft.onFill))
+            .padding(.horizontal, 14).frame(height: 30)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(Color(nsColor: draft.fill)))
+            Text("A link in an answer").font(.geist(13, .medium)).foregroundStyle(Color(nsColor: draft.text(dark: dark)))
+            Text("Highlight").font(.geist(13))
+                .foregroundStyle(Theme.ink.color)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color(nsColor: draft.wash(dark: dark))))
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// A rainbow track with a knob. Updates as you drag; commits when you let go.
+private struct HueSlider: View {
+    @Binding var hue: Double
+    var onCommit: () -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, knob: CGFloat = 22
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(LinearGradient(colors: stride(from: 0.0, through: 1.0, by: 0.05).map { Color(hue: $0, saturation: 0.76, brightness: 1) },
+                                         startPoint: .leading, endPoint: .trailing))
+                    .frame(height: 12)
+                    .overlay(Capsule().strokeBorder(Theme.hairline.color, lineWidth: 1))
+                Circle().fill(Color(hue: hue, saturation: 0.76, brightness: 1))
+                    .frame(width: knob, height: knob)
+                    .overlay(Circle().strokeBorder(Color.white, lineWidth: 2.5))
+                    .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
+                    .offset(x: CGFloat(hue) * (w - knob))
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { v in hue = Double(min(max((v.location.x - knob / 2) / (w - knob), 0), 1)) }
+                .onEnded { _ in onCommit() })
+        }
+        .accessibilityElement()
+        .accessibilityLabel("Accent hue")
+        .accessibilityValue("\(Int(hue * 360)) degrees")
+        .accessibilityAdjustableAction { dir in
+            hue = min(max(hue + (dir == .increment ? 0.03 : -0.03), 0), 1)
+            onCommit()
         }
     }
 }

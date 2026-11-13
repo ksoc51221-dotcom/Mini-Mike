@@ -29,9 +29,9 @@ final class AgentDock {
     var hasRoom: Bool { entries.count - openAgents.filter(\.isEmptyChat).count < Settings.shared.maxAgents }
     var sidebarIsOpen: Bool { sidebar.isOpen }
 
-    // Background agents live in their own window at the top of the screen (AgentBar), not in this sidebar.
     init() {
         sidebar.onSelect = { [weak self] id in self?.select(id) }
+        sidebar.onStar = { [weak self] id in self?.entries.first(where: { $0.id == id })?.agent.toggleStar() }
         sidebar.onDelete = { [weak self] id in
             self?.entries.first(where: { $0.id == id })?.agent.close()
         }
@@ -102,6 +102,15 @@ final class AgentDock {
         let message = current.toggleEngine()
         let f = current.debugPanelFrame
         Toast.show(message, near: NSRect(x: f.midX, y: f.maxY, width: 1, height: 1))
+    }
+
+    /// Tap Shift twice: a screenshot of the screen goes into the open chat as context for the next question.
+    func attachScreenshotToOpenChat() {
+        guard let current = openAgents.last(where: \.isFocused) ?? front else {
+            Toast.show("Open a chat first, then tap Shift twice to add a screenshot.", near: NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y, width: 1, height: 1))
+            return
+        }
+        current.attachScreenshot()
     }
 
     /// A video agent (YouTube, listen along, or a file), opening near `point`.
@@ -224,7 +233,8 @@ final class AgentDock {
             // The status leads and, once Claude has filed the chat, its sector trails ("Done. Click to read · Math"),
             // so a narrow row clips the sector, never the status.
             let filed = agent.sector.map { " · \($0)" } ?? ""
-            return AgentSidebar.Row(id: entry.id, title: agent.title, subtitle: subtitle + filed, phase: agent.phase, isOpen: isOpen)
+            return AgentSidebar.Row(id: entry.id, title: agent.title, subtitle: subtitle + filed, phase: agent.phase, isOpen: isOpen,
+                                     starred: agent.isStarred, canStar: Settings.shared.saveHistory)
         })
     }
 

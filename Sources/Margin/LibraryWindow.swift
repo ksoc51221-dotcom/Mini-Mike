@@ -43,7 +43,6 @@ final class LibraryWindow {
     }
 
     var isVisible: Bool { window?.isVisible == true }
-    var isActiveApp: Bool { NSApp.isActive }
     var debugMode: LibraryState.Mode { state.mode }
     var debugWindow: NSWindow? { window }
     var debugState: LibraryState { state }
@@ -64,11 +63,11 @@ final class LibraryWindow {
         }
         Library.shared.applyRetention() // what's outlived the Bin / screenshot settings goes now, before you look at it
         if window == nil {
-            let host = NSHostingController(rootView: LibraryView(
+            let host = NSHostingController(rootView: ThemedRoot { LibraryView(
                 state: state,
                 onAsk: { [weak self] s, p in self?.onAsk?(s, p) },
                 onAskImage: { [weak self] data, app in self?.onAskImage?(data, app) },
-                onNewChat: { [weak self] in self?.onNewChat?() }))
+                onNewChat: { [weak self] in self?.onNewChat?() }) })
             let w = LibraryPanel(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 700),
                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView, .nonactivatingPanel],
                                  backing: .buffered, defer: false)
@@ -102,7 +101,7 @@ final class LibraryWindow {
 
 // MARK: - State
 
-/// One thing in the dashboard: a chat, a note, a screenshot, or (in the Bin) an agent.
+/// One thing in the dashboard: a chat, a note or a screenshot.
 struct ItemRef: Hashable {
     var kind: BinItem.Kind
     var id: UUID
@@ -126,6 +125,7 @@ final class LibraryState: ObservableObject {
             sector = nil
             kind = nil
             multi = []
+            selecting = false
             if let s = selection, !Self.shows(s.kind, in: mode) { selection = nil }
             rememberView()
         }
@@ -165,7 +165,7 @@ final class LibraryState: ObservableObject {
 
     /// Back to the Desk: nothing picked, no scope.
     func goDesk() {
-        selection = nil; multi = []; anchor = nil
+        selection = nil; multi = []; anchor = nil; selecting = false
         sector = nil; kind = nil; query = ""
         if mode != .chats { mode = .chats }
         browsing = false
@@ -236,7 +236,8 @@ final class LibraryState: ObservableObject {
         let noun: String
         switch ref.kind {
         case .chat:
-            guard library.chat(ref.id) != nil else { return }
+            guard let c = library.chat(ref.id) else { return }
+            guard !c.starred else { announce("Starred chats can't be deleted. Unstar it first.", undo: []); return }
             library.delete(chat: ref.id); noun = "Chat"
         case .note:
             guard library.notes.contains(where: { $0.id == ref.id }) else { return }
@@ -244,8 +245,6 @@ final class LibraryState: ObservableObject {
         case .screenshot:
             guard library.screenshot(ref.id) != nil else { return }
             library.delete(screenshot: ref.id); noun = "Screenshot"
-        case .agent:
-            return
         }
         if selection == ref { selection = next }
         announce("\(noun) moved to the Bin", undo: [ref.id])
@@ -255,25 +254,66 @@ final class LibraryState: ObservableObject {
     func clearMany(_ refs: [ItemRef], next: ItemRef? = nil) {
         let library = Library.shared
         var ids: [UUID] = []
+        var keptStarred = 0
         for ref in refs {
             switch ref.kind {
-            case .chat: if library.chat(ref.id) != nil { library.delete(chat: ref.id); ids.append(ref.id) }
+            case .chat:
+                if let c = library.chat(ref.id) {
+                    if c.starred { keptStarred += 1 } else if library.delete(chat: ref.id) { ids.append(ref.id) }
+                }
             case .note: if library.notes.contains(where: { $0.id == ref.id }) { library.delete(note: ref.id); ids.append(ref.id) }
             case .screenshot: if library.screenshot(ref.id) != nil { library.delete(screenshot: ref.id); ids.append(ref.id) }
-            case .agent: break
             }
         }
-        guard !ids.isEmpty else { return }
+        guard !ids.isEmpty else {
+            if keptStarred > 0 { announce("Starred chats can't be deleted. Unstar them first.", undo: []) }
+            return
+        }
         multi = []
-        if let sel = selection, refs.contains(sel) { selection = next }
-        announce(ids.count == 1 ? "Moved to the Bin" : "\(ids.count) items moved to the Bin", undo: ids)
+        picked = []
+        if let sel = selection, ids.contains(sel.id) { selection = next }
+        var text = ids.count == 1 ? "Moved to the Bin" : "\(ids.count) items moved to the Bin"
+        if keptStarred > 0 { text += " · \(keptStarred) starred kept" }
+        announce(text, undo: ids)
+    }
+
+    // MARK: Select mode (mass delete)
+
+    /// "Select" mode: rows get a checkbox, one click picks or drops a row, and the bar at the top deletes the lot.
+    @Published var selecting = false {
+        didSet { if !selecting { picked = [] } }
+    }
+    /// What's ticked in select mode (never a starred chat).
+    @Published var picked: Set<ItemRef> = []
+
+    /// Whether a row can be ticked: starred chats are protected.
+    static func deletable(_ item: FeedItem) -> Bool { !item.starred }
+
+    /// Ticks or unticks a row.
+    func toggle(_ item: FeedItem) {
+        guard Self.deletable(item) else { return }
+        if picked.contains(item.ref) { picked.remove(item.ref) } else { picked.insert(item.ref) }
+    }
+
+    /// Ticks every deletable row in the list, or clears them all if everything is already ticked.
+    func toggleAll(in feed: [FeedItem]) {
+        let all = Set(feed.filter(Self.deletable).map(\.ref))
+        picked = (picked == all) ? [] : all
+    }
+
+    /// Moves everything ticked to the Bin with one Undo, and leaves select mode.
+    func deletePicked(in feed: [FeedItem]) {
+        let refs = feed.map(\.ref).filter { picked.contains($0) }
+        selecting = false
+        guard !refs.isEmpty else { return }
+        clearMany(refs, next: nil)
     }
 
     /// Puts something back from the Bin.
     func restore(_ ref: ItemRef, next: ItemRef? = nil) {
         guard Bin.restore(ref.id) else { return }
         if selection == ref { selection = next }
-        announce(ref.kind == .agent ? "Agent is back on the bar" : "Put back", undo: [])
+        announce("Put back", undo: [])
     }
 
     /// Deletes one thing for good.
@@ -292,25 +332,17 @@ final class LibraryState: ObservableObject {
 
 /// What restoring and deleting for good mean for each kind of thing.
 enum Bin {
-    /// Puts a deleted thing back where it was: chats, notes and screenshots into their lists, an agent back on the agent bar.
+    /// Puts a deleted thing back where it was: chats, notes and screenshots into their lists.
     @discardableResult
     static func restore(_ id: UUID) -> Bool {
-        guard let item = Library.shared.binItem(id) else { return false }
-        if item.kind == .agent {
-            guard TaskEngine.shared.restore(id) != nil else { return false }
-            AgentBar.shared.show()
-            return true
-        }
-        return Library.shared.restore(id)
+        Library.shared.restore(id)
     }
 
     static func deleteForever(_ id: UUID) {
-        if Library.shared.binItem(id)?.kind == .agent { TaskEngine.shared.forgetBinned(id) }
         Library.shared.deleteForever(id)
     }
 
     static func empty() {
-        for item in Library.shared.binned where item.kind == .agent { TaskEngine.shared.forgetBinned(item.id) }
         Library.shared.emptyBin()
     }
 }
@@ -327,7 +359,6 @@ enum Ink {
     static let container = Theme.surfaceRaised.color
     /// Selected rows (inkTertiary falls to 4.1 on it: meta text there is `onVariant`).
     static let high = Theme.surfaceSelected.color
-    static let variant = Theme.hairline.color
     static let strong = Theme.hairlineStrong.color
     static let outline = Theme.inkTertiary.color
     static let onSurface = Theme.ink.color
@@ -338,7 +369,6 @@ enum Ink {
     static let accent = Theme.accent.color
     static let onAccent = Theme.onAccent.color
     static let wash = Theme.accentWash.color
-    static let secondary = Theme.done.color
     static let error = Theme.alert.color
     /// Hairlines between panes and rows.
     static let edge = Theme.hairline.color
@@ -355,7 +385,7 @@ func sectorColor(_ name: String) -> Color { Theme.ink.color }
 
 /// A sector's glyph (the user's pick, else the default for its name). Static in lists; `active` on hover or selection.
 func sectorGlyph(_ name: String, size: CGFloat = 14, active: Bool = false, animated: Bool = false, color: Color? = nil) -> Glyph {
-    Glyph(kind: name == "Agent" ? .terminal : SectorStore.shared.icon(for: name), size: size, color: color ?? Ink.onSurface, animated: animated, active: active)
+    Glyph(kind: SectorStore.shared.icon(for: name), size: size, color: color ?? Ink.onSurface, animated: animated, active: active)
 }
 
 /// The one list/sidebar mark: a 14pt glyph in an 18pt cell (same left inset and size everywhere), nudged up half a point so its centre
@@ -364,8 +394,6 @@ func sectorMark(_ name: String, active: Bool = false) -> some View {
     sectorGlyph(name, size: 14, active: active).frame(width: 18, height: 18).offset(y: -0.5)
 }
 
-/// A count with no zero padding: 3, 42, 128.
-func pad2(_ n: Int) -> String { String(n) }
 
 enum SectorOrder {
     private static var cache: [String: Int] = [:]
@@ -577,7 +605,7 @@ struct VLine: View { var body: some View { Ink.edge.frame(width: 1) } }
 
 // MARK: - What the lists show
 
-/// A row in the lists: a chat, a note, a screenshot, or (in the Bin) an agent.
+/// A row in the lists: a chat, a note or a screenshot.
 struct FeedItem: Identifiable, Equatable {
     var ref: ItemRef
     var id: ItemRef { ref }
@@ -593,6 +621,10 @@ struct FeedItem: Identifiable, Equatable {
     var quizzed = false
     /// What was highlighted (the stand-in for a bad title).
     var quote = ""
+    /// A starred chat: pinned to the top, and it can't be deleted.
+    var starred = false
+    /// In "To review" (a quiz you missed, or you put it there).
+    var inReview = false
 
     var headline: (text: String, quoted: Bool) { Feed.headline(title: title, quote: quote) }
 
@@ -601,12 +633,11 @@ struct FeedItem: Identifiable, Equatable {
         case .chat: return "Chat"
         case .note: return "Note"
         case .screenshot: return "Shot"
-        case .agent: return "Agent"
         }
     }
 
-    /// The dot beside the sector: a sector's own color, or the agents' blue.
-    var dot: Color { ref.kind == .agent ? sectorColor("Agent") : sectorColor(sector) }
+    /// The dot beside the sector: a sector's own color.
+    var dot: Color { sectorColor(sector) }
 
     /// What kind of thing it is, for the lists that mix them.
     var symbol: String {
@@ -614,7 +645,6 @@ struct FeedItem: Identifiable, Equatable {
         case .chat: return "bubble.left.fill"
         case .note: return "bookmark.fill"
         case .screenshot: return "camera.fill"
-        case .agent: return "pawprint.fill"
         }
     }
 
@@ -623,6 +653,8 @@ struct FeedItem: Identifiable, Equatable {
         title = chat.title; sector = chat.sector; snippet = chat.snippet; date = chat.updated
         quizzed = !chat.quizzes.isEmpty
         quote = chat.quote
+        starred = chat.starred
+        inReview = chat.inReview
     }
 
     init(note: Note) {
@@ -653,6 +685,11 @@ struct FeedGroup: Identifiable {
 }
 
 enum Feed {
+    /// Starred rows first, each half keeping its order.
+    static func starredFirst(_ items: [FeedItem]) -> [FeedItem] {
+        items.filter(\.starred) + items.filter { !$0.starred }
+    }
+
     /// Today, Yesterday, Previous 7 days, Previous 30 days, then a month.
     static func dayLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
@@ -666,10 +703,12 @@ enum Feed {
         return f.string(from: date)
     }
 
-    /// Items already in order, split into runs under the same day label.
+    /// Items already in order: the starred ones first under "Starred", then runs under the same day label.
     static func groups(_ items: [FeedItem], now: Date = Date(), calendar: Calendar = .current) -> [FeedGroup] {
         var out: [FeedGroup] = []
-        for item in items {
+        let stars = items.filter(\.starred)
+        if !stars.isEmpty { out.append(FeedGroup(label: "Starred", items: stars)) }
+        for item in items where !item.starred {
             let label = dayLabel(item.date, now: now, calendar: calendar)
             if let last = out.last, last.label == label { out[out.count - 1].items.append(item) } else { out.append(FeedGroup(label: label, items: [item])) }
         }
@@ -709,12 +748,6 @@ enum Feed {
         f.calendar = calendar; f.timeZone = calendar.timeZone
         f.dateFormat = days < 7 ? "EEE" : "d MMM"
         return f.string(from: date)
-    }
-
-    /// The same path pieces in plain words ("Computer Science" / "Avoiding the vibe-coded look"), clipped to fit.
-    static func crumb(_ text: String, limit: Int = 40) -> String {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.count > limit ? String(t.prefix(limit - 1)) + "…" : t
     }
 
     /// "computer_science" / "avoiding-the-vibe-coded-look": for the path across the top of a page.
@@ -794,6 +827,9 @@ struct LibraryView: View {
     @State private var confirmClear = false
     @State private var confirmClearShots = false
     @State private var confirmEmpty = false
+    @State private var assistantOpen = LibraryView.debugAssistantOpen
+    /// Pictures open the Assistant's card this way.
+    nonisolated(unsafe) static var debugAssistantOpen = false
     @FocusState private var searchFocused: Bool
     @FocusState private var listFocused: Bool
     @Namespace private var rowSelection
@@ -825,6 +861,13 @@ struct LibraryView: View {
             .animation(LibMotion.panel, value: state.isDesk)
         }
         .background(Ink.lowest)
+        .overlay(alignment: .bottomLeading) {
+            if assistantOpen {
+                AssistantCard { withAnimation(LibMotion.panel) { assistantOpen = false } }
+                    .padding(.leading, 236).padding(.bottom, 16)
+                    .transition(LibMotion.reduce ? .opacity : .opacity.combined(with: .scale(scale: 0.95, anchor: .bottomLeading)))
+            }
+        }
         .onPreferenceChange(ProbeKey.self) { DashboardProbe.frames = $0 }
         .ignoresSafeArea(.container, edges: .top) // the sidebar takes the title bar's place
         .onChange(of: state.searchFocus) { _, _ in searchFocused = true }
@@ -838,7 +881,7 @@ struct LibraryView: View {
                 if state.mode == .chats || state.mode == .all { state.selection = nil }
                 if !ids.isEmpty { state.announce("\(ids.count) chat\(ids.count == 1 ? "" : "s") moved to the Bin", undo: ids) }
             }
-        } message: { Text("Your notes aren't touched. You can put them back from the Bin \(Library.binDays > 0 ? "for \(Library.binDays) days" : "until you empty it").") }
+        } message: { Text("Starred chats and your notes aren't touched. You can put the rest back from the Bin \(Library.binDays > 0 ? "for \(Library.binDays) days" : "until you empty it").") }
         .confirmationDialog("Move every saved screenshot to the Bin?", isPresented: $confirmClearShots) {
             Button("Move all screenshots to the Bin", role: .destructive) {
                 let ids = library.deleteAllScreenshots()
@@ -912,7 +955,7 @@ struct LibraryView: View {
                         navRow("bubble.left.and.bubble.right", "bubble.left.and.bubble.right.fill", "Chats", library.chats.count, .chats)
                         navRow("book", "book.fill", "Notes", library.notes.count, .notebook)
                         navRow("camera.viewfinder", "camera.viewfinder", "Screenshots", library.screenshots.count, .screenshots)
-                        navRow("checkmark.circle", "checkmark.circle.fill", "To review", Review.chats(library.chats).count, .review, glyph: .check)
+                        navRow("bookmark", "bookmark.fill", "To review", Review.chats(library.chats).count, .review)
                     }
                     .padding(.horizontal, 10)
                     .bootIn(3)
@@ -932,6 +975,14 @@ struct LibraryView: View {
                 }
                 .padding(.bottom, 12)
             }
+            .mask(VStack(spacing: 0) { // the list fades out above the Assistant instead of being cut off
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 18)
+            })
+            Rectangle().fill(Ink.onSurface.opacity(0.16)).frame(height: 1).padding(.horizontal, 10).padding(.top, 4)
+            AssistantOrbButton(open: assistantOpen) { withAnimation(LibMotion.panel) { assistantOpen.toggle() } }
+                .padding(.horizontal, 10).padding(.top, 6)
+                .bootIn(6)
             VStack(spacing: 0) {
                 NavRow(symbol: "trash", activeSymbol: "trash.fill", title: "Bin", count: 0, active: !state.isDesk && state.mode == .bin, ns: navSelection,
                        hoverNote: Library.binDays > 0 ? "Empties after \(Library.binDays) days" : "Empties when you empty it") { open(.bin) }
@@ -1081,7 +1132,7 @@ struct LibraryView: View {
                 if library.chat(ref.id)?.sector != sector { library.move(ref.id, toSector: sector); moved += 1 }
             case .screenshot:
                 if library.screenshot(ref.id)?.sector != sector { library.move(screenshot: ref.id, toSector: sector); moved += 1 }
-            case .note, .agent:
+            case .note:
                 break
             }
         }
@@ -1128,7 +1179,7 @@ struct LibraryView: View {
         case .bin: out = library.search(bin: q, kind: state.kind).map { FeedItem(binned: $0, library: library) }
         }
         out.sort { state.newestFirst ? $0.date > $1.date : $0.date < $1.date }
-        return out
+        return Feed.starredFirst(out) // (the arrow keys and ⇧-click follow this order, so it must match what's drawn)
     }
 
     private var listTitle: String {
@@ -1166,19 +1217,32 @@ struct LibraryView: View {
     private func listHeader(_ feed: [FeedItem]) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                if state.mode == .bin {
-                    KindPicker(kind: $state.kind, includesAgents: true)
+                if state.selecting && state.mode != .bin {
+                    selectBar(feed)
                 } else {
-                    if let s = state.sector { sectorMark(s, active: true) }
-                    Text(listTitle).font(.mUI.weight(.semibold)).foregroundStyle(Ink.onSurface).lineLimit(1)
-                    if let n = Theme.count(feed.count) {
-                        Text(n).libCount()
-                            .contentTransition(.numericText()).animation(LibMotion.small, value: feed.count)
+                    if state.mode == .bin {
+                        KindPicker(kind: $state.kind)
+                    } else {
+                        if let s = state.sector { sectorMark(s, active: true) }
+                        Text(listTitle).font(.mUI.weight(.semibold)).foregroundStyle(Ink.onSurface).lineLimit(1)
+                        if let n = Theme.count(feed.count) {
+                            Text(n).libCount()
+                                .contentTransition(.numericText()).animation(LibMotion.small, value: feed.count)
+                        }
                     }
-                }
-                Spacer(minLength: 4)
-                BarIconButton(symbol: "arrow.up.arrow.down", help: state.newestFirst ? "Newest first (click for oldest first)" : "Oldest first (click for newest first)") {
-                    state.newestFirst.toggle()
+                    Spacer(minLength: 4)
+                    if state.mode != .bin && !feed.isEmpty {
+                        // Always in view, and labelled: this is how you clear many at once.
+                        Button { withAnimation(LibMotion.small) { state.selecting = true; state.multi = [] } } label: {
+                            Text("Select").font(.geist(12, .semibold)).foregroundStyle(Ink.onVariant)
+                                .padding(.horizontal, 8).frame(height: 24)
+                        }
+                        .buttonStyle(LibPressStyle())
+                        .help("Pick several to delete at once").accessibilityLabel("Select several").probe("select-mode")
+                    }
+                    BarIconButton(symbol: "arrow.up.arrow.down", help: state.newestFirst ? "Newest first (click for oldest first)" : "Oldest first (click for newest first)") {
+                        state.newestFirst.toggle()
+                    }
                 }
             }
             .padding(.horizontal, 12).frame(height: 46)
@@ -1186,6 +1250,32 @@ struct LibraryView: View {
         }
         .padding(.top, 6)
         .background(Ink.lowest)
+    }
+
+    /// What replaces the list title while you pick rows: Cancel, how many, All, and the delete button.
+    private func selectBar(_ feed: [FeedItem]) -> some View {
+        let allTicked = !feed.filter(LibraryState.deletable).isEmpty && state.picked == Set(feed.filter(LibraryState.deletable).map(\.ref))
+        let n = state.picked.count
+        return HStack(spacing: 8) {
+            Button("Cancel") { withAnimation(LibMotion.small) { state.selecting = false } }
+                .buttonStyle(.plain).font(.geist(12, .semibold)).foregroundStyle(Ink.onVariant)
+                .accessibilityLabel("Cancel selecting").probe("select-cancel")
+            Text(n == 0 ? "Pick items" : "\(n) selected").font(.mUI.weight(.semibold)).foregroundStyle(Ink.onSurface).lineLimit(1)
+                .contentTransition(.numericText()).animation(LibMotion.small, value: n)
+            Spacer(minLength: 4)
+            Button(allTicked ? "None" : "All") { state.toggleAll(in: feed) }
+                .buttonStyle(.plain).font(.geist(12, .semibold)).foregroundStyle(Ink.onVariant)
+                .help(allTicked ? "Untick everything" : "Tick everything in this list (starred chats are skipped)")
+                .accessibilityLabel(allTicked ? "Select none" : "Select all").probe("select-all")
+            Button { withAnimation(LibMotion.small) { state.deletePicked(in: feed) } } label: {
+                Text(n == 0 ? "Delete" : "Delete \(n)").font(.geist(12, .semibold))
+                    .foregroundStyle(n == 0 ? Ink.outline : Ink.error)
+                    .padding(.horizontal, 8).frame(height: 24)
+            }
+            .buttonStyle(LibPressStyle()).disabled(n == 0)
+            .help("Move the ticked items to the Bin (Undo is on the bar that appears)")
+            .accessibilityLabel("Delete selected").probe("select-delete")
+        }
     }
 
     private var binBanner: some View {
@@ -1256,12 +1346,16 @@ struct LibraryView: View {
                         Section {
                             ForEach(group.items) { item in
                                 FeedCard(item: item,
-                                         selected: state.multi.isEmpty ? state.selection == item.ref : state.multi.contains(item.ref),
-                                         lone: state.multi.isEmpty,
+                                         selected: state.selecting ? state.picked.contains(item.ref)
+                                             : (state.multi.isEmpty ? state.selection == item.ref : state.multi.contains(item.ref)),
+                                         lone: state.multi.isEmpty && !state.selecting,
+                                         checkMode: state.selecting && state.mode != .bin,
+                                         onStar: { library.setStarred(item.ref.id, !item.starred) },
+                                         onReview: { library.setReview(item.ref.id, !item.inReview) },
                                          showKind: mixed, inBin: state.mode == .bin, hideMark: state.sector != nil,
                                          hovered: state.debugHover == item.ref, lifted: state.debugLift == item.ref || state.dragging.contains(item.ref),
                                          dragCount: state.dragging.count, index: indexOf[item.ref] ?? 99, ns: rowSelection, sectors: sectors,
-                                         onSelect: { pick(item.ref, in: feed) },
+                                         onSelect: { if state.selecting && state.mode != .bin { state.toggle(item) } else { pick(item.ref, in: feed) } },
                                          onClear: { state.clear(item.ref, next: neighbor(of: item.ref, in: feed)) },
                                          onRestore: { state.restore(item.ref, next: neighbor(of: item.ref, in: feed)) },
                                          onForever: { state.deleteForever(item.ref, next: neighbor(of: item.ref, in: feed)) },
@@ -1302,6 +1396,7 @@ struct LibraryView: View {
                 return .handled
             }
             .onKeyPress(.escape) {
+                if state.selecting { withAnimation(LibMotion.small) { state.selecting = false }; return .handled }
                 if state.multi.count > 1 { state.multi = [] } else { withAnimation(LibMotion.panel) { state.goDesk() } }
                 return .handled
             }
@@ -1522,8 +1617,7 @@ struct DeskRow: View {
                     .frame(minWidth: 44, alignment: .trailing)
             }
             .padding(.horizontal, 10).frame(height: 44)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hover ? Ink.container : .clear))
-            .contentShape(Rectangle())
+            .rowHoverFill(hover)
         }
         .buttonStyle(LibPressStyle())
         .onHover { hover = $0 }
@@ -1593,8 +1687,7 @@ struct ReviewRow: View {
                 Text(Feed.ago(note.created)).mMetaStyle().foregroundStyle(Ink.outline)
             }
             .padding(.horizontal, 10).frame(height: 44)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hover ? Ink.container : .clear))
-            .contentShape(Rectangle())
+            .rowHoverFill(hover)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -1754,8 +1847,7 @@ struct NewSectorRow: View {
             }
             .foregroundStyle(hover ? Ink.onSurface : Ink.outline)
             .padding(.horizontal, 10).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hover ? Ink.container : .clear))
-            .contentShape(Rectangle())
+            .rowHoverFill(hover)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -1775,6 +1867,11 @@ struct FeedCard: View {
     let selected: Bool
     /// Exactly one row is picked (the sliding indicator belongs to it); false while several are.
     let lone: Bool
+    /// Select mode: a checkbox leads the row and a click ticks it.
+    var checkMode = false
+    /// Stars or unstars the chat.
+    var onStar: () -> Void = {}
+    var onReview: () -> Void = {}
     let showKind: Bool
     let inBin: Bool
     let hideMark: Bool
@@ -1806,9 +1903,19 @@ struct FeedCard: View {
                     }
                     .buttonStyle(LibPressStyle()).help("Put it back where it was").accessibilityLabel("Restore").probe("restore:\(item.ref.id)")
                     FeedCardButton(symbol: "xmark.bin", help: "Delete forever", danger: true, alwaysDanger: true, probe: "forever:\(item.ref.id)", action: onForever)
-                } else {
-                    FeedCardButton(symbol: "trash", help: "Move to Bin", danger: true, probe: "clear:\(item.ref.id)", action: onClear)
-                        .opacity(pointerOver ? 1 : 0).allowsHitTesting(pointerOver)
+                } else if !checkMode {
+                    if item.ref.kind == .chat {
+                        FeedCardButton(symbol: item.inReview ? "bookmark.fill" : "bookmark", help: item.inReview ? "Take out of To review" : "Add to To review",
+                                       probe: "review:\(item.ref.id)", action: onReview)
+                            .opacity(pointerOver || item.inReview ? 1 : 0).allowsHitTesting(pointerOver || item.inReview)
+                        FeedCardButton(symbol: item.starred ? "star.fill" : "star", help: item.starred ? "Unstar" : "Star (keeps it at the top and safe from delete)",
+                                       probe: "star:\(item.ref.id)", action: onStar)
+                            .opacity(pointerOver || item.starred ? 1 : 0).allowsHitTesting(pointerOver || item.starred)
+                    }
+                    if !item.starred {
+                        FeedCardButton(symbol: "trash", help: "Move to Bin", danger: true, probe: "clear:\(item.ref.id)", action: onClear)
+                            .opacity(pointerOver ? 1 : 0).allowsHitTesting(pointerOver)
+                    }
                 }
             }
             .padding(.trailing, 12).padding(.bottom, inBin ? 6 : 5)
@@ -1856,7 +1963,15 @@ struct FeedCard: View {
                     }
                 }
                 Divider()
-                Button("Move to Bin", role: .destructive, action: onClear)
+                if item.ref.kind == .chat {
+                    Button(item.starred ? "Unstar" : "Star", action: onStar)
+                    Button(item.inReview ? "Take out of To review" : "Add to To review", action: onReview)
+                }
+                if item.starred {
+                    Button("Move to Bin") {}.disabled(true) // protected until you unstar it
+                } else {
+                    Button("Move to Bin", role: .destructive, action: onClear)
+                }
             }
         }
     }
@@ -1866,6 +1981,18 @@ struct FeedCard: View {
         let compact = density == LibraryRowDensity.compact.rawValue
         let lead: CGFloat = hideMark ? 0 : 24
         return HStack(alignment: .top, spacing: 10) {
+            if checkMode {
+                // A starred chat can't be ticked: it shows its star where the box would be.
+                Group {
+                    if item.starred {
+                        Image(systemName: "star.fill").foregroundStyle(Ink.outline)
+                    } else {
+                        MarginDoneBadge(on: selected, size: 16)
+                    }
+                }
+                .font(.system(size: 14)).frame(width: 18).padding(.top, 1)
+                .help(item.starred ? "Starred, so it can't be deleted" : "")
+            }
             if let thumb = item.thumb { ScreenshotThumb(url: thumb, height: 40).padding(.top, 1) }
             VStack(alignment: .leading, spacing: compact ? 1 : 3) {
                 HStack(spacing: 6) {
@@ -1879,6 +2006,9 @@ struct FeedCard: View {
                         .font(head.quoted ? .geistItalic(13) : .mUI.weight(.semibold))
                         .foregroundStyle(Ink.onSurface).lineLimit(1)
                     Spacer(minLength: 6)
+                    if item.starred && !checkMode && item.ref.kind != .chat { // a chat's star is the clickable one at the card's corner
+                        Image(systemName: "star.fill").font(.system(size: 10)).foregroundStyle(selected ? Ink.onVariant : Ink.outline).help("Starred")
+                    }
                     if item.quizzed {
                         Image(systemName: "questionmark.circle").font(.system(size: 10)).foregroundStyle(selected ? Ink.onVariant : Ink.outline).help("Quizzed")
                     }
@@ -2074,11 +2204,10 @@ private struct MovePickerRow: View {
                 sectorMark(name, active: hover)
                 Text(name).font(.mUI).foregroundStyle(Ink.onSurface).lineLimit(1)
                 Spacer(minLength: 0)
-                if current { Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Ink.onSurface) }
+                if current { MarginDoneBadge(on: true, size: 14) }
             }
             .padding(.horizontal, 10).frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hover ? Ink.container : .clear))
-            .contentShape(Rectangle())
+            .rowHoverFill(hover)
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
@@ -2220,15 +2349,12 @@ struct BarIconButton: View {
     }
 }
 
-/// All · Chats · Notes · Shots (· Agents in the Bin).
+/// All · Chats · Notes · Shots.
 struct KindPicker: View {
     @Binding var kind: BinItem.Kind?
-    let includesAgents: Bool
 
     private var options: [(label: String, value: BinItem.Kind?)] {
-        var out: [(String, BinItem.Kind?)] = [("All", nil), ("Chats", .chat), ("Notes", .note), ("Shots", .screenshot)]
-        if includesAgents { out.append(("Agents", .agent)) }
-        return out
+        [("All", nil), ("Chats", .chat), ("Notes", .note), ("Shots", .screenshot)]
     }
 
     var body: some View {
@@ -2410,11 +2536,18 @@ struct ChatDetail: View {
     var body: some View {
         VStack(spacing: 0) {
             DetailHeader(sector: chat.sector, app: chat.app, when: chat.created, moveRequest: moveRequest, onMove: onMove) {
+                BarIconButton(symbol: chat.starred ? "star.fill" : "star", help: chat.starred ? "Unstar" : "Star (keeps it at the top and safe from delete)") {
+                    Library.shared.setStarred(chat.id, !chat.starred)
+                }
                 BarIconButton(symbol: "questionmark.bubble", help: "Quiz me on this") { onAsk(digest, Prompts.quiz) }
                 BarIconButton(symbol: "doc.on.doc", help: "Copy as Markdown") { copy() }
             } after: {
                 Menu {
-                    Button("Move to Bin", role: .destructive, action: onClear)
+                    if chat.starred {
+                        Button("Unstar to delete") { Library.shared.setStarred(chat.id, false) }
+                    } else {
+                        Button("Move to Bin", role: .destructive, action: onClear)
+                    }
                 } label: {
                     Image(systemName: "ellipsis").font(.system(size: 12, weight: .semibold)).foregroundStyle(Ink.outline)
                         .frame(width: 26, height: 26).contentShape(Rectangle())
@@ -2667,7 +2800,7 @@ struct BinDetail: View {
                 Button(action: onRestore) {
                     Label("Restore", systemImage: "arrow.uturn.backward").secondaryButtonLook(height: 24)
                 }
-                .buttonStyle(LibPressStyle()).help(item.kind == .agent ? "Put the agent back on the bar" : "Put it back where it was")
+                .buttonStyle(LibPressStyle()).help("Put it back where it was")
                 .accessibilityLabel("Restore")
             } after: {
                 BarIconButton(symbol: "xmark.bin", help: "Delete forever", danger: true, action: onForever)
@@ -2728,47 +2861,14 @@ struct BinDetail: View {
                     Text(shot.text).font(.mUI).foregroundStyle(Ink.onVariant).textSelection(.enabled)
                 }
             }
-        case .agent:
-            if let agent = item.agent { agentPreview(agent) }
         }
     }
+}
 
-    @ViewBuilder
-    private func agentPreview(_ agent: BinnedTask) -> some View {
-        let outcome: String = {
-            switch agent.outcome {
-            case .done: return "Finished"
-            case .failed: return "Failed"
-            case .cancelled: return "Stopped"
-            case .unfinished: return "Hadn't finished"
-            }
-        }()
-        HStack(spacing: 8) {
-            Chip(text: "Agent", tone: .primary, sector: "Agent")
-            Chip(text: outcome)
-            if agent.tokens > 0 { Chip(text: "≈\(agent.tokens) tokens") }
-        }
-        Text(agent.title).font(.mHeading).foregroundStyle(Ink.onSurface)
-        Text(agent.headline).font(.mBody).foregroundStyle(Ink.onVariant)
-        if !agent.lines.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(agent.lines.enumerated()), id: \.offset) { _, line in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("•").foregroundStyle(Ink.outline)
-                        Text(line).font(.mUI).foregroundStyle(Ink.onVariant).textSelection(.enabled)
-                    }
-                }
-            }
-        }
-        ForEach(Array(agent.links.enumerated()), id: \.offset) { _, link in
-            if let url = URL(string: link.url) {
-                Button { NSWorkspace.shared.open(url) } label: { Label(link.title, systemImage: "arrow.up.right.square").font(.mCode).foregroundStyle(Ink.primary) }
-                    .buttonStyle(.plain)
-            }
-        }
-        Text(agent.outcome == .unfinished && agent.spec != nil
-             ? "Restore runs it again from what you asked."
-             : "Restore puts it back on the agent bar.")
-            .font(.mUI).foregroundStyle(Ink.outline)
+private extension View {
+    /// A list row's hover highlight; the whole row stays clickable, not just its text.
+    func rowHoverFill(_ hover: Bool) -> some View {
+        background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hover ? Ink.container : .clear))
+            .contentShape(Rectangle())
     }
 }

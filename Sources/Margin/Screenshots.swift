@@ -87,8 +87,29 @@ enum ScreenshotLabel {
     static func quick(app: String, windowTitle: String, text: String) -> String {
         let clean = cleanWindowTitle(windowTitle, app: app)
         if clean.filter(\.isLetter).count >= 4, let t = ChatNaming.cleanTitle(clean) { return t }
-        if let heading = Tidy.heuristicTitle(text), let t = ChatNaming.cleanTitle(heading) { return t }
+        if let heading = heuristicTitle(text), let t = ChatNaming.cleanTitle(heading) { return t }
         return app.isEmpty ? "Screenshot" : "Screenshot from \(app)"
+    }
+
+    /// A short name from the screenshot's text alone (no Claude): the most title-like line near the top.
+    static func heuristicTitle(_ text: String) -> String? {
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        func score(_ l: String) -> Int {
+            let letters = l.filter(\.isLetter).count
+            guard letters >= 8, l.count <= 70, Double(letters) / Double(l.count) > 0.7 else { return 0 }
+            return letters
+        }
+        let best = lines.prefix(12).max { score($0) < score($1) }
+        guard let best, score(best) > 0 else { return nil }
+        return sanitize(best)
+    }
+
+    /// A string that's safe as part of a file name.
+    static func sanitize(_ s: String, limit: Int = 60) -> String {
+        var t = s.components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)).joined(separator: " ")
+        t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: ".")))
+        if t.count > limit { t = String(t.prefix(limit)).trimmingCharacters(in: .whitespaces) }
+        return t
     }
 
     /// A subject for the sector list: from the words in it, else from the kind of app.

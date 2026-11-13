@@ -7,7 +7,9 @@ enum Prompts {
         let rawValue: Int
         static let voice = Features(rawValue: 1)
         static let graphs = Features(rawValue: 2)
-        static let all: Features = [.voice, .graphs]
+        /// Just the short rule that makes equations come out typeset (LaTeX). Graph chats get it too.
+        static let maths = Features(rawValue: 4)
+        static let all: Features = [.voice, .graphs, .maths]
     }
 
     static func system(webSearch: Bool, sectors: [String] = Sector.defaults, sectorHints: [String: String] = [:], features: Features = .all) -> String {
@@ -25,6 +27,7 @@ enum Prompts {
         }
         if features.contains(.voice) { rules.append(sayRule) }
         if features.contains(.graphs) { rules.append(Prompts.graphs) }
+        if features.contains(.graphs) || features.contains(.maths) { rules.append(mathsRule) }
         rules += [
             "Add one tiny concrete example only if it genuinely makes it click.",
             "No headers, no long bullet lists, no preamble, and don't restate or summarize the passage back to them.",
@@ -85,12 +88,15 @@ enum Prompts {
         }
     }
 
+    /// Working is long; it should still be easy to take in: a headline, short numbered steps, room to breathe.
+    private static let digestible = "Make it easy to take in, not shorter: open with one bold line saying the approach, then numbered steps with one idea each (a bold few-word name for the step, then at most two short sentences), a blank line between steps, and each line of working on its own line. No walls of text."
+
     private static func hintInstruction(_ level: Int) -> String {
         switch level {
         case 1: return "give the bare minimum nudge: one short sentence on where to look or what to think about. Don't name the method, do any working or give the answer."
         case 2: return "name the idea or method that applies and why it fits, in one or two sentences. Don't do any working or give the answer."
-        case 3: return "walk me through the working up to the last step, and leave that last step for me. Don't give the final answer."
-        default: return "give the full working step by step, with the final answer. Ignore the usual length limit for this."
+        case 3: return "walk me through the working up to the last step, and leave that last step for me. Don't give the final answer. " + digestible + " End with one line starting \"Your turn:\" that points at the last step."
+        default: return "give the full working step by step, with the final answer. Ignore the usual length limit for this. " + digestible + " End with the final answer in bold on its own line."
         }
     }
 
@@ -127,8 +133,14 @@ enum Prompts {
     pronunciation.
     """
 
+    /// Equations as LaTeX, which Margin typesets. Without this the model writes x^(-3/2) as plain text.
+    static let mathsRule = "Write maths as LaTeX that Margin typesets: $…$ for a symbol or short expression inside a sentence (like $v_y$, $\\theta$, $\\sqrt{2}$, $x^{-3/2}$), and $$…$$ on its own line for each key equation (like $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$). Even a simple fraction or power goes in $…$. Write money as plain \\$5 or \"5 dollars\", never inside $…$. Everything else stays plain text."
+
     private static func regex(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: [.caseInsensitive]) }
     private static let voiceWords = regex(#"\b(?:pronounc\w*|say (?:it|this|that|these)|how (?:do|would|to) (?:you |i )?say|out loud|aloud|accent|ipa|stress(?:ed)?|sounds? like|read (?:it|this|that) (?:out|aloud))\b"#)
+    /// Maths in the question or highlight: carets, roots, number fractions, "2x", or maths words.
+    private static let mathSymbols = regex(#"\^|√|∫|∑|π|≤|≥|\d\s*/\s*\d|\b\d+[a-z]\b|\b[a-z]\s*=\s*[-\d(]"#)
+    private static let mathWords = regex(#"\b(?:solve|simplify|factor(?:ise|ize|ing)?|expand|integra\w*|differentiat\w*|derivatives?|equations?|formulas?|fractions?|exponents?|powers?|roots?|logs?|logarithms?|sin|cos|tan|lim|limits? (?:as|of)|matrix|matrices|proof|prove|theorem|algebra|calculus|calculate|compute|quadratic|polynomials?|inequalit\w*|radicals?|surds?|velocity|acceleration|energy|normal form|standard form)\b"#)
     private static let graphWords = regex(#"\b(?:graphs?|plot|plots|chart|charts|draw|diagrams?|visuali[sz]\w*|curves?|sketch|illustrate|sliders?|show me|picture this|supply|demand|equilibrium|parabolas?|quadratic|derivative|tangent|vertex|slope|function|equation|probability|distribution|vector|trigonometr\w*|sine|cosine|elasticity)\b"#)
 
     /// Which long prompt sections this question is likely to need, decided on this Mac from the words used and the highlight.
@@ -140,16 +152,20 @@ enum Prompts {
             || Sector.guess(from: selection) == "Language" { out.insert(.voice) }
         if question == visualize || has(graphWords, question)
             || ["Math", "Economics", "Physics"].contains(Sector.guess(from: selection) ?? "") { out.insert(.graphs) }
+        if has(mathSymbols, text) || has(mathWords, text)
+            || ["Math", "Economics", "Physics", "Chemistry"].contains(Sector.guess(from: selection) ?? "") { out.insert(.maths) }
         return out
     }
 
     /// A section the chat's prompt left out but a later question needs: sent with that question instead.
     static func extraInstructions(for question: String, have: Features) -> (text: String, added: Features)? {
-        let needed = features(question: question, selection: "").subtracting(have)
+        var needed = features(question: question, selection: "").subtracting(have)
+        if have.contains(.graphs) { needed.remove(.maths) } // a graph chat's prompt already has the maths rule
         guard !needed.isEmpty else { return nil }
         var parts: [String] = []
         if needed.contains(.voice) { parts.append(sayRule) }
         if needed.contains(.graphs) { parts.append(graphs) }
+        if needed.contains(.maths) { parts.append(mathsRule) }
         return ("Extra instructions for this answer:\n" + parts.joined(separator: "\n\n"), needed)
     }
 
@@ -237,6 +253,8 @@ enum Prompts {
         with: "You may be sent a snip or a screenshot of their screen: look at it when the question is about it. You can't search the web: only if the question truly depends on recent facts, exact numbers or versions, say so in one short sentence instead of guessing.")
 
     static let emptySubmit = "Explain this more simply."
+    /// Sent when you add a screenshot and press return without typing.
+    static let aboutScreenshot = "What's in the screenshot I added? Explain what matters in it."
 
     // MARK: Whole page / PDF
 
@@ -353,25 +371,23 @@ enum Prompts {
     static func videoRequest(_ style: SummaryStyle, language: String, link: String?) -> String {
         let stamp = stampPhrase(link: link)
         var parts = ["""
-        Summarize this video for me. This is a summary request, so ignore the usual short-answer limit. I don't need every \
-        point: keep it tight (about 450 words in all) and use exactly this structure, with these headings:
+        Summarize this video for me. This is a summary request, so ignore the usual short-answer limit. You decide the \
+        shape: first work out what kind of video it is (a tutorial, lecture, interview or podcast, talk, news or commentary, \
+        review, vlog, story, entertainment, or something else), then write the summary a smart friend would give me for \
+        THAT kind of video, not a fixed template.
 
-        📌 **1. Executive Summary & Overview**
-        - **Core premise:** one sentence on the video's main thesis or goal.
-        - **Audience & value:** who it's for and what they take away.
-        - **Context:** the speaker or host, and the format (interview, tutorial, talk, commentary).
-
-        🔑 **2. Key Takeaways & Core Concepts**
-        3 bullets: the biggest or least obvious insight, the main framework, technique or argument, and the key warning, misconception or conclusion.
-
-        ⏱️ **3. Topic-by-Topic Breakdown**
-        For each main section (about 3-6): a bold title with \(stamp) where it starts, then bullets for the core argument and the key example, figure or quote.
-
-        🛠️ **4. Actionable Steps & Implementation**
-        Numbered steps, only if the video teaches, instructs or recommends something to do. Leave the whole section out otherwise.
-
-        💡 **5. Important Quotes, Tools & References**
-        A memorable quote, the tools, software or books mentioned, and the people or studies cited. Leave out any line with nothing to put in it.
+        - Open with one or two plain sentences: what this is and the bottom line (the answer, verdict, thesis or point).
+        - Then give only what's worth keeping, in the form that fits. A tutorial gets the steps in order, with the exact \
+        commands, settings or numbers. A lecture or talk gets the argument and its key ideas. An interview or podcast gets \
+        who said what that matters, and the surprising claims. A review gets the verdict, pros, cons and who it's for. \
+        Commentary or news gets the claims, and what's fact and what's opinion. Entertainment or a story gets what happens \
+        and what made it worth watching.
+        - Mark the moments worth jumping to with \(stamp), in bold or at the start of a line. Skip timestamps if the \
+        video has no real sections.
+        - Use short headings or bullets only where they help me scan, and no headings at all if a few sentences say it. \
+        No emojis, no filler, no "in this video". Never pad: scale the length to the video (a few sentences for a few \
+        minutes, up to about 400 words for an hour or more).
+        - Keep specifics: names, numbers, quotes, tools and sources the video actually gives. Don't invent anything.
 
         Base it only on the transcript. Only if the captions are clearly garbled somewhere, say so in one line; otherwise don't mention caption quality. Don't search the web.
         """]

@@ -14,7 +14,6 @@ enum Motion {
     static let functional = Animation.spring(duration: 0.3, bounce: 0)
     static let small = Animation.spring(duration: 0.2, bounce: 0)
     static let exit = Animation.spring(duration: 0.3 * 0.65, bounce: 0)
-    static let exitSmall = Animation.spring(duration: 0.2 * 0.65, bounce: 0)
     /// Button press: scale 0.97.
     static let pressScale: CGFloat = 0.97
     // Older names, now aliases of the two durations above.
@@ -235,7 +234,7 @@ final class Ghost {
 
 
 /// Smooth window resizing, driven by a plain timer. (The system's `animator().setFrame` was seen to stall until the next
-/// animation started, which left the agent bar too narrow for its cats; a timer always finishes, and always ends exactly
+/// animation started, which left windows short of their target size; a timer always finishes, and always ends exactly
 /// on the target.)
 enum WindowMotion {
     private static var timers: [ObjectIdentifier: Timer] = [:]

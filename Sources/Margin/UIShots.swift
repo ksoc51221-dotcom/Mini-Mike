@@ -69,6 +69,9 @@ enum UIShots {
 
             // The chat popup, three states.
             shot("chat-1-empty", hostedSize: CGSize(width: AskPanelController.width, height: 200), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: chatModel(.empty)).frame(width: AskPanelController.width, height: 200)))
+            AskView.debugPromptsOpen = true
+            shot("chat-1b-prompts", hostedSize: CGSize(width: AskPanelController.width, height: 420), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: chatModel(.empty)).frame(width: AskPanelController.width, height: 420)))
+            AskView.debugPromptsOpen = false
             shot("chat-2-thinking", hostedSize: CGSize(width: AskPanelController.width, height: 190), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: chatModel(.thinking)).frame(width: AskPanelController.width, height: 190)))
             shot("chat-3-answer", hostedSize: CGSize(width: AskPanelController.width, height: 430), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: chatModel(.answer)).frame(width: AskPanelController.width, height: 430)))
 
@@ -103,25 +106,6 @@ enum UIShots {
                 })
             } else {
                 failed.append("sidebar-\(mode.name)")
-            }
-
-            // The agent bar, the strip, cats, the chat with its engine button (the same pictures as --barpicture).
-            let barPath = out.appendingPathComponent("agentbar-\(mode.name).png").path
-            var barOK = false
-            mode.appearance.performAsCurrentDrawingAppearance {
-                barOK = FeatureTests.renderBarPictures(path: barPath, scheme: mode.scheme)
-            }
-            if barOK {
-                saved += 1
-                // The side pictures are --barpicture's own extras; keep them next to it with the mode in their names.
-                for extra in ["chat", "breath"] {
-                    let from = URL(fileURLWithPath: barPath + ".\(extra).png")
-                    let to = out.appendingPathComponent("agentbar-\(extra)-\(mode.name).png")
-                    try? FileManager.default.removeItem(at: to)
-                    try? FileManager.default.moveItem(at: from, to: to)
-                }
-            } else {
-                failed.append("agentbar-\(mode.name)")
             }
 
             // The voice pill in three states.
@@ -170,6 +154,23 @@ enum UIShots {
             shot("library-review", margin: 16, hostedSize: size, window(review))
 
             // Every default sector mark at 16 pt (the size it has in lists), on the surface and on a selected row.
+            shot("math-plain-text", margin: 20, VStack(alignment: .leading, spacing: 10) {
+                MathLine(text: "Your answer is correct. To write x^(-3/2) in normal form, move the power to the bottom: x^(-3/2) = 1/x^(3/2) = 1/(x√x).")
+                MathLine(text: "So dy/dx = 3/(2√x) + 2/(x√x).")
+                MathLine(text: "If you want one fraction, write both terms over 2x√x to get (3x + 4)/(2x√x).")
+                MathLine(text: "Careful: I/O, 24/7 and 3/4/2026 stay as plain text.")
+                MathLine(text: "Differentiate A with respect to r: dA/dr = 40 – (4 + π)r = 0, so r = 40/(4+π) ≈ 5.60 cm.")
+                MathLine(text: "The products are x^(1/2)·x^(−1/2) = 1 and −1·x^(−1/2) = −x^(−1/2). Leaving **x^(1/2) – x^(−1/2).**")
+            }.frame(width: 560, alignment: .leading).padding(24).background(Theme.canvas.color))
+
+            shot("tick-preview", margin: 20, HStack(spacing: 28) {
+                MarginDoneBadge(on: false, size: 56)
+                MarginDoneBadge(on: true, size: 56)
+                MarginDoneBadge(on: true, size: 56, ink: Theme.accent.color, mark: Theme.onAccent.color)
+                MarginDoneBadge(on: true, size: 16)
+                Glyph(kind: .check, size: 48, color: Theme.ink.color)
+            }.padding(24).background(Theme.surface.color))
+
             shot("sector-glyphs-16", margin: 16, VStack(spacing: 10) {
                 ForEach([false, true], id: \.self) { sel in
                     HStack(spacing: 14) {
@@ -178,6 +179,19 @@ enum UIShots {
                     .padding(12).background(sel ? Theme.surfaceSelected.color : Theme.surface.color)
                 }
             })
+
+            // Select mode: the new tick on three rows.
+            let selecting = LibraryState()
+            selecting.mode = .chats
+            selecting.selection = ref(0)
+            selecting.selecting = true
+            selecting.picked = Set([ref(1), ref(3)].compactMap { $0 })
+            shot("library-select-tick", margin: 16, hostedSize: size, window(selecting))
+
+            // The Assistant's card beside the sidebar.
+            LibraryView.debugAssistantOpen = true
+            shot("library-assistant", margin: 16, hostedSize: size, window(selected))
+            LibraryView.debugAssistantOpen = false
 
             let multi = LibraryState()
             multi.mode = .chats
@@ -242,13 +256,8 @@ enum UIShots {
         let host = NSHostingView(rootView: view.environment(\.colorScheme, mode.scheme))
         host.appearance = mode.appearance
         host.frame = NSRect(origin: .zero, size: size)
-        for _ in 0..<4 { // let state-driven layout (the thread's height, focus) settle
-            host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.12))
-        }
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: rep)
-        return rep.cgImage
+        host.settleLayout(passes: 4, interval: 0.12) // let state-driven layout (the thread's height, focus) settle
+        return host.snapshotRep()?.cgImage
     }
 
     /// A neutral desktop stand-in, so frosted and translucent surfaces read.

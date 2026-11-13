@@ -62,9 +62,7 @@ enum ClaudeMark {
 
     /// App icon artwork: an ink spark on a highlighter-yellow tile.
     static func appIconPNG(pixels: Int) -> Data? {
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels,
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        guard let rep = NSBitmapImageRep.rgba(pixelsWide: pixels, pixelsHigh: pixels) else { return nil }
         rep.size = NSSize(width: pixels, height: pixels)
         guard let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
         NSGraphicsContext.saveGraphicsState()

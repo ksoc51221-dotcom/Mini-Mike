@@ -78,6 +78,21 @@ final class AskModel: ObservableObject {
     /// A turn finished printing (its text is complete): time to save the chat.
     var onTurnComplete: (() -> Void)?
     var onKeep: ((_ turn: UUID) -> Void)?
+    /// Starred from this window (it's applied when the chat is first saved, if that hasn't happened yet).
+    @Published var starred = false
+    /// In "To review" (kept here until the chat is saved).
+    @Published var inReview = false
+    /// Screenshots added for the next question (double-tap Shift, or the camera button).
+    struct Attachment: Identifiable {
+        let id = UUID()
+        let data: Data
+        let thumb: NSImage?
+    }
+    @Published var attachments: [Attachment] = []
+    static let maxAttachments = 3
+    var onAttachScreenshot: (() -> Void)?
+    var onToggleStar: (() -> Void)?
+    var onToggleReview: (() -> Void)?
     var onQuizFinished: ((QuizResult) -> Void)?
     var onAsk: ((_ prompt: String) -> Void)?
     /// The Learn toggle was used: remember it for the next chat.
@@ -271,7 +286,9 @@ final class AskModel: ObservableObject {
                 return
             }
         }
-        if q.isEmpty {
+        if q.isEmpty, !attachments.isEmpty {
+            ask(display: Prompts.aboutScreenshot, prompt: Prompts.aboutScreenshot)
+        } else if q.isEmpty {
             guard turns.isEmpty else { return }
             ask(display: Prompts.emptySubmit, prompt: Prompts.emptySubmit)
         } else {
@@ -282,8 +299,9 @@ final class AskModel: ObservableObject {
 
     func ask(display: String, prompt: String) {
         guard canSubmit else { return }
+        let shown = attachments.isEmpty ? display : display + " · with screenshot"
         withAnimation(Motion.animation(Motion.functional)) {
-            turns.append(Turn(question: display))
+            turns.append(Turn(question: shown))
             isStreaming = true
             status = nil
         }
@@ -520,6 +538,18 @@ struct AskView: View {
                 if let video = model.video { VideoHeader(video: video, image: model.videoThumbnail) } else { source }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if Settings.shared.saveHistory {
+                HeaderButton(symbol: model.starred ? "star.fill" : "star",
+                             help: model.starred ? "Unstar" : "Star this chat (keeps it at the top of your Library and safe from delete)",
+                             active: model.starred) {
+                    model.onToggleStar?()
+                }
+                HeaderButton(symbol: model.inReview ? "bookmark.fill" : "bookmark",
+                             help: model.inReview ? "Take out of To review" : "Add to To review, to come back to it later",
+                             active: model.inReview) {
+                    model.onToggleReview?()
+                }
+            }
             HeaderButton(symbol: model.isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                          help: model.isLarge ? "Make smaller" : "Make bigger (50%)") {
                 model.onToggleSize?()
@@ -679,7 +709,6 @@ struct AskView: View {
                     }
                     .buttonStyle(HintTileStyle())
                     .accessibilityLabel("Hint level \(level): \(Prompts.hintName(level).lowercased())")
-                    .staggerIn(level - 1)
                 }
             }
         }
@@ -709,7 +738,6 @@ struct AskView: View {
                         Label(kind.title, systemImage: kind.symbol)
                     }
                     .buttonStyle(ChipStyle())
-                    .staggerIn(index)
                 }
             }
         }
@@ -742,59 +770,143 @@ struct AskView: View {
         }
     }
 
+    /// Pictures only: draw the chat with the Prompts tray already open.
+    nonisolated(unsafe) static var debugPromptsOpen = false
+    @State private var promptsOpen = AskView.debugPromptsOpen
+
     private var quickQuestions: some View {
-        FlowLayout(spacing: 6) {
-            if case .offered(let name) = model.doc {
-                Button { model.onUseDocument?() } label: {
-                    Label("Ask about “\(name)”", systemImage: "doc.text.magnifyingglass")
-                }
-                .buttonStyle(ProminentChipStyle())
-                .help("Margin reads the whole page or file on your Mac and sends Claude only the parts that match your question")
-            }
-            if case .ready = model.doc {
-                Button { model.ask(display: "Summarize this document", prompt: Prompts.docSummary) } label: {
-                    Label("Summarize document", systemImage: "doc.plaintext")
-                }
-                .buttonStyle(ProminentChipStyle())
-                Button { model.ask(display: "Key terms in this document", prompt: Prompts.docTerms) } label: {
-                    Label("Key terms", systemImage: "tag")
-                }
-                .buttonStyle(ProminentChipStyle())
-            }
-            if model.videoHint {
-                Button { model.onSummarizeVideo?() } label: {
-                    Label("Summarize video", systemImage: "play.rectangle.fill")
-                }
-                .buttonStyle(ChipStyle())
-            }
-            if canSummarize {
-                Button {
-                    withAnimation(Motion.animation(Motion.functional)) { model.choosingSummary = true }
-                } label: {
-                    Label("Summarize", systemImage: "doc.plaintext")
-                }
-                .buttonStyle(ChipStyle())
-            }
-            // The quick questions are about "this", so a blank chat skips them.
-            ForEach(Array((model.selection.isBlank ? [] : Prompts.chips).enumerated()), id: \.element.label) { index, chip in
-                Button { model.ask(display: chip.prompt, prompt: chip.prompt) } label: {
-                    if chip.label == "Pronounce" {
-                        Label(chip.label, systemImage: "speaker.wave.2.fill")
-                    } else if chip.label == "Visualize" {
-                        Label(chip.label, systemImage: "chart.xyaxis.line")
-                    } else if chip.label == "Simpler" {
-                        Label(chip.label, systemImage: "text.badge.minus")
-                    } else if chip.label == "Example?" {
-                        Label(chip.label, systemImage: "lightbulb")
-                    } else if chip.label == "Define terms" {
-                        Label(chip.label, systemImage: "character.book.closed")
-                    } else {
-                        Text(chip.label)
+        VStack(alignment: .leading, spacing: 8) {
+            FlowLayout(spacing: 6) {
+                if case .offered(let name) = model.doc {
+                    Button { model.onUseDocument?() } label: {
+                        Label("Ask about “\(name)”", systemImage: "doc.text.magnifyingglass")
                     }
+                    .buttonStyle(ProminentChipStyle())
+                    .help("Margin reads the whole page or file on your Mac and sends Claude only the parts that match your question")
                 }
-                .buttonStyle(ChipStyle())
-                .staggerIn(index)
+                if case .ready = model.doc {
+                    Button { model.ask(display: "Summarize this document", prompt: Prompts.docSummary) } label: {
+                        Label("Summarize document", systemImage: "doc.plaintext")
+                    }
+                    .buttonStyle(ProminentChipStyle())
+                    Button { model.ask(display: "Key terms in this document", prompt: Prompts.docTerms) } label: {
+                        Label("Key terms", systemImage: "tag")
+                    }
+                    .buttonStyle(ProminentChipStyle())
+                }
+                promptsButton
             }
+            if promptsOpen { promptTray.transition(.opacity.combined(with: .scale(scale: 0.97, anchor: .topLeading))) }
+        }
+    }
+
+    private struct PromptItem: Identifiable {
+        let id: String
+        let symbol: String
+        var dividerBefore = false
+        let run: () -> Void
+    }
+
+    /// Every quick prompt, in the order they're shown.
+    private var promptItems: [PromptItem] {
+        var out: [PromptItem] = []
+        if model.videoHint {
+            out.append(.init(id: "Summarize video", symbol: "play.rectangle.fill") { model.onSummarizeVideo?() })
+        }
+        if canSummarize {
+            out.append(.init(id: "Summarize…", symbol: "doc.plaintext") {
+                withAnimation(Motion.animation(Motion.functional)) { model.choosingSummary = true }
+            })
+        }
+        // The quick questions are about "this", so a blank chat skips them.
+        for (i, chip) in (model.selection.isBlank ? [] : Prompts.chips).enumerated() {
+            out.append(.init(id: chip.label, symbol: Self.chipSymbol(chip.label), dividerBefore: i == 0 && !out.isEmpty) {
+                model.ask(display: chip.prompt, prompt: chip.prompt)
+            })
+        }
+        return out
+    }
+
+    /// One calm button instead of a row of chips.
+    @ViewBuilder private var promptsButton: some View {
+        if !promptItems.isEmpty {
+            Button {
+                withAnimation(Motion.animation(Motion.functional)) { promptsOpen.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "text.badge.plus")
+                    Text("Prompts")
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                        .rotationEffect(.degrees(promptsOpen ? 180 : 0))
+                }
+            }
+            .buttonStyle(ChipStyle())
+            .help("Summarize, simplify, define, visualize…")
+            .accessibilityLabel("Prompts")
+            .accessibilityValue(promptsOpen ? "Open" : "Closed")
+        }
+    }
+
+    /// The prompts, unfolded under the button: they settle in one after another and a soft highlight follows the pointer.
+    private var promptTray: some View {
+        PromptTray(items: promptItems) { item in
+            withAnimation(Motion.animation(Motion.functional)) { promptsOpen = false }
+            item.run()
+        }
+    }
+
+    private struct PromptTray: View {
+        let items: [PromptItem]
+        let choose: (PromptItem) -> Void
+        @State private var shown = Motion.still
+        @State private var hovered: String?
+
+        private let rowHeight: CGFloat = 32
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                    if item.dividerBefore {
+                        Rectangle().fill(hair).frame(height: 1).padding(.horizontal, 10).padding(.vertical, 3)
+                            .opacity(shown ? 1 : 0)
+                    }
+                    Button { choose(item) } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: item.symbol).font(.system(size: 12)).foregroundStyle(hovered == item.id ? inkColor : inkSecondary)
+                                .frame(width: 18)
+                            Text(item.id).font(.geist(13, .medium)).foregroundStyle(inkColor)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 10).frame(height: rowHeight)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                            .fill(hovered == item.id ? hairStrong : Color.clear))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressStyle(scale: 0.98))
+                    .onHover { inside in
+                        withAnimation(Motion.animation(Motion.small)) { hovered = inside ? item.id : (hovered == item.id ? nil : hovered) }
+                    }
+                    .opacity(shown ? 1 : 0)
+                    .offset(y: shown || Motion.reduceMotion ? 0 : -6)
+                    .animation(Motion.reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.82).delay(Double(index) * 0.035), value: shown)
+                }
+            }
+            .padding(5)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(raised))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).strokeBorder(hair, lineWidth: 1))
+            .frame(maxWidth: 260, alignment: .leading)
+            .onAppear { shown = true }
+        }
+    }
+
+    private static func chipSymbol(_ label: String) -> String {
+        switch label {
+        case "Pronounce": return "speaker.wave.2.fill"
+        case "Visualize": return "chart.xyaxis.line"
+        case "Simpler": return "text.badge.minus"
+        case "Example?": return "lightbulb"
+        case "Define terms": return "character.book.closed"
+        default: return "text.bubble"
         }
     }
 
@@ -835,13 +947,13 @@ struct AskView: View {
         let on = model.learnMode
         return Button { model.toggleLearn() } label: {
             HStack(spacing: 4) {
-                Glyph(kind: .nib, size: 12, color: on ? inkColor : inkSecondary)
-                Text("Learn").font(.geist(12, .medium))
+                Glyph(kind: .nib, size: 12, color: on ? Theme.canvas.color : inkSecondary)
+                Text(on ? "Learn on" : "Learn").font(.geist(12, .medium))
             }
-            .foregroundStyle(on ? inkColor : inkSecondary)
+            .foregroundStyle(on ? Theme.canvas.color : inkSecondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(on ? hairStrong : Color.clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(on ? inkColor : Color.clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(PressStyle())
@@ -864,11 +976,58 @@ struct AskView: View {
     }
 
     private var inputRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !model.attachments.isEmpty { attachmentStrip }
+            inputField
+        }
+    }
+
+    /// The screenshots waiting to go with the next question.
+    private var attachmentStrip: some View {
+        HStack(spacing: 8) {
+            ForEach(model.attachments) { item in
+                ZStack(alignment: .topTrailing) {
+                    Group {
+                        if let thumb = item.thumb {
+                            Image(nsImage: thumb).resizable().scaledToFill()
+                        } else {
+                            Rectangle().fill(raised)
+                        }
+                    }
+                    .frame(width: 64, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
+                    Button {
+                        withAnimation(Motion.animation(Motion.small)) { model.attachments.removeAll { $0.id == item.id } }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.system(size: 14))
+                            .foregroundStyle(Theme.ink.color, Theme.canvas.color)
+                    }
+                    .buttonStyle(.plain).offset(x: 5, y: -5)
+                    .help("Remove this screenshot").accessibilityLabel("Remove screenshot")
+                }
+            }
+            Text("Goes with your next question")
+                .font(.geist(12, .medium)).foregroundStyle(inkSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 4)
+        .transition(.opacity)
+    }
+
+    private var inputField: some View {
         HStack(spacing: 8) {
             TextField(placeholder, text: $model.draft)
                 .textFieldStyle(.plain)
                 .focused($fieldFocused)
                 .onSubmit { model.submit() }
+            Button { model.onAttachScreenshot?() } label: {
+                Image(systemName: "camera.viewfinder").font(.system(size: 14, weight: .regular)).foregroundStyle(inkSecondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(PressStyle(scale: 0.92))
+            .help("Add a screenshot of your screen as context (or tap Shift twice)")
+            .accessibilityLabel("Add screenshot")
             Button { model.submit() } label: {
                 SendGlyph(busy: model.isStreaming, canSubmit: model.canSubmit)
             }
@@ -964,6 +1123,8 @@ private struct SendGlyph: View {
 private struct HeaderButton: View {
     let symbol: String
     let help: String
+    /// Lit up (the star of a starred chat).
+    var active = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -971,7 +1132,7 @@ private struct HeaderButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.geist(9, .semibold))
-                .foregroundStyle(hovering ? inkColor : inkSecondary)
+                .foregroundStyle(hovering || active ? inkColor : inkSecondary)
                 .frame(width: 18, height: 18)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(hovering ? hairStrong : Color.clear))
         }
@@ -995,8 +1156,7 @@ private struct TurnView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if turn.answer.isEmpty && !turn.done {
                 HStack(spacing: 7) {
-                    Glyph(kind: .orbit, size: 14, color: inkSecondary, animated: !Motion.still && !Motion.reduceMotion)
-                    ShimmerText(text: status ?? "Thinking")
+                    ThinkingIndicator(status: status)
                     Spacer(minLength: 6)
                     if let onMinimize {
                         Button(action: onMinimize) {
@@ -1074,56 +1234,61 @@ struct MarkdownText: View {
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(raised))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
                 } else {
-                    let tidy = seg.text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-                    let parts = tidy.components(separatedBy: "Sources:")
-                    let body = parts.count > 1 ? parts.dropLast().joined(separator: "Sources:") : tidy
-                    let sources = parts.count > 1 ? (parts.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
-                    ForEach(Array(body.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, para in
-                        if !para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            VStack(alignment: .leading, spacing: 4) {
-                                ForEach(Array(Self.lines(para).enumerated()), id: \.offset) { _, line in
-                                    if let marker = line.marker {
-                                        HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                            Text(marker).font(.mBody).foregroundStyle(inkSecondary)
-                                                .frame(minWidth: 12, alignment: .trailing)
-                                            Text(Self.inline(streaming ? Self.softenPartial(line.text) : line.text))
-                                                .font(.mBody).lineSpacing(4)
-                                                .fixedSize(horizontal: false, vertical: true)
-                                        }
-                                    } else {
-                                        Text(Self.inline(streaming ? Self.softenPartial(line.text) : line.text))
-                                            .font(.mBody).lineSpacing(4)
-                                            .fixedSize(horizontal: false, vertical: true)
-                                    }
-                                }
-                            }
+                    ForEach(Array(MathRender.blocks(seg.text).enumerated()), id: \.offset) { _, piece in
+                        switch piece {
+                        case .block(let latex): MathBlock(latex: latex)
+                        case .text(let t), .inline(let t), .auto(_, let t): prose(t)
                         }
-                    }
-                    if !sources.isEmpty {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text("Sources")
-                                .mLabelStyle()
-                            let links = Self.sourceLinks(sources)
-                            if links.isEmpty {
-                                Text(Self.inline(sources))
-                                    .font(.geist(12))
-                                    .lineSpacing(1)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            } else {
-                                FlowLayout(spacing: 12) {
-                                    ForEach(Array(links.enumerated()), id: \.offset) { _, link in
-                                        SourceChip(link: link)
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 2)
                     }
                 }
             }
         }
         .tint(accentText)
         .textSelection(.enabled)
+    }
+
+    @ViewBuilder private func prose(_ text: String) -> some View {
+        let tidy = text.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        let parts = tidy.components(separatedBy: "Sources:")
+        let body = parts.count > 1 ? parts.dropLast().joined(separator: "Sources:") : tidy
+        let sources = parts.count > 1 ? (parts.last ?? "").trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        ForEach(Array(body.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, para in
+            if !para.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(Self.lines(para).enumerated()), id: \.offset) { _, line in
+                        if let marker = line.marker {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(marker).font(.mBody).foregroundStyle(inkSecondary)
+                                    .frame(minWidth: 12, alignment: .trailing)
+                                MathLine(text: line.text, streaming: streaming)
+                            }
+                        } else {
+                            MathLine(text: line.text, streaming: streaming)
+                        }
+                    }
+                }
+            }
+        }
+        if !sources.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("Sources")
+                    .mLabelStyle()
+                let links = Self.sourceLinks(sources)
+                if links.isEmpty {
+                    Text(Self.inline(sources))
+                        .font(.geist(12))
+                        .lineSpacing(1)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    FlowLayout(spacing: 12) {
+                        ForEach(Array(links.enumerated()), id: \.offset) { _, link in
+                            SourceChip(link: link)
+                        }
+                    }
+                }
+            }
+            .padding(.top, 2)
+        }
     }
 
     /// A paragraph's lines: list items ("- x", "• x", "1. x") split into a marker and text so wrapped lines hang
@@ -1186,7 +1351,9 @@ struct MarkdownText: View {
         let opts = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         // Inline-only parsing leaves "- item" as a hyphen; show list items with real bullets.
         let bulleted = s.replacingOccurrences(of: #"(?m)^([ \t]*)[-*+] (?=\S)"#, with: "$1• ", options: .regularExpression)
-        var out = (try? AttributedString(markdown: bulleted, options: opts)) ?? AttributedString(bulleted)
+        let pretty = MathPretty.prettify(bulleted) // LaTeX → symbols; u_y, t^2 marked for real sub/superscripts
+        var out = (try? AttributedString(markdown: pretty, options: opts)) ?? AttributedString(pretty)
+        MathPretty.style(&out)
         // Inline code: SF Mono 13 on the raised surface.
         for run in out.runs where run.inlinePresentationIntent?.contains(.code) == true {
             out[run.range].font = .mCode
@@ -1230,10 +1397,7 @@ private struct GhostStyle: ButtonStyle {
                 .font(.geist(12, .semibold))
                 .foregroundStyle(hovering && enabled ? inkColor : inkSecondary)
                 .contentShape(Rectangle())
-                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
-                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
-                .animation(Motion.animation(Motion.small), value: hovering)
-                .onHover { hovering = $0 }
+                .pressAndHover(configuration.isPressed, $hovering)
         }
     }
 }
@@ -1460,10 +1624,7 @@ private struct ProminentChipStyle: ButtonStyle {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.onAccent.color.opacity(hovering ? 0.08 : 0)))
                 .foregroundStyle(Theme.onAccent.color)
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
-                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
-                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
-                .animation(Motion.animation(Motion.small), value: hovering)
-                .onHover { hovering = $0 }
+                .pressAndHover(configuration.isPressed, $hovering)
         }
     }
 }
@@ -1487,10 +1648,7 @@ private struct HintTileStyle: ButtonStyle {
                 .padding(1)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous).fill(hair))
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous))
-                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
-                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
-                .animation(Motion.animation(Motion.small), value: hovering)
-                .onHover { hovering = $0 }
+                .pressAndHover(configuration.isPressed, $hovering)
         }
     }
 }
@@ -1513,10 +1671,7 @@ private struct ChipStyle: ButtonStyle {
                 .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
                 .foregroundStyle(inkColor)
                 .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous))
-                .scaleEffect(configuration.isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
-                .animation(Motion.animation(Motion.small), value: configuration.isPressed)
-                .animation(Motion.animation(Motion.small), value: hovering)
-                .onHover { hovering = $0 }
+                .pressAndHover(configuration.isPressed, $hovering)
         }
     }
 }
@@ -1531,8 +1686,12 @@ private struct ThreadHeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-
 private extension View {
-    /// Chips used to fade in one by one; they now appear together with no motion.
-    func staggerIn(_ index: Int) -> some View { self }
+    /// The shared button feel: dips to 0.97 while pressed, and tracks whether the pointer is over it.
+    func pressAndHover(_ isPressed: Bool, _ hovering: Binding<Bool>) -> some View {
+        scaleEffect(isPressed && !Motion.reduceMotion ? Motion.pressScale : 1)
+            .animation(Motion.animation(Motion.small), value: isPressed)
+            .animation(Motion.animation(Motion.small), value: hovering.wrappedValue)
+            .onHover { hovering.wrappedValue = $0 }
+    }
 }

@@ -329,10 +329,7 @@ enum Demo {
         /// Several moments of an animation, side by side.
         func strip(_ frames: [NSBitmapImageRep]) -> NSBitmapImageRep? {
             guard let first = frames.first,
-                  let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: first.pixelsWide * frames.count,
-                                             pixelsHigh: first.pixelsHigh, bitsPerSample: 8, samplesPerPixel: 4,
-                                             hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-                                             bytesPerRow: 0, bitsPerPixel: 0),
+                  let out = NSBitmapImageRep.rgba(pixelsWide: first.pixelsWide * frames.count, pixelsHigh: first.pixelsHigh),
                   let ctx = NSGraphicsContext(bitmapImageRep: out) else { return nil }
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = ctx
@@ -346,9 +343,7 @@ enum Demo {
         savePNG("0-trigger.png", TriggerIcon.debugRender())
         // The painted check up close, on the circle's dark color.
         if let check = BrushCheck.image(side: 200, scale: 2, color: Theme.ink.dark),
-           let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 400, pixelsHigh: 400, bitsPerSample: 8,
-                                      samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+           let rep = NSBitmapImageRep.rgba(pixelsWide: 400, pixelsHigh: 400),
            let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext {
             ctx.setFillColor(NSColor(white: 0.09, alpha: 1).cgColor)
             ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 400))

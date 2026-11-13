@@ -780,11 +780,11 @@ enum GlyphArt {
             g.fill(star4(pt(19, 5.2), 3.4), tw)
 
         case .check:
-            if !g.small { g.stroke(circ(c0, 9.8), 0.7, 0.35) }
-            let ck = poly([pt(6.6, 12.6), pt(10.6, 16.6), pt(17.6, 8)])
-            let t: CGFloat = g.live ? min(1, ease(p / 0.45)) : 1
+            // Done, Margin's way: a ring, and the middle fills in.
+            g.stroke(circ(c0, g.small ? 8.4 : 9.8), g.small ? 1.1 : 0.8, g.small ? 1 : 0.45)
+            let grow: CGFloat = g.live ? min(1, ease(p / 0.45)) : 1
             let fade: Double = g.live && p > 0.88 ? Double(max(0, 1 - (p - 0.88) / 0.12)) : 1
-            g.faded(fade).stroke(ck.trimmedPath(from: 0, to: max(0.001, t)), 1.15)
+            g.faded(fade).fill(circ(c0, max(0.01, 5.2 * grow)))
 
         case .warning:
             let tri = Path { b in
@@ -895,12 +895,7 @@ enum GlyphGallery {
         let host = NSHostingView(rootView: scaled)
         host.appearance = appearance
         host.frame = NSRect(x: 0, y: 0, width: size.width * 2, height: size.height * 2)
-        for _ in 0..<3 {
-            host.layoutSubtreeIfNeeded()
-            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
-        }
-        guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return nil }
-        host.cacheDisplay(in: host.bounds, to: rep)
-        return rep.cgImage
+        host.settleLayout(passes: 3, interval: 0.1)
+        return host.snapshotRep()?.cgImage
     }
 }

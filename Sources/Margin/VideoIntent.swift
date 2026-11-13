@@ -1,6 +1,6 @@
 import AppKit
 
-/// "Summarize this video" typed in a chat, spoken, or typed in the agent box: understood here, on this Mac, by rules (no
+/// "Summarize this video" typed in a chat or spoken: understood here, on this Mac, by rules (no
 /// Claude call), and handed to the video summarizer that the menu's Summarize Video also uses.
 enum VideoIntent: Equatable {
     /// A YouTube video: the one in the words (a pasted link), or, with nil, the one in the front browser tab.

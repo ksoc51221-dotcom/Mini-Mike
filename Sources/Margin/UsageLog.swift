@@ -68,17 +68,8 @@ enum UsageLog {
     static var url: URL = ClaudeSession.workingDirectory.appendingPathComponent("usage.jsonl")
     private static let queue = DispatchQueue(label: "margin.usage")
 
-    private static let encoder: JSONEncoder = {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
-        return e
-    }()
-
-    private static let decoder: JSONDecoder = {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }()
+    private static let encoder = JSONEncoder.iso8601()
+    private static let decoder = JSONDecoder.iso8601()
 
     static func record(_ entry: Entry) {
         let file = url

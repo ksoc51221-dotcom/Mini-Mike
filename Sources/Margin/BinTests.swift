@@ -107,87 +107,7 @@ extension FeatureTests {
         check("bin: Empty Bin deletes everything in it", library.binned.isEmpty && gone.contains(note.id) && gone.contains(young.id)
               && ((try? fm.contentsOfDirectory(atPath: dir.appendingPathComponent("bin").path)) ?? []).isEmpty)
 
-        agentBinChecks(check)
         dashboardChecks(check)
-    }
-
-    /// A dismissed agent goes to the Bin and comes back; what a job on your accounts read is never written to disk.
-    private static func agentBinChecks(_ check: (String, Bool) -> Void) {
-        let fm = FileManager.default
-        let dir = fm.temporaryDirectory.appendingPathComponent("margin-binagents-\(UUID().uuidString)", isDirectory: true)
-        let real = Library.shared.directory
-        Library.shared.directory = dir
-        defer { Library.shared.directory = real; try? fm.removeItem(at: dir) }
-        let engine = TaskEngine()
-
-        // A finished agent with a report, links and an Undo.
-        let done = BackgroundTask(kind: .tidy, title: "Tidy Desktop")
-        done.spec = .tidy(URL(fileURLWithPath: "/tmp/Desktop"))
-        done.state = .done
-        done.report = TaskReport(headline: "Sorted 112 screenshots", lines: ["Moved 112 files to Screenshots/2026-10"],
-                                 links: [TaskLink(title: "Screenshots", url: URL(fileURLWithPath: "/tmp/Desktop/Screenshots"))])
-        done.canUndo = true
-        var undone = 0
-        done.onUndo = { _ in undone += 1 }
-        engine.debugTrack(done)
-        engine.dismiss(done)
-        Library.shared.flush()
-        let saved = Library.shared.binItem(done.id)?.agent
-        check("bin: a dismissed agent leaves the bar", !engine.tasks.contains { $0 === done })
-        check("bin: ...and lands in the Bin with its report", saved?.title == "Tidy Desktop" && saved?.outcome == .done
-              && saved?.headline == "Sorted 112 screenshots" && saved?.lines == ["Moved 112 files to Screenshots/2026-10"]
-              && saved?.links.first?.title == "Screenshots")
-        check("bin: ...and what it was asked, so it can run again", saved?.spec == .tidy(URL(fileURLWithPath: "/tmp/Desktop")))
-        let back = engine.restore(done.id)
-        check("bin: putting it back is the very same agent, report and Undo included", back === done && engine.tasks.contains { $0 === done }
-              && done.report?.headline == "Sorted 112 screenshots" && done.canUndo && done.onUndo != nil)
-        check("bin: ...and it leaves the Bin", Library.shared.binItem(done.id) == nil)
-
-        // After a restart only the summary is left; it comes back as a cat showing what it reported.
-        engine.dismiss(done)
-        let afterRestart = TaskEngine()
-        let rebuilt = afterRestart.restore(done.id)
-        check("bin: after a restart it comes back from its summary", rebuilt != nil && rebuilt !== done && rebuilt?.title == "Tidy Desktop"
-              && rebuilt?.state == .done && rebuilt?.report?.lines == ["Moved 112 files to Screenshots/2026-10"]
-              && rebuilt?.report?.links.first?.url.lastPathComponent == "Screenshots")
-        check("bin: ...without an Undo it can't honour", rebuilt?.canUndo == false)
-
-        // One that hadn't finished starts again from what it was asked.
-        let waiting = BackgroundTask(kind: .find, title: "Find: elasticity")
-        waiting.spec = .find("elasticity")
-        waiting.state = .needsApproval
-        engine.debugTrack(waiting)
-        engine.dismiss(waiting)
-        check("bin: an agent dismissed before it finished is marked unfinished", Library.shared.binItem(waiting.id)?.agent?.outcome == .unfinished)
-        var restartedWith: TaskSpec?
-        engine.restarter = { spec in
-            restartedWith = spec
-            let t = BackgroundTask(kind: .find, title: "Find: elasticity")
-            engine.debugTrack(t)
-            return t
-        }
-        let again = engine.restore(waiting.id)
-        check("bin: ...putting it back runs it again from its request", restartedWith == .find("elasticity") && again != nil
-              && engine.tasks.contains { $0 === again } && Library.shared.binItem(waiting.id) == nil)
-
-        // A job on your accounts: what it read is not written to disk.
-        let secret = BackgroundTask(kind: .connected, title: "Read BIDV transactions")
-        secret.spec = .connected("how much have I spent since September", files: [])
-        secret.state = .done
-        secret.report = TaskReport(headline: "You spent 3,335,500 ₫ since 1 September", lines: ["12 Sep · Highlands Coffee · 85,000 ₫"])
-        engine.debugTrack(secret)
-        engine.dismiss(secret)
-        Library.shared.flush()
-        let onDisk = (try? String(contentsOf: dir.appendingPathComponent("bin/agent-\(secret.id.uuidString).json"), encoding: .utf8)) ?? ""
-        check("bin: a job on your accounts is in the Bin", Library.shared.binItem(secret.id)?.agent?.reportKept == false)
-        check("bin: ...but what it read never reaches the disk", !onDisk.isEmpty && !onDisk.contains("3,335,500") && !onDisk.contains("Highlands"))
-        check("bin: ...though this session can still put it back whole", engine.restore(secret.id)?.report?.headline == "You spent 3,335,500 ₫ since 1 September")
-
-        // Deleting an agent for good.
-        engine.dismiss(done)
-        Library.shared.deleteForever(done.id)
-        engine.forgetBinned(done.id)
-        check("bin: an agent deleted for good can't be put back", engine.restore(done.id) == nil && Library.shared.binItem(done.id) == nil)
     }
 }
 
@@ -230,7 +150,7 @@ extension FeatureTests {
         check("dashboard: All and the Bin show everything", BinItem.Kind.allCases.allSatisfy { LibraryState.shows($0, in: .all) && LibraryState.shows($0, in: .bin) })
         check("dashboard: Chats, Notebook and Screenshots each show only their own",
               LibraryState.shows(.chat, in: .chats) && !LibraryState.shows(.note, in: .chats) && LibraryState.shows(.note, in: .notebook)
-                && !LibraryState.shows(.screenshot, in: .notebook) && LibraryState.shows(.screenshot, in: .screenshots) && !LibraryState.shows(.agent, in: .screenshots))
+                && !LibraryState.shows(.screenshot, in: .notebook) && LibraryState.shows(.screenshot, in: .screenshots) && !LibraryState.shows(.chat, in: .screenshots))
 
         // The clear / undo / restore flow, on a throwaway library.
         let fm = FileManager.default
@@ -292,9 +212,6 @@ extension FeatureTests {
         check("dashboard: a screenshot row carries its picture", FeedItem(shot: shot, library: lib).thumb == lib.imageURL(for: shot))
         check("dashboard: each kind has its own icon", !FeedItem(chat: chats[1]).symbol.isEmpty
               && FeedItem(note: note).symbol != FeedItem(chat: chats[1]).symbol && FeedItem(shot: shot, library: lib).symbol != FeedItem(note: note).symbol)
-        let agentItem = BinItem(agent: BinnedTask(kind: "tidy", title: "Tidy Desktop", outcome: .done, headline: "Sorted 5 files"), id: UUID())
-        check("dashboard: an agent in the Bin is filed under its kind (Tidy), not under a sector", agentItem.sector == "Tidy" && agentItem.title == "Tidy Desktop"
-              && FeedItem(binned: agentItem, library: lib).dot == sectorColor("Agent"))
         check("dashboard: sector colors are steady (the same name, the same color)", sectorColor("Basket weaving") == sectorColor("Basket weaving"))
         // (Instrument: sectors are told apart by glyph, not colour, so Math vs Economics no longer differ here.)
     }

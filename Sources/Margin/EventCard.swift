@@ -22,14 +22,12 @@ struct EventCard: View {
     }
 
     static func encode(_ d: CalendarIntent.Draft) -> String {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
+        let e = JSONEncoder.iso8601()
         return (try? String(decoding: e.encode(d), as: UTF8.self)) ?? "{}"
     }
 
     static func decode(_ s: String) -> CalendarIntent.Draft? {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
+        let d = JSONDecoder.iso8601()
         return try? d.decode(CalendarIntent.Draft.self, from: Data(s.utf8))
     }
 
@@ -50,8 +48,7 @@ struct EventCard: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
-        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
+        .cardSurface()
         .onAppear(perform: loadDestinations)
     }
 
@@ -215,7 +212,7 @@ struct EventCard: View {
     }
 }
 
-private struct CardButton: ButtonStyle {
+struct CardButton: ButtonStyle {
     let fill: Color
     let text: Color
     var border = false
@@ -229,5 +226,13 @@ private struct CardButton: ButtonStyle {
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(border ? Theme.hairline.color : Color.clear)))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
+    }
+}
+
+extension View {
+    /// The raised card look: the surface fill with a strong hairline edge.
+    func cardSurface() -> some View {
+        background(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).fill(Theme.surface.color))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.container, style: .continuous).strokeBorder(Theme.hairlineStrong.color, lineWidth: 1))
     }
 }

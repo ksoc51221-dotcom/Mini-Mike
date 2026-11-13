@@ -90,7 +90,7 @@ enum Sector {
 /// One saved chat.
 struct ChatRecord: Codable, Identifiable, Equatable {
     private enum CodingKeys: String, CodingKey {
-        case id, created, updated, title, sector, titleLocked, sectorLocked, app, quote, turns, quizzes
+        case id, created, updated, title, sector, titleLocked, sectorLocked, app, quote, turns, quizzes, starred, reviewMarked, reviewCleared
     }
 
     struct Turn: Codable, Equatable {
@@ -113,6 +113,11 @@ struct ChatRecord: Codable, Identifiable, Equatable {
     var quote: String
     var turns: [Turn]
     var quizzes: [QuizResult] = []
+    /// Starred: pinned to the top of its list, and it can't be deleted until you unstar it.
+    var starred = false
+    /// When you put this chat in "To review" yourself, and when you took it out again.
+    var reviewMarked: Date?
+    var reviewCleared: Date?
 
     /// The first few words of the latest answer, for the list.
     var snippet: String {
@@ -146,6 +151,9 @@ extension ChatRecord {
         quote = try c.decodeIfPresent(String.self, forKey: .quote) ?? ""
         turns = try c.decodeIfPresent([Turn].self, forKey: .turns) ?? []
         quizzes = try c.decodeIfPresent([QuizResult].self, forKey: .quizzes) ?? []
+        starred = try c.decodeIfPresent(Bool.self, forKey: .starred) ?? false
+        reviewMarked = try c.decodeIfPresent(Date.self, forKey: .reviewMarked)
+        reviewCleared = try c.decodeIfPresent(Date.self, forKey: .reviewCleared)
     }
 }
 
@@ -247,11 +255,20 @@ struct QuizResult: Codable, Equatable {
 extension ChatRecord {
     /// When this chat's newest quiz was taken, if that quiz left questions missed. A chat leaves "To review" once its newest quiz is
     /// all right (the older misses stay in its history). Nil: nothing to review.
-    var reviewDate: Date? {
+    var quizReviewDate: Date? {
         guard let latest = quizzes.enumerated().max(by: { ($0.element.date, $0.offset) < ($1.element.date, $1.offset) })?.element,
               !latest.missed.isEmpty else { return nil }
         return latest.date
     }
+
+    /// Why it's in "To review": a quiz you missed, or you put it there. Taking it out hides it until the next miss or mark.
+    var reviewDate: Date? {
+        guard let d = [quizReviewDate, reviewMarked].compactMap({ $0 }).max() else { return nil }
+        if let cleared = reviewCleared, cleared >= d { return nil }
+        return d
+    }
+
+    var inReview: Bool { reviewDate != nil }
 }
 
 enum Review {
@@ -263,32 +280,9 @@ enum Review {
 
 // MARK: - The Bin
 
-/// What a dismissed agent leaves in the Bin: enough to show what it did, and to start it again.
-struct BinnedTask: Codable, Equatable {
-    enum Outcome: String, Codable { case done, failed, cancelled, unfinished }
-    struct Link: Codable, Equatable {
-        var title: String
-        var url: String
-    }
-
-    /// `BackgroundTask.Kind`'s raw value ("tidy", "study", "connected"…).
-    var kind: String
-    var title: String
-    var outcome: Outcome
-    /// The headline of its report, or why it failed.
-    var headline: String
-    var lines: [String] = []
-    var links: [Link] = []
-    var tokens = 0
-    /// What it was asked to do, so it can run again.
-    var spec: TaskSpec?
-    /// False for a job on your online accounts: what it read isn't written to disk, only that it ran.
-    var reportKept = true
-}
-
 /// Something you deleted, kept in the Bin for `Library.binDays` days so you can get it back.
 struct BinItem: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable, CaseIterable { case chat, note, screenshot, agent }
+    enum Kind: String, Codable, CaseIterable { case chat, note, screenshot }
 
     /// The deleted thing's own id.
     var id: UUID
@@ -297,19 +291,16 @@ struct BinItem: Codable, Identifiable, Equatable {
     var chat: ChatRecord?
     var note: Note?
     var screenshot: ScreenshotRecord?
-    var agent: BinnedTask?
 
     init(chat: ChatRecord, deleted: Date = Date()) { id = chat.id; kind = .chat; self.deleted = deleted; self.chat = chat }
     init(note: Note, deleted: Date = Date()) { id = note.id; kind = .note; self.deleted = deleted; self.note = note }
     init(screenshot: ScreenshotRecord, deleted: Date = Date()) { id = screenshot.id; kind = .screenshot; self.deleted = deleted; self.screenshot = screenshot }
-    init(agent: BinnedTask, id: UUID, deleted: Date = Date()) { self.id = id; kind = .agent; self.deleted = deleted; self.agent = agent }
 
     var title: String {
         switch kind {
         case .chat: return chat?.title ?? "Chat"
         case .note: return note?.question ?? "Note"
         case .screenshot: return screenshot?.title ?? "Screenshot"
-        case .agent: return agent?.title ?? "Agent"
         }
     }
 
@@ -318,7 +309,6 @@ struct BinItem: Codable, Identifiable, Equatable {
         case .chat: return chat?.sector ?? Sector.other
         case .note: return note?.sector ?? Sector.other
         case .screenshot: return screenshot?.sector ?? Sector.other
-        case .agent: return BackgroundTask.Kind(rawValue: agent?.kind ?? "")?.title ?? "Agent"
         }
     }
 
@@ -328,7 +318,6 @@ struct BinItem: Codable, Identifiable, Equatable {
         case .chat: return chat?.snippet ?? ""
         case .note: return note?.body.replacingOccurrences(of: "\n", with: " ") ?? ""
         case .screenshot: return screenshot?.snippet ?? ""
-        case .agent: return agent?.headline ?? ""
         }
     }
 
@@ -338,7 +327,6 @@ struct BinItem: Codable, Identifiable, Equatable {
         case .chat: return chat?.updated ?? deleted
         case .note: return note?.created ?? deleted
         case .screenshot: return screenshot?.created ?? deleted
-        case .agent: return deleted
         }
     }
 
@@ -349,7 +337,6 @@ struct BinItem: Codable, Identifiable, Equatable {
         case .note: return [note?.title, note?.sector, note?.quote, note?.question, note?.body].compactMap { $0 }.joined(separator: " ")
         case .screenshot:
             return [screenshot?.title, screenshot?.sector, screenshot?.app, screenshot?.windowTitle, screenshot?.text].compactMap { $0 }.joined(separator: " ")
-        case .agent: return [agent?.title, agent?.headline, agent?.lines.joined(separator: " ")].compactMap { $0 }.joined(separator: " ")
         }
     }
 }
@@ -374,8 +361,6 @@ final class Library {
     /// Where the Bin and retention settings come from; tests swap in a throwaway Settings.
     static var settings: Settings = .shared
     static var binDays: Int { max(0, settings.binAutoEmptyDays) }
-    /// "30 days", or "until you empty it" when auto-empty is off. For sentences like "waits here ...".
-    static var binWaitPhrase: String { binDays > 0 ? "\(binDays) days" : "until you empty it" }
 
     /// Where the files live (tests point this somewhere temporary).
     var directory: URL {
@@ -408,29 +393,22 @@ final class Library {
     /// The pictures themselves (one JPEG per screenshot).
     var screenshotImagesDirectory: URL { directory.appendingPathComponent("screenshot-images", isDirectory: true) }
 
-    private static let encoder: JSONEncoder = {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return e
-    }()
-    private static let decoder: JSONDecoder = {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }()
+    private static let encoder = JSONEncoder.iso8601(.prettyPrinted, .sortedKeys)
+
+    /// Every `*.json` file in `dir` that decodes as `T` (the library's one-file-per-record layout).
+    static func readRecords<T: Decodable>(in dir: URL, _ type: T.Type) -> [T] {
+        let decoder = JSONDecoder.iso8601()
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+        return files.filter { $0.pathExtension == "json" }.compactMap { url in
+            (try? Data(contentsOf: url)).flatMap { try? decoder.decode(T.self, from: $0) }
+        }
+    }
 
     func load() {
-        func read<T: Decodable>(_ dir: URL, _ type: T.Type) -> [T] {
-            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            return files.filter { $0.pathExtension == "json" }.compactMap { url in
-                (try? Data(contentsOf: url)).flatMap { try? Self.decoder.decode(T.self, from: $0) }
-            }
-        }
-        chats = read(chatsDirectory, ChatRecord.self).sorted { $0.updated > $1.updated }
-        notes = read(notesDirectory, Note.self).sorted { $0.created > $1.created }
-        screenshots = read(screenshotsDirectory, ScreenshotRecord.self).sorted { $0.created > $1.created }
-        binned = read(binDirectory, BinItem.self).sorted { $0.deleted > $1.deleted }
+        chats = Self.readRecords(in: chatsDirectory, ChatRecord.self).sorted { $0.updated > $1.updated }
+        notes = Self.readRecords(in: notesDirectory, Note.self).sorted { $0.created > $1.created }
+        screenshots = Self.readRecords(in: screenshotsDirectory, ScreenshotRecord.self).sorted { $0.created > $1.created }
+        binned = Self.readRecords(in: binDirectory, BinItem.self).sorted { $0.deleted > $1.deleted }
         purgeBin()
     }
 
@@ -571,20 +549,41 @@ final class Library {
         return changed
     }
 
-    /// Moves a chat to the Bin (it can be put back for `binDays` days).
-    func delete(chat id: UUID) {
-        guard let c = chat(id) else { return }
+    /// Stars or unstars a chat. It keeps its place in time (starring isn't new activity). Returns false if there's no such chat.
+    @discardableResult
+    func setStarred(_ id: UUID, _ on: Bool) -> Bool {
+        guard var c = chat(id) else { return false }
+        if c.starred != on { c.starred = on; save(c, touch: false) }
+        return true
+    }
+
+    /// Puts a chat in "To review", or takes it out. It keeps its place in time. Returns false if there's no such chat.
+    @discardableResult
+    func setReview(_ id: UUID, _ on: Bool, at date: Date = Date()) -> Bool {
+        guard var c = chat(id) else { return false }
+        guard c.inReview != on else { return true }
+        if on { c.reviewMarked = date } else { c.reviewCleared = date }
+        save(c, touch: false)
+        return true
+    }
+
+    /// Moves a chat to the Bin (it can be put back for `binDays` days). A starred chat stays: unstar it first.
+    /// Returns whether it was moved.
+    @discardableResult
+    func delete(chat id: UUID) -> Bool {
+        guard let c = chat(id), !c.starred else { return false }
         keepInBin(BinItem(chat: c))
         chats.removeAll { $0.id == id }
         remove(chatsDirectory.appendingPathComponent("\(id.uuidString).json"))
         announce()
+        return true
     }
 
-    /// Moves every chat to the Bin. Returns their ids (so the dashboard can offer Undo).
+    /// Moves every chat to the Bin, except starred ones. Returns their ids (so the dashboard can offer Undo).
     @discardableResult
     func deleteAllChats() -> [UUID] {
-        let all = chats
-        chats.removeAll()
+        let all = chats.filter { !$0.starred }
+        chats.removeAll { !$0.starred }
         for c in all {
             keepInBin(BinItem(chat: c))
             remove(chatsDirectory.appendingPathComponent("\(c.id.uuidString).json"))
@@ -701,12 +700,10 @@ final class Library {
     }
 
     func search(screenshots query: String, sector: String? = nil) -> [ScreenshotRecord] {
-        let terms = query.lowercased().split(separator: " ").map(String.init)
+        let terms = SearchTerms(query)
         return screenshots.filter { s in
             if let sector, s.sector != sector { return false }
-            guard !terms.isEmpty else { return true }
-            let haystack = (s.title + " " + s.sector + " " + s.app + " " + s.windowTitle + " " + s.text).lowercased()
-            return terms.allSatisfy { haystack.contains($0) }
+            return terms.matches(s.title + " " + s.sector + " " + s.app + " " + s.windowTitle + " " + s.text)
         }
     }
 
@@ -726,7 +723,7 @@ final class Library {
         binDirectory.appendingPathComponent("\(item.kind.rawValue)-\(item.id.uuidString).json")
     }
 
-    /// Puts something in the Bin (a chat, note or screenshot you delete goes here by itself; the agent bar adds a dismissed agent).
+    /// Puts something in the Bin (a chat, note or screenshot you delete goes here by itself).
     func keepInBin(_ item: BinItem) {
         binned.removeAll { $0.id == item.id }
         binned.append(item)
@@ -734,14 +731,7 @@ final class Library {
         write(item, to: binFile(item))
     }
 
-    /// Same as `keepInBin`, for callers outside the library that need the dashboard to refresh.
-    func addToBin(_ item: BinItem) {
-        keepInBin(item)
-        announce()
-    }
-
-    /// Takes a chat, note or screenshot out of the Bin and puts it back where it was. (An agent goes back on the agent bar:
-    /// see `TaskEngine.restore`, which then calls `forget`.) False if it isn't in the Bin.
+    /// Takes a chat, note or screenshot out of the Bin and puts it back where it was. False if it isn't in the Bin.
     @discardableResult
     func restore(_ id: UUID) -> Bool {
         guard let item = binItem(id) else { return false }
@@ -765,8 +755,6 @@ final class Library {
             screenshots.append(s)
             screenshots.sort { $0.created > $1.created }
             write(s, to: screenshotsDirectory.appendingPathComponent("\(s.id.uuidString).json"))
-        case .agent:
-            return false
         }
         forget(item)
         announce()
@@ -777,13 +765,6 @@ final class Library {
     private func forget(_ item: BinItem) {
         binned.removeAll { $0.id == item.id }
         remove(binFile(item))
-    }
-
-    /// Takes an agent out of the Bin after the agent bar has put it back.
-    func forget(agent id: UUID) {
-        guard let item = binItem(id), item.kind == .agent else { return }
-        forget(item)
-        announce()
     }
 
     /// Deletes one thing for good (a screenshot's picture goes too).
@@ -848,12 +829,10 @@ final class Library {
     var binnedImageFiles: [String] { binned.compactMap { $0.screenshot?.imageFile } }
 
     func search(bin query: String, kind: BinItem.Kind? = nil) -> [BinItem] {
-        let terms = query.lowercased().split(separator: " ").map(String.init)
+        let terms = SearchTerms(query)
         return binned.filter { item in
             if let kind, item.kind != kind { return false }
-            guard !terms.isEmpty else { return true }
-            let haystack = item.searchText.lowercased()
-            return terms.allSatisfy { haystack.contains($0) }
+            return terms.matches(item.searchText)
         }
     }
 
@@ -885,22 +864,18 @@ final class Library {
     var sectorHintsForPrompt: [String: String] { activeSectorStore?.hints ?? [:] }
 
     func search(chats query: String, sector: String? = nil) -> [ChatRecord] {
-        let terms = query.lowercased().split(separator: " ").map(String.init)
+        let terms = SearchTerms(query)
         return chats.filter { c in
             if let sector, c.sector != sector { return false }
-            guard !terms.isEmpty else { return true }
-            let haystack = (c.title + " " + c.sector + " " + c.quote + " " + c.transcript).lowercased()
-            return terms.allSatisfy { haystack.contains($0) }
+            return terms.matches(c.title + " " + c.sector + " " + c.quote + " " + c.transcript)
         }
     }
 
     func search(notes query: String, sector: String? = nil) -> [Note] {
-        let terms = query.lowercased().split(separator: " ").map(String.init)
+        let terms = SearchTerms(query)
         return notes.filter { n in
             if let sector, n.sector != sector { return false }
-            guard !terms.isEmpty else { return true }
-            let haystack = (n.title + " " + n.sector + " " + n.quote + " " + n.question + " " + n.body).lowercased()
-            return terms.allSatisfy { haystack.contains($0) }
+            return terms.matches(n.title + " " + n.sector + " " + n.quote + " " + n.question + " " + n.body)
         }
     }
 
@@ -962,5 +937,37 @@ enum Notebook {
         } catch {
             return false
         }
+    }
+}
+
+/// A search box's words: a record matches when each word appears somewhere in its text (case-insensitive).
+/// An empty query matches everything.
+struct SearchTerms {
+    private let words: [String]
+    init(_ query: String) { words = query.lowercased().split(separator: " ").map(String.init) }
+
+    func matches(_ haystack: @autoclosure () -> String) -> Bool {
+        guard !words.isEmpty else { return true }
+        let text = haystack().lowercased()
+        return words.allSatisfy { text.contains($0) }
+    }
+}
+
+extension JSONEncoder {
+    /// An encoder that writes dates as ISO-8601 text.
+    static func iso8601(_ formatting: OutputFormatting...) -> JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        e.outputFormatting = OutputFormatting(formatting)
+        return e
+    }
+}
+
+extension JSONDecoder {
+    /// A decoder that reads dates written as ISO-8601 text.
+    static func iso8601() -> JSONDecoder {
+        let d = JSONDecoder()
+        d.dateDecodingStrategy = .iso8601
+        return d
     }
 }

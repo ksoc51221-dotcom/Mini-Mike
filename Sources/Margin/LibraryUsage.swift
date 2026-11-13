@@ -212,9 +212,7 @@ enum LibraryUsage {
 
     /// The whole library as one JSON file (dates in ISO 8601).
     static func exportJSON(chats: [ChatRecord], notes: [Note], now: Date = Date()) -> Data? {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .iso8601
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let e = JSONEncoder.iso8601(.prettyPrinted, .sortedKeys)
         return try? e.encode(Export(exported: now, chats: chats, notes: notes))
     }
 

@@ -13,9 +13,18 @@ enum FeatureTests {
         calendar(check)
         voiceUnitChecks(check)
         documents(check)
-        fileSafety(check)
-        agents(check)
-        taskRouting(check)
+        oneShotChecks(check)
+        voiceRouting(check)
+        savingChecks(check)
+        uiFixChecks(check)
+        binChecks(check)
+        starChecks(check)
+        mathChecks(check)
+        assistantChecks(check)
+        keybindChecks(check)
+        themeChecks(check)
+        reviewChecks(check)
+        sectorChecks(check)
         librarySettings(check)
         reviewList(check)
         personalAndLearn(check)
@@ -415,10 +424,10 @@ enum FeatureTests {
                             "summarize this page", "tidy my desktop", "explain this", "why does ice float",
                             "I watched a video yesterday and liked it", "what's the capital of France", "summarize"]
         for t in no { check("video: “\(t)” isn't", VideoIntent.parse(t) == nil) }
-        check("video: voice sends it to the video summarizer, not an agent", CommandCenter.route("summarize this video") == .video(.youtube(id: nil)))
-        check("video: …and not to a study agent from the agent box", { if case .video = CommandCenter.route("Hey Margin summarize this video") { return true } else { return false } }()
+        check("video: voice sends it to the video summarizer", CommandCenter.route("summarize this video") == .video(.youtube(id: nil)))
+        check("video: …wake words and all", { if case .video = CommandCenter.route("Hey Margin summarize this video") { return true } else { return false } }()
               || CommandCenter.route(CommandCenter.cleaned("Hey Margin summarize this video")) == .video(.youtube(id: nil)))
-        check("video: a textbook summary is still a study agent", { if case .task(.study) = CommandCenter.route("summarize chapter 4 of my econ textbook") { return true } else { return false } }())
+        check("video: a textbook summary is a question", CommandCenter.route("summarize chapter 4 of my econ textbook") == .ask)
         check("video: a plain question is still a question", CommandCenter.route("why does ice float") == .ask)
         check("video: the explanations are plain words", VideoIntent.explain(.noBrowser).contains("listen along")
               && VideoIntent.explain(.notAVideo).contains("front tab") && VideoIntent.explain(.needsPermission("Safari")).contains("Automation"))
@@ -687,7 +696,7 @@ extension FeatureTests {
             Library.shared.add(r)
         }
 
-        // Things you deleted, so the Bin has something in it: a chat, a note, a screenshot and a finished agent.
+        // Things you deleted, so the Bin has something in it: a chat, a note and a screenshot.
         var old = ChatRecord(title: "Draft of the ESL cover plan", sector: "Language", app: "Microsoft Teams", quote: "Cover work, week six",
                              turns: [.init(question: "Summarize this plan", answer: "Three activities: warm-up, reading, discussion.")])
         old.updated = Date().addingTimeInterval(-3 * 86_400)
@@ -698,11 +707,6 @@ extension FeatureTests {
         Library.shared.add(oldNote)
         Library.shared.delete(note: oldNote.id)
         if let first = Library.shared.screenshots.last { Library.shared.delete(screenshot: first.id) }
-        let agent = BackgroundTask(kind: .tidy, title: "Tidy Desktop")
-        agent.state = .done
-        agent.report = TaskReport(headline: "Sorted 112 screenshots into 4 folders", lines: ["Moved 112 files to Screenshots/2026-10", "Left 4 files you changed today"])
-        TaskEngine.shared.debugTrack(agent)
-        TaskEngine.shared.dismiss(agent)
 
         // The real window as ⌘⇧L shows it (a floating panel, sample library), photographed off the screen, in each of its views.
         let live = LibraryWindow.shared
@@ -727,7 +731,6 @@ extension FeatureTests {
             ("dashboard-screenshots.png", { state.mode = .screenshots; state.selectedScreenshot = Library.shared.screenshots.first?.id }),
             ("dashboard-all.png", { state.mode = .all; state.selection = nil }),
             ("dashboard-bin.png", { state.mode = .bin; state.selection = Library.shared.binned.first.map { ItemRef(kind: $0.kind, id: $0.id) } }),
-            ("dashboard-bin-agent.png", { state.selection = Library.shared.binned.first { $0.kind == .agent }.map { ItemRef(kind: $0.kind, id: $0.id) } }),
             ("dashboard-cleared.png", {
                 state.mode = .notebook
                 if state.toast == nil, let n = Library.shared.notes.first { state.clear(ItemRef(kind: .note, id: n.id)) }
@@ -791,14 +794,12 @@ extension FeatureTests {
 }
 
 extension FeatureTests {
-    /// ⌘⇧V talks to a chat; ⌘⇧V then A (or ⌘⇧A then V) talks to an agent; ⌘⇧A alone shows the bar, on key-up.
-    static func agentChordChecks(_ check: (String, Bool) -> Void) {
+    /// ⌘⇧V talks to a chat (on key-down, until key-up).
+    static func talkChordChecks(_ check: (String, Bool) -> Void) {
         let keys = Hotkeys()
         var log: [String] = []
-        keys.onTalkStart = { log.append($0 ? "talk-agent" : "talk") }
-        keys.onTalkAgent = { log.append("agent") }
+        keys.onTalkStart = { log.append("talk") }
         keys.onTalkEnd = { log.append("end") }
-        keys.onTasks = { log.append("bar") }
         func key(_ code: CGKeyCode, down: Bool, _ flags: CGEventFlags = [.maskCommand, .maskShift]) -> Bool {
             guard let e = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down) else { return false }
             e.flags = flags
@@ -811,25 +812,8 @@ extension FeatureTests {
         let s1 = [key(v, down: true), key(v, down: false)]
         check("chord: ⌘⇧V alone talks to a chat", log == ["talk", "end"] && s1.allSatisfy { $0 })
         log = []
-        let s2 = [key(v, down: true), key(a, down: true), key(a, down: false), key(v, down: false)]
-        check("chord: ⌘⇧V then A makes it a job for an agent (\(log))", log == ["talk", "agent", "end"] && s2.allSatisfy { $0 })
-        log = []
-        let s3 = [key(a, down: true), key(v, down: true), key(v, down: false), key(a, down: false)]
-        check("chord: ⌘⇧A then V talks to an agent, and doesn't toggle the bar (\(log))", log == ["talk-agent", "end"] && s3.allSatisfy { $0 })
-        log = []
-        let s4 = [key(a, down: true)]
-        let early = log
-        let s5 = [key(a, down: false)]
-        check("chord: ⌘⇧A alone shows the bar when A comes up (\(log))", early.isEmpty && log == ["bar"] && (s4 + s5).allSatisfy { $0 })
-        log = []
         check("chord: a plain A types normally", !key(a, down: true, []) && !key(a, down: false, []) && log.isEmpty)
-        // A key-up that never arrives (the event tap was briefly off) must not make the next typed letters vanish.
-        log = []
-        _ = key(a, down: true) // ⌘⇧A pressed, its release is lost
-        log = []
-        let typed = key(a, down: true, []) // later, a plain "a"
-        check("chord: after a lost key-up, a plain A is typed normally again", !typed)
-        _ = key(a, down: false, [])
+        check("chord: ⌘⇧A is left to the app you're in", !key(a, down: true) && !key(a, down: false) && log.isEmpty)
         log = []
         _ = key(v, down: true) // ⌘⇧V pressed, its release is lost
         _ = key(v, down: true) // pressed again
@@ -845,23 +829,11 @@ extension FeatureTests {
               && Hotkeys.action(keyCode: 9, flags: .maskCommand, tabHeld: false) == nil)
         check("voice: Cmd+Option+Shift+V isn't ours", Hotkeys.action(keyCode: 9, flags: [.maskAlternate, .maskShift, .maskCommand], tabHeld: false) == nil)
         check("voice: Option+Shift+Space is free again", Hotkeys.action(keyCode: 49, flags: [.maskAlternate, .maskShift], tabHeld: false) == nil)
-        check("agents: Cmd+Shift+A shows the agent bar", Hotkeys.action(keyCode: 0, flags: cmdShift, tabHeld: false) == .tasks
-              && Hotkeys.action(keyCode: 0, flags: [.maskCommand, .maskControl, .maskShift], tabHeld: false) == nil
-              && Hotkeys.action(keyCode: 0, flags: .maskCommand, tabHeld: false) == nil)
-        agentChordChecks(check)
-        check("agents: 'show my agents' opens the bar", CommandCenter.route("show me my agents") == .agents)
-        check("agents: 'what are my agents doing' opens the bar", CommandCenter.route("Hey Margin, what are my agents doing?") == .agents
-              || CommandCenter.route(CommandCenter.cleaned("Hey Margin, what are my agents doing?")) == .agents)
-        check("agents: 'check on my cats' opens the bar", CommandCenter.route("check on my cats") == .agents)
-        check("agents: 'open the agent bar'", CommandCenter.route("open the agent bar") == .agents)
-        check("agents: a question about agents is still a question", CommandCenter.route("what is a principal agent problem") == .ask
+        check("voice: Cmd+Shift+A and Cmd+Shift+C aren't Margin's", Hotkeys.action(keyCode: 0, flags: cmdShift, tabHeld: false) == nil
+              && Hotkeys.action(keyCode: 8, flags: cmdShift, tabHeld: false) == nil)
+        talkChordChecks(check)
+        check("voice: a question that mentions agents is still a question", CommandCenter.route("what is a principal agent problem") == .ask
               && CommandCenter.route("show me pictures of cats") == .ask && CommandCenter.route("what do real estate agents do") == .ask)
-        for phrase in ["organize my downloads", "Organize my download.", "can you organize my downloads folder", "Could you organise the downloads",
-                       "clean up my desktop please", "sort my screenshots", "organize my downloads for me", "tidy up my downloads folder"] {
-            let r = CommandCenter.route(CommandCenter.cleaned(phrase))
-            check("voice: “\(phrase)” goes to an agent (\(r))", { if case .task = r { return true } else { return false } }())
-        }
-        check("agents: a job still starts a job", { if case .task = CommandCenter.route("tidy my downloads") { return true } else { return false } }())
         check("voice: the chat chord still works", Hotkeys.action(keyCode: 48, flags: flags, tabHeld: false) == .chat)
         check("voice: wake words come off", CommandCenter.cleaned("Hey Margin, add lunch to my calendar") == "add lunch to my calendar"
               && CommandCenter.cleaned("okay margin what is entropy") == "what is entropy"
@@ -1398,250 +1370,13 @@ extension FeatureTests {
     }
 }
 
-// MARK: - File safety
+// MARK: - Screenshot titles, one-shot Claude calls
 
 extension FeatureTests {
-    private static func fileSafety(_ check: (String, Bool) -> Void) {
-        let fm = FileManager.default
-        let base = fm.temporaryDirectory.appendingPathComponent("margin-safety-\(UUID().uuidString)")
-        let allowed = base.appendingPathComponent("Desktop")
-        let outside = base.appendingPathComponent("Elsewhere")
-        try? fm.createDirectory(at: allowed, withIntermediateDirectories: true)
-        try? fm.createDirectory(at: outside, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: base) }
-        let savedRoots = FileSafety.roots
-        FileSafety.roots = [allowed]
-        defer { FileSafety.roots = savedRoots }
-
-        func make(_ name: String, in dir: URL = allowed, _ text: String = "x") -> URL {
-            let url = dir.appendingPathComponent(name)
-            try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? Data(text.utf8).write(to: url)
-            return url
-        }
-        func refused(_ f: () throws -> Void) -> Bool { (try? f()) == nil }
-
-        let shot = make("Screenshot 1.png")
-        let foreign = make("secret.txt", in: outside)
-        let hidden = make(".hidden.txt")
-        let insideApp = make("Tool.app/Contents/Info.plist")
-        let link = allowed.appendingPathComponent("link-to-secret")
-        try? fm.createSymbolicLink(at: link, withDestinationURL: foreign)
-
-        check("safety: an item in an allowed folder is fine", !refused { try FileSafety.checkSource(shot) })
-        check("safety: nothing outside the allowed folders", refused { try FileSafety.checkSource(foreign) })
-        check("safety: not the allowed folder itself", refused { try FileSafety.checkSource(allowed) })
-        check("safety: not hidden files", refused { try FileSafety.checkSource(hidden) })
-        check("safety: not inside an app", refused { try FileSafety.checkSource(insideApp) })
-        check("safety: not a shortcut that points elsewhere", refused { try FileSafety.checkSource(link) })
-        check("safety: not a made-up path", refused { try FileSafety.checkSource(allowed.appendingPathComponent("nope.txt")) })
-        check("safety: '..' can't climb out", refused { try FileSafety.checkSource(allowed.appendingPathComponent("../Elsewhere/secret.txt")) })
-        check("safety: a sibling folder with a similar name isn't inside", refused { try FileSafety.checkSource(make("a.txt", in: base.appendingPathComponent("Desktop2"))) })
-        check("safety: can't put things outside", refused { try FileSafety.checkDestination(outside.appendingPathComponent("x.txt")) })
-        check("safety: can't put things in hidden folders", refused { try FileSafety.checkDestination(allowed.appendingPathComponent(".cache/x.txt")) })
-        check("safety: unique names count up", FileSafety.unique(shot).lastPathComponent == "Screenshot 1 2.png"
-              && FileSafety.unique(allowed.appendingPathComponent("new.txt")).lastPathComponent == "new.txt")
-
-        // Moving, with a name clash and new folders
-        let a = make("a.pdf", "A"), b = make("b.pdf", "B")
-        let dest = allowed.appendingPathComponent("PDFs/2026-10")
-        var ledger = FileSafety.Ledger(title: "test")
-        var progressed = 0
-        let ops = [FileSafety.Op.move(a, to: dest.appendingPathComponent("doc.pdf")), .move(b, to: dest.appendingPathComponent("doc.pdf")),
-                   .move(foreign, to: allowed.appendingPathComponent("stolen.txt")), .move(hidden, to: allowed.appendingPathComponent("h.txt"))]
-        let outcome = FileSafety.execute(ops, ledger: &ledger, progress: { done, _ in progressed = done })
-        check("safety: moved two files", outcome.done == 2 && progressed == 4)
-        check("safety: the clash didn't overwrite", (try? String(contentsOf: dest.appendingPathComponent("doc.pdf"))) == "A"
-              && (try? String(contentsOf: dest.appendingPathComponent("doc 2.pdf"))) == "B")
-        check("safety: forbidden moves were skipped, with reasons", outcome.skipped.count == 2 && fm.fileExists(atPath: foreign.path)
-              && !fm.fileExists(atPath: allowed.appendingPathComponent("stolen.txt").path))
-        check("safety: the ledger knows what happened", ledger.count == 2 && ledger.records.filter { $0.kind == .createdFolder }.count == 2)
-
-        // Trash, then undo everything
-        let junk = make("old.dmg", "junk")
-        let t = FileSafety.execute([.trash(junk)], ledger: &ledger)
-        check("safety: remove goes to the Trash, not oblivion", t.done == 1 && !fm.fileExists(atPath: junk.path)
-              && ledger.records.last.map { fm.fileExists(atPath: $0.now) } == true)
-        let undone = FileSafety.undo(&ledger)
-        check("safety: undo puts everything back", undone.restored == 3 && undone.couldNotRestore.isEmpty
-              && fm.fileExists(atPath: a.path) && fm.fileExists(atPath: b.path) && fm.fileExists(atPath: junk.path))
-        check("safety: contents survived the round trip", (try? String(contentsOf: a)) == "A" && (try? String(contentsOf: junk)) == "junk")
-        check("safety: folders Margin made are cleaned up", !fm.fileExists(atPath: dest.path) && !fm.fileExists(atPath: allowed.appendingPathComponent("PDFs").path))
-
-        // A file you moved yourself afterwards is left alone
-        var ledger2 = FileSafety.Ledger(title: "t2")
-        let c = make("c.txt", "C")
-        _ = FileSafety.execute([.move(c, to: allowed.appendingPathComponent("Notes/c.txt"))], ledger: &ledger2)
-        try? fm.removeItem(at: allowed.appendingPathComponent("Notes/c.txt"))
-        let undone2 = FileSafety.undo(&ledger2)
-        check("safety: undo doesn't invent files you've deleted", undone2.restored == 0 && undone2.couldNotRestore == ["c.txt"])
-
-        // Cancelling stops between steps
-        var ledger3 = FileSafety.Ledger(title: "t3")
-        let d1 = make("d1.txt"), d2 = make("d2.txt")
-        var calls = 0
-        let cancelled = FileSafety.execute([.move(d1, to: allowed.appendingPathComponent("X/d1.txt")), .move(d2, to: allowed.appendingPathComponent("X/d2.txt"))],
-                                           ledger: &ledger3, cancelled: { calls += 1; return calls > 1 })
-        check("safety: cancel stops the rest", cancelled.cancelled && cancelled.done == 1 && fm.fileExists(atPath: d2.path))
-
-        // The ledger is written as a file
-        let saved = FileSafety.ledgerDirectory
-        FileSafety.ledgerDirectory = base.appendingPathComponent("ledgers")
-        FileSafety.save(ledger)
-        check("safety: the ledger is saved", fm.fileExists(atPath: FileSafety.ledgerDirectory.appendingPathComponent("\(ledger.id.uuidString).json").path))
-        FileSafety.ledgerDirectory = saved
-    }
-}
-
-// MARK: - Background agents
-
-extension FeatureTests {
-    private static func agents(_ check: (String, Bool) -> Void) {
-        let fm = FileManager.default
-
-        // Kinds
-        check("tidy: kinds by name", Tidy.category(forName: "Screenshot 2026-10-09 at 3.41.12 PM.png") == .screenshot
-              && Tidy.category(forName: "Screen Recording 2026.mov") == .screenshot
-              && Tidy.category(forName: "notes.pdf") == .pdf && Tidy.category(forName: "IMG_1.HEIC") == .image
-              && Tidy.category(forName: "Setup.dmg") == .installer && Tidy.category(forName: "a.zip") == .archive
-              && Tidy.category(forName: "essay.docx") == .document && Tidy.category(forName: "weird.xyz") == .other
-              && Tidy.category(forName: "Screenshots are fun.txt") == .document)
-        check("tidy: titles from on-screen text", Tidy.heuristicTitle("File Edit View\nSupply and Demand: Market Equilibrium\n12 34") == "Supply and Demand: Market Equilibrium".replacingOccurrences(of: ":", with: " ").replacingOccurrences(of: "  ", with: " ")
-              && Tidy.heuristicTitle("12 34 56") == nil)
-        check("tidy: names are safe for files", Tidy.sanitize("a/b: c*d?  e") == "a b c d e" && Tidy.sanitize(String(repeating: "word ", count: 30)).count <= 60)
-        check("tidy: the prompt numbers the screenshots", Tidy.namePrompt(["one\ntwo", "three"]).hasPrefix("1. one | two\n2. three"))
-        check("tidy: token estimate grows with the count", Tidy.nameTokenEstimate(count: 150) > Tidy.nameTokenEstimate(count: 50) && Tidy.nameTokenEstimate(count: 0) == 0)
-
-        // A messy folder, in a temporary allowed area
-        let base = fm.temporaryDirectory.appendingPathComponent("margin-tidy-\(UUID().uuidString)")
-        let desktop = base.appendingPathComponent("Desktop")
-        try? fm.createDirectory(at: desktop, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: base) }
-        let savedRoots = FileSafety.roots
-        FileSafety.roots = [desktop]
-        defer { FileSafety.roots = savedRoots }
-        let now = Date()
-        func file(_ name: String, _ text: String, age: TimeInterval = 3600 * 24 * 3) -> URL {
-            let u = desktop.appendingPathComponent(name)
-            try? Data(text.utf8).write(to: u)
-            let d = now.addingTimeInterval(-age)
-            try? fm.setAttributes([.creationDate: d, .modificationDate: d], ofItemAtPath: u.path)
-            return u
-        }
-        let shot1 = file("Screenshot 2026-10-09 at 3.41.12 PM.png", "s1")
-        let shot2 = file("Screenshot 2026-10-09 at 4.00.00 PM.png", "s2")
-        _ = file("report.pdf", "pdf-1")
-        _ = file("notes.txt", "n")
-        _ = file("same-a.txt", "identical content")
-        _ = file("same-b.txt", "identical content", age: 3600 * 24 * 2) // newer: this is the one trashed
-        _ = file("OldApp.dmg", "installer", age: 3600 * 24 * 60)
-        _ = file("NewApp.dmg", "installer2", age: 3600 * 24 * 2)
-        _ = file("mystery.xyz", "?")
-        _ = file("just-now.txt", "fresh", age: 60)
-        try? fm.createDirectory(at: desktop.appendingPathComponent("EmptyFolder"), withIntermediateDirectories: true)
-        try? fm.setAttributes([.modificationDate: now.addingTimeInterval(-86400)], ofItemAtPath: desktop.appendingPathComponent("EmptyFolder").path)
-        try? fm.createDirectory(at: desktop.appendingPathComponent("MyProject"), withIntermediateDirectories: true)
-        try? Data("keep".utf8).write(to: desktop.appendingPathComponent("MyProject/file.txt"))
-        try? Data("h".utf8).write(to: desktop.appendingPathComponent(".hidden"))
-
-        let scan = Tidy.scan(desktop, now: now)
-        check("tidy: scan sees the loose files", scan.items.count == 9 && scan.skippedRecent == 1 && scan.emptyFolders.count == 1)
-        check("tidy: scan leaves your own folders and hidden files out", !scan.items.contains { $0.name == "file.txt" || $0.name == ".hidden" })
-        let plan = Tidy.plan(folder: desktop, scan: scan, titles: [shot1: "Supply and demand graph"], screenshotTexts: 2, now: now)
-        let keys = plan.groups.map(\.key)
-        check("tidy: plan has the right groups", Set(keys) == ["duplicates", "old-installers", "empty-folders", "sort:screenshot", "sort:pdf", "sort:document", "sort:installer"])
-        check("tidy: the newer duplicate is the one removed", plan.groups.first { $0.key == "duplicates" }?.files.first?.hasPrefix("same-b.txt") == true)
-        check("tidy: one duplicate doesn't also get sorted", plan.groups.first { $0.key == "sort:document" }?.ops.count == 2)
-        check("tidy: the plan offers smart names, off by default, with a token cost",
-              plan.options.first?.id == "smartNames" && plan.options.first?.on == false && plan.options.first?.detail.contains("tokens") == true)
-        check("tidy: notes say what was left alone", plan.notes.contains { $0.contains("other kinds") } && plan.notes.contains { $0.contains("last 10 minutes") })
-        let shotGroup = plan.groups.first { $0.key == "sort:screenshot" }
-        check("tidy: screenshots go to month folders and get named from their text",
-              shotGroup?.ops.count == 2 && shotGroup?.ops.contains { $0.to?.hasSuffix("Screenshots/2026-10/2026-10-06 Supply and demand graph.png") == true || ($0.to?.contains("Supply and demand graph") == true) } == true)
-        check("tidy: a screenshot with no title keeps its name", shotGroup?.ops.contains { $0.to?.hasSuffix("Screenshot 2026-10-09 at 4.00.00 PM.png") == true } == true)
-
-        var ledger = FileSafety.Ledger(title: "tidy test")
-        let outcome = FileSafety.execute(plan.enabledOps, ledger: &ledger)
-        check("tidy: the plan runs without skips", outcome.skipped.isEmpty && outcome.done == plan.enabledOps.count)
-        check("tidy: screenshots, PDFs and documents are sorted", fm.fileExists(atPath: desktop.appendingPathComponent("PDFs").path)
-              && !fm.fileExists(atPath: shot1.path) && !fm.fileExists(atPath: shot2.path)
-              && (try? fm.contentsOfDirectory(atPath: desktop.appendingPathComponent("Documents").path))?.sorted() == ["notes.txt", "same-a.txt"])
-        check("tidy: the old installer and duplicate are in the Trash, the new installer is sorted",
-              !fm.fileExists(atPath: desktop.appendingPathComponent("OldApp.dmg").path) && !fm.fileExists(atPath: desktop.appendingPathComponent("same-b.txt").path)
-              && fm.fileExists(atPath: desktop.appendingPathComponent("Installers/NewApp.dmg").path))
-        check("tidy: your own things weren't touched", fm.fileExists(atPath: desktop.appendingPathComponent("MyProject/file.txt").path)
-              && fm.fileExists(atPath: desktop.appendingPathComponent("just-now.txt").path) && fm.fileExists(atPath: desktop.appendingPathComponent("mystery.xyz").path)
-              && fm.fileExists(atPath: desktop.appendingPathComponent(".hidden").path))
-        let undo = FileSafety.undo(&ledger)
-        check("tidy: undo restores the whole desktop", undo.couldNotRestore.isEmpty && fm.fileExists(atPath: shot1.path)
-              && fm.fileExists(atPath: desktop.appendingPathComponent("OldApp.dmg").path) && fm.fileExists(atPath: desktop.appendingPathComponent("same-b.txt").path)
-              && fm.fileExists(atPath: desktop.appendingPathComponent("EmptyFolder").path) && !fm.fileExists(atPath: desktop.appendingPathComponent("PDFs").path))
-
-        // An already-tidy folder
-        let tidy = fm.temporaryDirectory.appendingPathComponent("margin-tidy2-\(UUID().uuidString)/Desktop")
-        try? fm.createDirectory(at: tidy, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: tidy.deletingLastPathComponent()) }
-        FileSafety.roots = [tidy]
-        check("tidy: nothing to do says so", Tidy.plan(folder: tidy, scan: Tidy.scan(tidy), now: now).groups.isEmpty)
-        FileSafety.roots = [desktop]
-
-        // Find
-        let (terms, query) = Find.parse("where's the PDF with the elasticity table?")
-        check("find: keeps the words that matter", terms == ["elasticity", "table"] && query.contains("com.adobe.pdf") && query.contains("*elasticity*"))
-        check("find: nothing to look for is empty", Find.parse("find my files").query.isEmpty)
-        let hits = Find.rank(Find.walk([desktop], terms: ["report"]), terms: ["report"])
-        check("find: the fallback walk finds files by name", hits.count == 1 && hits[0].url.lastPathComponent == "report.pdf" && hits[0].nameMatches)
-        check("find: system folders are never listed", Find.rank(["/Users/x/Library/Caches/report.pdf", "/Users/x/.hidden/r.pdf"], terms: ["report"]).isEmpty)
-
-        // Batch
-        let png = fm.temporaryDirectory.appendingPathComponent("margin-batch-\(UUID().uuidString).png")
-        let heic = png.deletingPathExtension().appendingPathExtension("heic")
-        defer { try? fm.removeItem(at: png); try? fm.removeItem(at: heic) }
-        if let ctx = CGContext(data: nil, width: 64, height: 48, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-           let img = { ctx.setFillColor(NSColor.orange.cgColor); ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 48)); return ctx.makeImage() }(),
-           let dest = CGImageDestinationCreateWithURL(heic as CFURL, "public.heic" as CFString, 1, nil) {
-            CGImageDestinationAddImage(dest, img, nil)
-            _ = CGImageDestinationFinalize(dest)
-        }
-        let jpeg = BatchAgent.jpegData(from: heic)
-        check("batch: HEIC becomes a JPEG", jpeg.map { $0.count > 100 && $0.prefix(2) == Data([0xFF, 0xD8]) } == true)
-        let p1 = makePDF(["one", "two"], asPicture: false), p2 = makePDF(["three"], asPicture: false)
-        defer { try? fm.removeItem(at: p1); try? fm.removeItem(at: p2) }
-        check("batch: PDFs merge into one with every page", BatchAgent.mergedPDF([p1, p2]).flatMap { PDFDocument(data: $0) }?.pageCount == 3)
-
-        // Study
-        let json = "Sure!\n```json\n{\"summary\": \"Main idea.\\n- a\\n- b\", \"keywords\": [{\"term\": \"Elasticity\", \"meaning\": \"Responsiveness.\"}], \"questions\": [{\"q\": \"Why?\", \"a\": \"Because.\"}], \"flashcards\": [{\"front\": \"F\\ttab\", \"back\": \"B\"}]}\n```"
-        let notes = Study.parse(json)
-        check("study: Claude's JSON is read even in a code fence", notes?.keywords.first?.term == "Elasticity" && notes?.questions.count == 1 && notes?.summary.hasPrefix("Main idea.") == true)
-        check("study: unusable replies are refused", Study.parse("I cannot do that") == nil && Study.parse("{}") == nil)
-        let sec = Study.Section(title: "Chapter 4: Elasticity", pages: 41...58, text: "x")
-        let md = Study.markdown(notes!, doc: "Econ 101", section: sec)
-        check("study: markdown has the parts", md.contains("# Chapter 4: Elasticity") && md.contains("pages 41–58") && md.contains("## Key terms") && md.contains("- **Elasticity**: Responsiveness.") && md.contains("*Answer:* Because."))
-        check("study: flashcards are tab-separated for Anki", Study.flashcardsCSV(notes!.flashcards.map { ($0.front, $0.back) }) == "F tab\tB\n")
-        let long = Study.Section(title: "Long", pages: nil, text: String(repeating: "A long paragraph of study text goes here.\n\n", count: 2000))
-        check("study: long sections are cut to excerpts", Study.sent(long).excerpted && Study.sent(long).text.count < Study.maxSectionChars + 500 && !Study.sent(sec).excerpted)
-        let est1 = Study.estimate(sections: [sec], outputs: [.summary]), est2 = Study.estimate(sections: [sec, sec], outputs: [.summary, .flashcards])
-        check("study: the token estimate grows with parts and outputs", est2 > 2 * est1 && est1 > 3500)
-        check("study: prompt asks only for what's wanted", Study.prompt(docTitle: "D", section: sec, outputs: [.summary], excerpted: false, text: "t").contains("\"summary\"")
-              && !Study.prompt(docTitle: "D", section: sec, outputs: [.summary], excerpted: false, text: "t").contains("flashcards"))
-
-        // A PDF with a real table of contents
-        let book = makePDF((1...12).map { "Page \($0) text that is long enough to be indexed properly in the study reader." }, asPicture: false)
-        defer { try? fm.removeItem(at: book) }
-        if let pdf = PDFDocument(url: book) {
-            let root = PDFOutline()
-            for (i, (title, page)) in [("Chapter 1: Basics", 0), ("Chapter 2: Demand", 4), ("Chapter 3: Supply", 8)].enumerated() {
-                let o = PDFOutline()
-                o.label = title
-                if let p = pdf.page(at: page) { o.destination = PDFDestination(page: p, at: .zero) }
-                root.insertChild(o, at: i)
-            }
-            pdf.outlineRoot = root
-            pdf.write(to: book)
-        }
-        let study = Study.read(book)
-        check("study: a PDF's contents become sections", study?.sections.map(\.title) == ["Chapter 1: Basics", "Chapter 2: Demand", "Chapter 3: Supply"])
-        check("study: each section has its own pages", study?.sections[1].pages == 5...8 && study?.sections[1].text.contains("Page 6") == true && study?.sections[1].text.contains("Page 2 ") == false)
+    private static func oneShotChecks(_ check: (String, Bool) -> Void) {
+        check("screenshots: titles from on-screen text", ScreenshotLabel.heuristicTitle("File Edit View\nSupply and Demand: Market Equilibrium\n12 34") == "Supply and Demand: Market Equilibrium".replacingOccurrences(of: ":", with: " ").replacingOccurrences(of: "  ", with: " ")
+              && ScreenshotLabel.heuristicTitle("12 34 56") == nil)
+        check("screenshots: names are safe for files", ScreenshotLabel.sanitize("a/b: c*d?  e") == "a b c d e" && ScreenshotLabel.sanitize(String(repeating: "word ", count: 30)).count <= 60)
 
         // Running Claude once: reading its JSON envelope
         let envelope = #"{"type":"result","subtype":"success","is_error":false,"result":"[\"A title\"]","usage":{"input_tokens":12,"cache_creation_input_tokens":3000,"cache_read_input_tokens":0,"output_tokens":9},"total_cost_usd":0.01,"duration_api_ms":1500}"#
@@ -1655,509 +1390,30 @@ extension FeatureTests {
 }
 
 extension FeatureTests {
-    private static func taskRouting(_ check: (String, Bool) -> Void) {
-        func desk() -> URL { FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0] }
-        func dl() -> URL { FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask)[0] }
-        check("tasks: tidy my desktop", TaskRouter.parse("tidy my desktop") == .tidy(desk()))
-        check("tasks: clean up downloads", TaskRouter.parse("Hey, clean up my downloads folder please") == .tidy(dl()))
-        check("tasks: organize screenshots means the desktop", TaskRouter.parse("organize my screenshots") == .tidy(desk()))
-        check("tasks: a bare 'tidy' in the box defaults to the desktop, but not by voice", TaskRouter.parse("tidy up") == .tidy(desk()) && TaskRouter.parse("tidy up", strict: true) == nil)
-        check("tasks: find a file", TaskRouter.parse("find the PDF about elasticity") == .find("find the PDF about elasticity"))
-        check("tasks: where's my file", TaskRouter.parse("where's my tax return pdf", strict: true) != nil)
-        check("tasks: a question isn't a task by voice", TaskRouter.parse("where is Paris", strict: true) == nil && TaskRouter.parse("how do I find the derivative", strict: true) == nil)
-        let pdf = URL(fileURLWithPath: "/tmp/econ.pdf")
-        check("tasks: study notes from a dropped file", TaskRouter.parse("summarize chapter 4 and make flashcards", files: [pdf]) == .study(pdf, hint: "summarize chapter 4 and make flashcards"))
-        check("tasks: by voice, 'summarize' needs a book, chapter or file", TaskRouter.parse("summarize chapter 4 of my econ textbook", strict: true) != nil
-              && TaskRouter.parse("summarize this paragraph", strict: true) == nil)
-        check("tasks: convert HEIC", TaskRouter.parse("convert my HEIC photos to JPG") == .batch(.heicToJpg, []))
-        check("tasks: merge PDFs", TaskRouter.parse("merge these PDFs", files: [pdf, URL(fileURLWithPath: "/tmp/b.pdf")]) == .batch(.mergePDFs, [pdf, URL(fileURLWithPath: "/tmp/b.pdf")]))
-        check("tasks: read text from images", TaskRouter.parse("extract text from these screenshots") == .batch(.ocrToText, []))
-        check("tasks: gibberish is nothing", TaskRouter.parse("banana") == nil && TaskRouter.parse("") == nil)
+    private static func voiceRouting(_ check: (String, Bool) -> Void) {
         check("voice: calendar still wins", CommandCenter.route("add tidy desktop to my calendar tomorrow at 9") == .calendar)
-        check("voice: a file job routes to the agents", CommandCenter.route("tidy my desktop") == .task(.tidy(desk())))
+        check("voice: a file job is just a question now", CommandCenter.route("tidy my desktop") == .ask)
         check("voice: a question still goes to Claude", CommandCenter.route("why does ice float") == .ask)
-        check("tasks: the limits are the three folders", FileSafety.defaultRoots.count == 3)
-        approvalChecks(check)
-        customAgentChecks(check)
-        savingChecks(check)
-        connectedChecks(check)
-        uiFixChecks(check)
-        binChecks(check)
-        sectorChecks(check)
+    }
+}
+
+/// Where the tests put the chats they open: the bottom-right corner of the main screen, so they never cover the middle of the
+/// screen where you're working. (A chat there grows upward as its answer fills in. Test chats are click-through anyway: they
+/// can't take clicks or typing.)
+enum TestSpot {
+    static func mouse(on screen: NSScreen = NSScreen.main ?? NSScreen.screens[0]) -> NSPoint {
+        NSPoint(x: screen.visibleFrame.maxX - 40, y: screen.visibleFrame.minY + 40)
     }
 }
 
 extension FeatureTests {
-    /// What an agent asks, what Allow and Deny do with it.
-    static func approvalChecks(_ check: (String, Bool) -> Void) {
-        let move = FileSafety.Op.move(URL(fileURLWithPath: "/tmp/a.pdf"), to: URL(fileURLWithPath: "/tmp/PDFs/a.pdf"))
-        let trash = FileSafety.Op.trash(URL(fileURLWithPath: "/tmp/old.dmg"))
-        var plan = TaskPlan(headline: "Tidy Downloads: 3 changes", groups: [
-            PlanGroup(key: "sort:pdf", title: "Sort 2 PDFs", symbol: "doc", ops: [move, move]),
-            PlanGroup(key: "old-installers", title: "Move 1 old installer to the Trash", symbol: "trash", ops: [trash], removes: true),
-        ])
-        check("approve: the plan says what Allow would do (\(plan.summary))", plan.summary == "3 changes · 1 to the Trash")
-        plan.groups[1].enabled = false
-        check("approve: the summary follows what's switched on (\(plan.summary))", plan.summary == "2 changes")
-        plan.groups[0].enabled = false
-        check("approve: nothing switched on means nothing to allow", !plan.canApprove)
-        plan.groups[0].enabled = true
-        check("approve: something switched on can be allowed", plan.canApprove)
-
-        let task = BackgroundTask(kind: .tidy, title: "Tidy Downloads")
-        task.plan = plan
-        check("approve: not before it's asking", !task.canQuickApprove)
-        task.state = .needsApproval
-        check("approve: a plan can be allowed from the bar", task.canQuickApprove)
-        var ran = 0
-        task.onApprove = { _ in ran += 1 }
-        TaskEngine.shared.approve(task)
-        check("approve: Allow runs the plan", ran == 1)
-        TaskEngine.shared.approve(BackgroundTask(kind: .tidy, title: "not asking"))
-        check("approve: Allow on an agent that isn't asking does nothing", ran == 1)
-
-        let denied = BackgroundTask(kind: .tidy, title: "Tidy Desktop")
-        denied.plan = plan
-        denied.state = .needsApproval
-        var ranDenied = 0
-        denied.onApprove = { _ in ranDenied += 1 }
-        TaskEngine.shared.deny(denied)
-        check("approve: Deny stops the agent and says nothing changed", denied.state == .cancelled && denied.detail.contains("Denied") && denied.plan == nil)
-        TaskEngine.shared.approve(denied)
-        check("approve: a denied agent can't be allowed afterwards", ranDenied == 0)
-
-        let study = BackgroundTask(kind: .study, title: "Study")
-        study.chooser = TaskChooser(heading: "Which parts?", items: [.init(id: "0", title: "Ch 1", on: true)], optionsHeading: "Make",
-                                    options: [.init(id: "summary", title: "Summary", on: true)])
-        study.state = .needsApproval
-        check("approve: a choice (which chapters, what it costs) is made on the card, not allowed blind", !study.canQuickApprove)
-        check("approve: but it can still be allowed there", { var ok = false; study.onApprove = { _ in ok = true }; TaskEngine.shared.approve(study); return ok }())
-        check("approve: the bar says how many parts are picked (\(study.approvalSummary))", study.approvalSummary.contains("1 of 1"))
+    /// Runs the main loop until `done()` or the time runs out.
+    static func pump(_ seconds: TimeInterval = 8, until done: () -> Bool) {
+        let end = Date().addingTimeInterval(seconds)
+        while !done(), Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
     }
-}
 
-extension FeatureTests {
-    /// Margin --catsheet <png>: every coat in every pose (standing, the 4 trot pictures, loaf, asleep), on white and on the bar's black.
-    /// Draws no window.
-    static func catSheet(path: String) -> Never {
-        let poses: [PixelCat.Pose] = [.sit, .run(0), .run(1), .run(2), .run(3), .loaf, .sleep]
-        let cw = Int(PixelCat.cell.width), ch = Int(PixelCat.cell.height)
-        let gap = 8
-        let cols = poses.count * 2, rows = PixelCat.coats.count
-        let W = cols * (cw + gap) + gap, H = rows * (ch + gap) + gap
-        guard let ctx = CGContext(data: nil, width: W, height: H, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { exit(1) }
-        ctx.interpolationQuality = .high
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: W / 2, height: H))
-        ctx.setFillColor(CGColor(red: 0.05, green: 0.05, blue: 0.06, alpha: 1))
-        ctx.fill(CGRect(x: W / 2, y: 0, width: W - W / 2, height: H))
-        for r in 0..<rows {
-            for (i, pose) in poses.enumerated() {
-                for half in 0..<2 {
-                    guard let img = PixelCat.image(coat: r, pose: pose) else { continue }
-                    let c = half * poses.count + i
-                    ctx.draw(img, in: CGRect(x: gap + c * (cw + gap), y: H - (r + 1) * (ch + gap), width: cw, height: ch))
-                }
-            }
-        }
-        guard let image = ctx.makeImage() else { exit(1) }
-        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
-        print("CATSHEET saved \(path)")
-        exit(0)
-    }
-}
-
-extension FeatureTests {
-    /// Margin --agentbartest <dir>: the agent bar. Chats and agents are kept apart; minimized the agents are cats asleep in the
-    /// bottom-right corner, expanded it's a bar at the top centre; each agent has its own cat (standing, running, loaf, asleep); an agent that
-    /// needs your OK expands the bar and shows Allow and Deny right on its cat (and on its card); Allow carries the plan
-    /// out, Deny changes nothing; the bar stays up while something waits on you. Uses temporary folders and no Claude.
-    /// Saves pictures of the bar, the strip and the card to <dir>.
-    static func agentBarTest(directory: String) -> Never {
-        setvbuf(stdout, nil, _IONBF, 0)
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        AskPanelController.demoMode = true
-        let fm = FileManager.default
-        let out = URL(fileURLWithPath: directory)
-        try? fm.createDirectory(at: out, withIntermediateDirectories: true)
-        let base = fm.temporaryDirectory.appendingPathComponent("margin-bartest-\(UUID().uuidString)")
-        FileSafety.ledgerDirectory = base.appendingPathComponent("ledgers")
-
-        /// A messy folder, like a real Downloads: lots of kinds, an old installer, a duplicate, so the plan is long.
-        func messyFolder(_ name: String) -> URL {
-            let folder = base.appendingPathComponent(name)
-            try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
-            var files: [(String, String, Double)] = [("essay.docx", "essay", 6), ("report.docx", "report", 7), ("old.dmg", "dmg", 45),
-                                                     ("new.dmg", "dmg2", 2), ("archive.zip", "zip", 4), ("talk.mp4", "mp4", 8),
-                                                     ("song.mp3", "mp3", 9), ("copy of essay.docx", "essay", 1), ("data.csv", "csv", 3)]
-            for i in 1...6 { files.append(("paper \(i).pdf", "pdf \(i)", Double(i))) }
-            for i in 1...4 { files.append(("photo \(i).jpg", "jpg \(i)", Double(i))) }
-            for (n, body, age) in files {
-                let url = folder.appendingPathComponent(n)
-                try? Data(body.utf8).write(to: url)
-                let d = Date().addingTimeInterval(-age * 86400)
-                try? fm.setAttributes([.creationDate: d, .modificationDate: d], ofItemAtPath: url.path)
-            }
-            return folder
-        }
-        let first = messyFolder("Desktop"), second = messyFolder("Downloads")
-        FileSafety.roots = [first, second]
-        // Dismissed agents go to the Bin: point it at a throwaway folder so your own Bin never sees the test's agents.
-        Library.shared.directory = base.appendingPathComponent("library")
-
-        var failures = 0
-        func check(_ name: String, _ ok: Bool) {
-            print((ok ? "ok   " : "FAIL ") + name)
-            if !ok { failures += 1 }
-        }
-        let bar = AgentBar.shared
-        let dock = AgentDock()
-
-        func shot(_ name: String) {
-            if let rep = bar.debugImage() { try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(name)-bar.png")) }
-            // The card's own blur isn't in the snapshot, so it's drawn over the dark-mode popover colour.
-            if bar.card.isShowing, let image = bar.card.debugImage,
-               let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
-                                   space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-                ctx.setFillColor(CGColor(red: 0.16, green: 0.16, blue: 0.17, alpha: 1))
-                ctx.fill(CGRect(x: 0, y: 0, width: image.width, height: image.height))
-                ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-                if let flat = ctx.makeImage() {
-                    try? NSBitmapImageRep(cgImage: flat).representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(name)-card.png"))
-                }
-            }
-        }
-        func stripShot(_ name: String) {
-            if let rep = bar.debugStripImage() { try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(name)-strip.png")) }
-        }
-        func sleep(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
-        func until(_ seconds: Double = 30, _ done: @MainActor () -> Bool) async -> Bool {
-            let end = Date().addingTimeInterval(seconds)
-            while Date() < end {
-                if await done() { return true }
-                await sleep(0.1)
-            }
-            return false
-        }
-        func centre(_ r: NSRect) -> NSPoint { NSPoint(x: r.midX, y: r.midY) }
-        func exists(_ name: String, in folder: URL) -> Bool { fm.fileExists(atPath: folder.appendingPathComponent(name).path) }
-
-        Task { @MainActor in
-            // Minimized: cats asleep in the bottom-right corner.
-            bar.start()
-            let vfMain = (NSScreen.main ?? NSScreen.screens[0]).frame
-            let s0 = bar.debugStrip
-            check("minimized, the cat sleeps in the bottom-right corner (frame \(s0.frame))", s0.visible && s0.alpha > 0.95
-                  && abs(s0.frame.maxX - (vfMain.maxX - AgentBar.Layout.restInset)) < 1.5 && abs(s0.frame.minY - (vfMain.minY - AgentBar.Layout.restSink)) < 1.5)
-            check("  and the bar isn't showing", !bar.isShowing)
-            stripShot("0-empty")
-
-            // Stand-ins for the other states, so every cat pose is on the bar at once.
-            let running = BackgroundTask(kind: .study, title: "Study: Econ ch. 4")
-            running.detail = "Writing summaries: 2 of 5"
-            running.fraction = 0.4
-            let done = BackgroundTask(kind: .find, title: "Find: elasticity PDF")
-            done.state = .done
-            done.report = TaskReport(headline: "Found 3 files")
-            TaskEngine.shared.debugTrack(running)
-            TaskEngine.shared.debugTrack(done)
-            check("agents aren't in the chat sidebar", dock.debugSidebar.debugRowCount == 0)
-
-            // A real Tidy that needs approval.
-            guard let tidy = TaskEngine.shared.start(.tidy(first)) else { print("AGENTBARTEST FAIL"); exit(1) }
-            let asked = await until(60) { tidy.state == .needsApproval }
-            check("the Tidy agent made a plan and is asking", asked)
-            _ = await until(5) { bar.isShowing && bar.debugBarAlpha > 0.95 }
-            await sleep(0.6)
-            let f = bar.debugFrame
-            let vf = NSScreen.screens.first { $0.frame.intersects(f) }?.visibleFrame ?? .zero
-            check("an agent that needs your OK expands the bar by itself", bar.isShowing && bar.debugBarAlpha > 0.95)
-            check("  and the strip is gone meanwhile", !bar.debugStrip.visible || bar.debugStrip.alpha < 0.05)
-            check("  at the top centre of the screen (frame \(f))", abs(f.maxY - (vf.maxY - AgentBar.Layout.topGap)) < 1.5 && abs(f.midX - vf.midX) < 1.5)
-            check("  with three cats, each a different cat", bar.model.tasks.count == 3 && Set(bar.model.tasks.map { bar.model.coat($0) }).count == 3)
-            check("  running, standing (needs OK) and loaf", AgentSlotView.mood(running) == .running && AgentSlotView.mood(tidy) == .idle
-                  && AgentSlotView.mood(done) == .done)
-            let i = bar.model.tasks.firstIndex { $0 === tidy } ?? -1
-            let r = bar.slotRect(i)
-            let card = bar.card.debugState
-            check("  and its card open under its cat, big enough for the plan", bar.card.isShowing && bar.card.task === tidy && card.frame.maxY < f.minY
-                  && card.frame.height > 300)
-            check("chats still aren't in the sidebar", dock.debugSidebar.debugRowCount == 0)
-            shot("1-asking")
-
-            // The buttons on the cat.
-            check("the cat shows what it wants to do (\(tidy.approvalSummary))", tidy.approvalSummary.contains("change"))
-            check("it can be allowed from the bar", tidy.canQuickApprove)
-            check("Allow is where it's drawn", bar.hit(at: centre(AgentBar.Layout.allowRect(inSlot: r))) == .allow(i))
-            check("Deny is where it's drawn", bar.hit(at: centre(AgentBar.Layout.denyRect(inSlot: r))) == .deny(i))
-            let runIndex = bar.model.tasks.firstIndex { $0 === running } ?? 0
-            check("an agent that isn't asking has no buttons", bar.hit(at: centre(AgentBar.Layout.allowRect(inSlot: bar.slotRect(runIndex)))) == .slot(runIndex))
-            check("a click on the cat itself is the cat", bar.hit(at: NSPoint(x: r.minX + 30, y: r.midY)) == .slot(i))
-            check("the far right is the minimize button", bar.hit(at: NSPoint(x: f.width - 18, y: 30)) == .minimize)
-            check("next to it is +", bar.hit(at: NSPoint(x: f.width - AgentBar.Layout.pad - AgentBar.Layout.minimizeWidth - 20, y: 30)) == .newJob)
-
-            // Clicking in another app: the bar stays while something is waiting for you (only the card goes).
-            bar.debugClickElsewhere()
-            await sleep(0.5)
-            check("a click elsewhere keeps the bar up while an agent waits for you", bar.isShowing && bar.debugBarAlpha > 0.95)
-            check("  and only puts the card away", !bar.card.isShowing)
-            bar.handle(.slot(i))
-            await sleep(0.5)
-            check("clicking the cat brings the card back", bar.card.isShowing && bar.card.task === tidy)
-            bar.handle(.slot(i))
-            await sleep(0.4)
-            check("clicking it again puts the card away", !bar.card.isShowing)
-            bar.handle(.slot(i))
-            bar.card.hide()
-            await sleep(0.04)
-            bar.handle(.slot(i)) // a click while the card is still fading out
-            await sleep(0.6)
-            print("   after the fade-out click: showing \(bar.card.isShowing) \(bar.card.debugState) open \(String(describing: bar.model.openID))")
-            check("a click during the fade-out still leaves the card showing", bar.card.isShowing && bar.card.debugState.alpha > 0.95)
-
-            // Minimize and expand.
-            bar.hide()
-            await sleep(0.8)
-            let st = bar.debugStrip
-            check("minimizing flies it back to the strip", !bar.isShowing && bar.debugBarAlpha < 0.05 && st.visible && st.alpha > 0.95)
-            check("  which has a cat per agent, side by side (frame \(st.frame), was \(s0.frame))", st.frame.width > s0.frame.width + 40)
-            stripShot("1-three-agents")
-            bar.stripClicked()
-            await sleep(1.0)
-            check("clicking the strip expands the bar", bar.isShowing && bar.debugBarAlpha > 0.95)
-            check("  with the waiting agent's card already open", bar.card.isShowing && bar.card.task === tidy)
-
-            // Allow, from the cat.
-            let before = (exists("essay.docx", in: first), exists("old.dmg", in: first))
-            check("before Allow nothing has moved", before.0 && before.1)
-            bar.handle(.allow(i))
-            check("Allow closes the card at once", !bar.card.isShowing && tidy.state == .working)
-            let finished = await until(30) { tidy.state == .done }
-            check("Allow on the cat carries the plan out", finished)
-            await sleep(0.8)
-            check("  and when it's done its card comes back with what it did", bar.card.isShowing && bar.card.task === tidy)
-            check("  the files were sorted", !exists("essay.docx", in: first) && exists("Documents/essay.docx", in: first))
-            check("  and the old installer left the folder", !exists("old.dmg", in: first))
-            await sleep(0.6)
-            check("when it's done its cat is a loaf", AgentSlotView.mood(tidy) == .done)
-            shot("2-done")
-
-            // Deny, from the cat: a second agent, a second folder.
-            print("   before the 4th agent: bar \(bar.debugFrame.width) wide, \(bar.model.tasks.count) cats")
-            guard let other = TaskEngine.shared.start(.tidy(second)) else { print("AGENTBARTEST FAIL"); exit(1) }
-            await sleep(0.5)
-            print("   0.5 s after starting it: bar \(bar.debugFrame.width) wide, \(bar.model.tasks.count) cats, expanded \(bar.isShowing)")
-            _ = await until(60) { other.state == .needsApproval }
-            await sleep(0.8)
-            check("a second agent asks and gets its own cat", other.state == .needsApproval && bar.model.tasks.contains { $0 === other }
-                  && bar.model.coat(other) != bar.model.coat(tidy))
-            let j = bar.model.tasks.firstIndex { $0 === other } ?? -1
-            check("  and its Deny button is where it's drawn", bar.hit(at: centre(AgentBar.Layout.denyRect(inSlot: bar.slotRect(j)))) == .deny(j))
-            shot("3-second-asking")
-            bar.handle(.deny(j))
-            await sleep(0.5)
-            check("Deny stops the agent", other.state == .cancelled)
-            check("  and says so on its cat (\(AgentSlotView.status(other).text))", AgentSlotView.status(other).text.contains("Denied"))
-            check("  nothing was changed", exists("essay.docx", in: second) && exists("old.dmg", in: second) && !exists("Documents", in: second))
-            check("  its cat just stands there", AgentSlotView.mood(other) == .idle)
-            check("  and it stays listed", bar.model.tasks.contains { $0 === other })
-            let want4 = 2 * AgentBar.Layout.pad + 4 * AgentBar.Layout.slotWidth + 3 * AgentBar.Layout.gap + AgentBar.Layout.gap
-                + AgentBar.Layout.newJobWidth + AgentBar.Layout.minimizeWidth
-            check("the bar widened for four cats (\(bar.debugFrame.width) of \(want4))", abs(bar.debugFrame.width - want4) < 2 && bar.model.tasks.count == 4)
-            shot("4-denied")
-
-            // An open-ended job that would spend a lot of tokens asks first, saying what it costs.
-            let big = BackgroundTask(kind: .custom, title: "Rename my 400 PDFs")
-            big.gate = TaskGate(headline: "This is a bigger job",
-                                detail: "To plan it, Claude would read the names, sizes and ages of 400 items (never what's inside them), about 7.4k tokens. That's more than a small request. Go ahead?",
-                                summary: "≈7.4k tokens · 400 items")
-            big.detail = "Waiting for your OK (about 7.4k tokens)"
-            var wentAhead = 0
-            big.onApprove = { t in wentAhead += 1; t.gate = nil; t.state = .working }
-            TaskEngine.shared.debugTrack(big)
-            await sleep(0.3)
-            big.state = .needsApproval // the change is what opens the card
-            await sleep(1.2)
-            check("a costly job asks first, with its card open", bar.card.isShowing && bar.card.task === big)
-            check("  the cat says what it costs (\(AgentSlotView.status(big).text))", AgentSlotView.status(big).text.contains("tokens") || big.approvalSummary.contains("tokens"))
-            shot("5-gate")
-            let gi = bar.model.tasks.firstIndex { $0 === big } ?? -1
-            check("  its Allow button is where it's drawn", gi >= 0 && bar.hit(at: centre(AgentBar.Layout.allowRect(inSlot: bar.slotRect(gi)))) == .allow(gi))
-            bar.handle(.allow(gi))
-            await sleep(0.3)
-            check("  Allow on the cat means go ahead", wentAhead == 1 && big.gate == nil)
-            TaskEngine.shared.dismiss(big)
-            await sleep(0.5)
-
-            // Nothing is waiting now, so a click elsewhere puts the bar away as usual.
-            bar.debugClickElsewhere()
-            await sleep(0.8)
-            check("with nothing waiting, a click elsewhere minimizes the bar", !bar.isShowing && bar.debugStrip.alpha > 0.95)
-            stripShot("2-after")
-            bar.toggle()
-            await sleep(0.8)
-            check("⌘⇧A brings it back", bar.isShowing)
-            let doneIndex = bar.model.tasks.firstIndex { $0 === done } ?? 0
-            check("a finished agent has a ×", bar.model.closable(doneIndex))
-            check("a running one doesn't", !bar.model.closable(runIndex))
-            let n = bar.model.tasks.count
-            bar.handle(.close(doneIndex))
-            await sleep(0.5)
-            check("× takes it off the bar", bar.model.tasks.count == n - 1 && !bar.model.tasks.contains { $0 === done })
-            bar.handle(.minimize)
-            await sleep(0.8)
-            check("the minimize button minimizes it", !bar.isShowing && bar.debugStrip.alpha > 0.95)
-
-            // Rapid toggling (a nervous finger, or an agent finishing mid-animation) must never strand the bar half-visible.
-            var consistent = 0
-            let gaps: [[Double]] = [[0.03, 0.03, 0.03, 0.03, 0.03], [0.1, 0.05, 0.2, 0.02, 0.15], [0.0, 0.0, 0.0, 0.0, 0.0], [0.3, 0.1, 0.1, 0.1, 0.4],
-                                    [0.05, 0.12, 0.05, 0.12, 0.05, 0.12]]
-            for pattern in gaps {
-                for gap in pattern {
-                    bar.toggle()
-                    await sleep(gap)
-                }
-                await sleep(1.2)
-                let s = bar.debugStrip
-                let ok = bar.isShowing
-                    ? (bar.debugBarAlpha > 0.95 && (!s.visible || s.alpha < 0.05))
-                    : (bar.debugBarAlpha < 0.05 && s.visible && s.alpha > 0.95)
-                if ok { consistent += 1 } else {
-                    print("   inconsistent after \(pattern): expanded \(bar.isShowing) bar alpha \(bar.debugBarAlpha) strip \(s)")
-                }
-            }
-            check("rapid expand/minimize toggling always ends in a clean state (\(consistent) of \(gaps.count))", consistent == gaps.count)
-
-            bar.hide()
-            for t in TaskEngine.shared.tasks { TaskEngine.shared.dismiss(t) }
-            try? fm.removeItem(at: base)
-            print(failures == 0 ? "AGENTBARTEST PASS" : "AGENTBARTEST FAIL (\(failures))")
-            exit(failures == 0 ? 0 : 1)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 150) { print("AGENTBARTEST FAIL: timed out"); exit(2) }
-        app.run()
-        exit(0)
-    }
-}
-
-extension FeatureTests {
-    /// Margin --taskdemo <dir>: Tidy on a fake messy desktop (in a temporary folder; your real folders are never touched):
-    /// scan, read the screenshots, show the plan, approve with Claude naming the screenshots (a real, small call), check the
-    /// result, undo, check again. Saves pictures of the sidebar and the card at each step.
-    @MainActor
-    static func taskDemo(directory: String) -> Never {
-        let app = NSApplication.shared
-        app.setActivationPolicy(.accessory)
-        AskPanelController.demoMode = true
-        let fm = FileManager.default
-        let out = URL(fileURLWithPath: directory)
-        try? fm.createDirectory(at: out, withIntermediateDirectories: true)
-        let base = fm.temporaryDirectory.appendingPathComponent("margin-taskdemo-\(UUID().uuidString)")
-        let desktop = base.appendingPathComponent("Desktop")
-        try? fm.createDirectory(at: desktop, withIntermediateDirectories: true)
-        FileSafety.roots = [desktop]
-        FileSafety.ledgerDirectory = base.appendingPathComponent("ledgers")
-        var failures = 0
-        func check(_ name: String, _ ok: Bool) {
-            print((ok ? "ok   " : "FAIL ") + name)
-            if !ok { failures += 1 }
-        }
-        func png(_ text: String, name: String, age: TimeInterval) {
-            let w = 900, h = 420
-            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
-            ctx.setFillColor(NSColor.white.cgColor)
-            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: false)
-            (text as NSString).draw(in: CGRect(x: 30, y: 30, width: w - 60, height: h - 60), withAttributes: [.font: NSFont.systemFont(ofSize: 34), .foregroundColor: NSColor.black])
-            NSGraphicsContext.restoreGraphicsState()
-            guard let image = ctx.makeImage() else { return }
-            let url = desktop.appendingPathComponent(name)
-            try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
-            let d = Date().addingTimeInterval(-age)
-            try? fm.setAttributes([.creationDate: d, .modificationDate: d], ofItemAtPath: url.path)
-        }
-        png("Supply and Demand\nWhen demand rises, price and quantity both go up.", name: "Screenshot 2026-10-02 at 9.14.05 AM.png", age: 3600 * 24 * 11)
-        png("Closures in Swift\nA closure captures variables by reference.", name: "Screenshot 2026-10-05 at 2.30.41 PM.png", age: 3600 * 24 * 8)
-        png("Opportunity cost is the value of the next best alternative.", name: "Screenshot 2026-10-09 at 4.02.10 PM.png", age: 3600 * 24 * 4)
-        let day: Double = 3600 * 24
-        let others: [(String, String, Double)] = [
-            ("lecture-notes.pdf", "pdf", day * 5), ("essay draft.docx", "doc", day * 6), ("Zoom.dmg", "dmg", day * 70),
-            ("IMG_2041.jpg", "jpg", day * 3), ("copy of notes.txt", "same", day * 2), ("notes.txt", "same", day * 9),
-        ]
-        for (n, text, age) in others {
-            let url = desktop.appendingPathComponent(n)
-            try? Data(text.utf8).write(to: url)
-            let d = Date().addingTimeInterval(-age)
-            try? fm.setAttributes([.creationDate: d, .modificationDate: d], ofItemAtPath: url.path)
-        }
-        let dock = AgentDock()
-        func shot(_ name: String) {
-            if let rep = AgentBar.shared.debugImage() { try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(name)-bar.png")) }
-            if let image = AgentBar.shared.card.debugImage { try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(name)-card.png")) }
-            print("  saved \(name)")
-        }
-        guard let task = TaskEngine.shared.start(.tidy(desktop)) else { print("TASKDEMO FAIL"); exit(1) }
-        var stage = 0
-        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { timer in
-            switch (stage, task.state) {
-            case (0, .working):
-                shot("1-working")
-                stage = 1
-            case (0, .needsApproval), (1, .needsApproval):
-                stage = 2
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    shot("2-plan")
-                    let groups = task.plan?.groups.map(\.key) ?? []
-                    check("the plan has screenshots, PDFs, documents, installers, images, duplicates", Set(groups) == ["sort:screenshot", "sort:pdf", "sort:document", "sort:installer", "sort:image", "duplicates", "old-installers"] || groups.count >= 5)
-                    check("it offers smart names with a token estimate", task.plan?.options.first?.detail.contains("tokens") == true)
-                    check("nothing has moved yet", fm.fileExists(atPath: desktop.appendingPathComponent("Screenshot 2026-10-02 at 9.14.05 AM.png").path))
-                    task.plan?.options[0].on = true // let Claude name them (a real, small call)
-                    task.onApprove?(task)
-                    stage = 3
-                }
-            case (3, .done):
-                stage = 4
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    shot("3-done")
-                    let shots = (try? fm.contentsOfDirectory(atPath: desktop.appendingPathComponent("Screenshots").path)) ?? []
-                    print("   screenshots folder: \(shots)")
-                    let sub = shots.flatMap { m in ((try? fm.contentsOfDirectory(atPath: desktop.appendingPathComponent("Screenshots/\(m)").path)) ?? []).map { "\(m)/\($0)" } }
-                    print("   named: \(sub)")
-                    check("screenshots were sorted into month folders", sub.count == 3)
-                    check("Claude named them from what's in them", sub.contains { $0.localizedCaseInsensitiveContains("demand") || $0.localizedCaseInsensitiveContains("supply") }
-                          && sub.contains { $0.localizedCaseInsensitiveContains("closure") } && sub.contains { $0.localizedCaseInsensitiveContains("opportunity") })
-                    check("the task recorded Claude's tokens", task.tokens > 0)
-                    print("   tokens used: \(task.tokens)")
-                    check("PDF, document and image were sorted", fm.fileExists(atPath: desktop.appendingPathComponent("PDFs").path)
-                          && fm.fileExists(atPath: desktop.appendingPathComponent("Documents/essay draft.docx").path))
-                    check("the old installer left the desktop", !fm.fileExists(atPath: desktop.appendingPathComponent("Zoom.dmg").path))
-                    check("the duplicate copy was removed, the original kept", fm.fileExists(atPath: desktop.appendingPathComponent("Documents/notes.txt").path)
-                          && !fm.fileExists(atPath: desktop.appendingPathComponent("copy of notes.txt").path))
-                    check("Undo is offered", task.canUndo)
-                    task.onUndo?(task)
-                    stage = 5
-                }
-            case (5, _) where task.undone:
-                stage = 6
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                    shot("4-undone")
-                    check("undo put the desktop back exactly", fm.fileExists(atPath: desktop.appendingPathComponent("Screenshot 2026-10-02 at 9.14.05 AM.png").path)
-                          && fm.fileExists(atPath: desktop.appendingPathComponent("Zoom.dmg").path) && fm.fileExists(atPath: desktop.appendingPathComponent("copy of notes.txt").path)
-                          && !fm.fileExists(atPath: desktop.appendingPathComponent("Screenshots").path))
-                    try? fm.removeItem(at: base)
-                    print(failures == 0 ? "TASKDEMO PASS" : "TASKDEMO FAIL (\(failures))")
-                    exit(failures == 0 ? 0 : 1)
-                }
-            default:
-                if case .failed(let m) = task.state { print("TASKDEMO FAIL: \(m)"); exit(1) }
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 240) { print("TASKDEMO FAIL: timed out"); exit(2) }
-        app.run()
-        exit(0)
+    static func fakeReply(_ text: String, tokens: Int = 600) -> Result<ClaudeOneShot.Reply, ClaudeOneShot.Failure> {
+        .success(ClaudeOneShot.Reply(text: text, usage: ClaudeSession.Usage(inputTokens: tokens - 100, outputTokens: 100)))
     }
 }

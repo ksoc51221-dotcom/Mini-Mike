@@ -45,19 +45,7 @@ final class Dictation {
     static func installModel(progress: @escaping (Double) -> Void) async throws {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { throw Failure.unsupported }
         let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
-        guard await AssetInventory.status(forModules: [transcriber]) != .installed else { return }
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            _ = try? await AssetInventory.reserve(locale: supported)
-            let poll = Task {
-                while !Task.isCancelled {
-                    let fraction = request.progress.fractionCompleted
-                    await MainActor.run { progress(fraction) }
-                    try? await Task.sleep(nanoseconds: 200_000_000)
-                }
-            }
-            defer { poll.cancel() }
-            try await request.downloadAndInstall()
-        }
+        try await Transcription.install(transcriber, reserving: supported, progress: progress)
     }
 
     /// A transcriber and the audio format it wants, if the model is installed. (A transcriber can only ever belong to

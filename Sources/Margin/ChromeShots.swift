@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// `Margin --chromeshots <dir>`: headless pictures of the popup chrome at its natural height (chat states, quiz, event card, task box),
+/// `Margin --chromeshots <dir>`: headless pictures of the popup chrome at its natural height (chat states, quiz, event card),
 /// light and dark. Nothing is ever shown on screen.
 enum ChromeShots {
     @MainActor static func run(directory: String) -> Never {
@@ -18,12 +18,11 @@ enum ChromeShots {
                 let host = NSHostingView(rootView: framed)
                 host.appearance = appearance
                 host.frame = NSRect(x: 0, y: 0, width: width + 48, height: 900)
-                for _ in 0..<4 { host.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date().addingTimeInterval(0.12)) }
+                host.settleLayout(passes: 4, interval: 0.12)
                 let fit = host.fittingSize
                 host.frame = NSRect(origin: .zero, size: CGSize(width: width + 48, height: max(60, fit.height)))
-                for _ in 0..<2 { host.layoutSubtreeIfNeeded(); RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
-                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return }
-                host.cacheDisplay(in: host.bounds, to: rep)
+                host.settleLayout(passes: 2, interval: 0.1)
+                guard let rep = host.snapshotRep() else { return }
                 try? rep.representation(using: .png, properties: [:])?.write(to: out.appendingPathComponent("\(file)-\(name).png"))
             }
             func panel<V: View>(_ v: V) -> some View {
@@ -62,11 +61,6 @@ enum ChromeShots {
             save("c-hint-full", width: 420, panel(AskView(model: full)))
             save("c-quiz", width: 400, panel(QuizView(source: quiz, index: 0, picked: 0).padding(14)))
             save("c-event", width: 400, panel(EventCard(source: EventCard.encode(CalendarIntent.Draft(title: "Dinner with Sam", start: Date(), end: Date().addingTimeInterval(5400)))).padding(14)))
-            save("c-taskbox", width: 580, TaskBoxView(state: TaskBoxState()))
-            let t = BackgroundTask(kind: .tidy, title: "Tidy Desktop")
-            t.state = .needsApproval
-            t.plan = TaskPlan(headline: "Move 14 files into 3 folders", groups: [])
-            save("c-taskcard", width: 430, TaskCardView(task: t, onClose: {}, onResize: { _ in }))
         }
         exit(0)
     }

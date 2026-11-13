@@ -10,19 +10,6 @@ enum BrushCheck {
     private static let bend = CGPoint(x: 0.10, y: -0.12) // pulls the long stroke into a gentle curve
     private static let tip = CGPoint(x: 0.48, y: 0.38)
 
-    /// Where the brush travels (used as the draw-in mask). `overshoot` extends it past the tip.
-    static func centerline(in rect: CGRect, overshoot: CGFloat = 0) -> CGPath {
-        let map = mapper(rect)
-        let path = CGMutablePath()
-        path.move(to: map(top))
-        path.addLine(to: map(corner))
-        path.addQuadCurve(to: map(tip), control: map(bend))
-        if overshoot > 0 {
-            path.addLine(to: map(tip + unit(tip - bend) * overshoot))
-        }
-        return path
-    }
-
     /// The painted check's ink bounds, in units of the radius from the center (y up).
     static func inkBox(side: CGFloat) -> CGRect? {
         guard let img = image(side: side, scale: 1, color: .white),

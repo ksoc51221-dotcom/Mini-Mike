@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var trustTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        ThemeStore.shared.applyMode()
         installEditMenu()
         SelectionReader.configure()
         Speech.clearLeftovers()
@@ -39,25 +40,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.onSummarizeVideo = { [weak self] choice in self?.summarizeVideo(choice) }
         hotkeys.onSnip = { [weak self] in self?.startSnip() }
         hotkeys.onChat = { [weak self] in self?.chatShortcut() }
-        hotkeys.onTalkStart = { [weak self] forAgent in self?.voice.talkStart(forAgent: forAgent) }
-        hotkeys.onTalkAgent = { [weak self] in self?.voice.switchToAgent() }
+        hotkeys.onTalkStart = { [weak self] in self?.voice.talkStart() }
         hotkeys.onTalkEnd = { [weak self] in self?.voice.talkEnd() }
-        AgentBar.shared.start() // the minimized agent strip on the right edge
-        hotkeys.onTasks = { AgentBar.shared.toggle() }
-        hotkeys.onCat = { AgentBar.shared.callCats() }
         hotkeys.onHistory = { LibraryWindow.shared.toggle() }
         hotkeys.onSystemShot = { ScreenshotInbox.shared.noteCaptureKey() }
         hotkeys.onEngine = { [dock] in dock.toggleEngineOfOpenChat() }
-        statusMenu.onAgentBar = { AgentBar.shared.show() }
-        TaskBox.shared.onVideo = { [weak self] intent in self?.summarizeVideo(intent) }
-        statusMenu.onTaskBox = { AgentBar.shared.show(newJob: true) }
-        statusMenu.onQuickTask = { spec in
-            TaskEngine.shared.start(spec)
-            AgentBar.shared.show()
-        }
-        voice.onCommand = { [weak self] text, forAgent in
-            if forAgent { self?.agentVoiceCommand(text) } else { self?.voiceCommand(text) }
-        }
+        hotkeys.onDoubleShift = { [dock] in dock.attachScreenshotToOpenChat() }
+        voice.onCommand = { [weak self] text in self?.voiceCommand(text) }
         voice.warmUp() // loads the speech model now, so the first ⌘⇧V is as quick as any other
 
         watcher.onSelection = { [weak self] selection, point in
@@ -115,17 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !text.isEmpty else { return }
         trigger.hide()
         switch CommandCenter.route(text) {
-        case .agents:
-            return AgentBar.shared.show()
         case .video(let intent):
             return summarizeVideo(intent)
-        case .task(let spec):
-            if case .tidy(let folder) = spec, FileSafety.root(containing: folder.appendingPathComponent("x")) == nil {
-                return Toast.show("I only tidy Desktop, Downloads and Documents.", near: NSRect(x: NSEvent.mouseLocation.x, y: NSEvent.mouseLocation.y, width: 1, height: 1))
-            }
-            // The new agent's cat appears in the agent bar, running.
-            TaskEngine.shared.start(spec)
-            return AgentBar.shared.show()
         case .calendar, .ask:
             break
         }
@@ -137,26 +117,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                                mouse: mouse, bundleID: app.bundleIdentifier)
             self?.dock.openChat(selection, asking: text)
         }
-    }
-
-    /// ⌘⇧V+A: what you said is a job for an agent, read loosely ("tidy up" is the desktop). If it isn't one the agents
-    /// know, the new-job box opens with your words in it.
-    private func agentVoiceCommand(_ spoken: String) {
-        let text = CommandCenter.cleaned(spoken)
-        guard !text.isEmpty else { return }
-        trigger.hide()
-        if CommandCenter.wantsAgentBar(text) { return AgentBar.shared.show() }
-        if let video = VideoIntent.parse(text) { return summarizeVideo(video) }
-        guard let spec = TaskRouter.parse(text) else {
-            return AgentBar.shared.show(newJob: true, prefill: text,
-                                        message: "That doesn't sound like a job for your files. " + TaskRouter.help)
-        }
-        if case .tidy(let folder) = spec, FileSafety.root(containing: folder.appendingPathComponent("x")) == nil {
-            return AgentBar.shared.show(newJob: true, prefill: text,
-                                        message: "I only work in Desktop, Downloads and Documents. “\(folder.lastPathComponent)” is somewhere else.")
-        }
-        TaskEngine.shared.start(spec)
-        AgentBar.shared.show()
     }
 
     /// Tab+\ (or the menu item): box an area you can't highlight and ask about it.
@@ -184,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// "Summarize this video" said aloud (or typed in the agent box): the same summarizer as the menu's.
+    /// "Summarize this video" said aloud: the same summarizer as the menu's.
     private func summarizeVideo(_ intent: VideoIntent) {
         switch intent {
         case .youtube(let id?): dock.openVideo(.youtube(id: id), near: NSEvent.mouseLocation)
@@ -241,57 +201,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 if CommandLine.arguments.contains("--mcp") { MCPServer.runStdio() } // before any UI/font setup: stdout is protocol-only
 MarginFonts.register()
 let arguments = CommandLine.arguments
+
+/// The word right after the flag at `arguments[i]`, if there is one.
+func argument(after i: Int) -> String? { arguments.indices.contains(i + 1) ? arguments[i + 1] : nil }
 if arguments.contains("--selftest") { SelfTest.claudeRoundTrip() }
 if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }
 if arguments.contains("--capturetest") { SelfTest.captureTest() }
 if let i = arguments.firstIndex(of: "--calendardemo") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
+    let dir = (argument(after: i) ?? NSTemporaryDirectory())
     MainActor.assumeIsolated { FeatureTests.calendarDemo(directory: dir) }
 }
-if let i = arguments.firstIndex(of: "--voicetest") { FeatureTests.voiceTest(phrase: arguments.indices.contains(i + 1) ? arguments[i + 1] : nil) }
+if let i = arguments.firstIndex(of: "--voicetest") { FeatureTests.voiceTest(phrase: argument(after: i)) }
 if arguments.contains("--doctest") { FeatureTests.liveDocumentTest() }
 if arguments.contains("--voicecheck") { FeatureTests.voiceCheck() }
 if arguments.contains("--voicelag") { FeatureTests.voiceLag() }
 if arguments.contains("--voicedictation") { FeatureTests.dictationTest() }
 if arguments.contains("--namingtest") { FeatureTests.liveNamingTest() }
 if arguments.contains("--videochattest") { FeatureTests.videoChatTest() }
-if arguments.contains("--customtest") { FeatureTests.liveCustomTest() }
 if arguments.contains("--switchtest") { FeatureTests.liveSwitchTest() }
-if arguments.contains("--connectedtest") { FeatureTests.liveConnectedTest() }
 if arguments.contains("--historytest") { FeatureTests.liveHistoryTest() }
 if arguments.contains("--bintest") { FeatureTests.liveBinTest() }
 if arguments.contains("--screenshottest") { FeatureTests.liveScreenshotTest() }
 if let i = arguments.firstIndex(of: "--pilldemo") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
+    let dir = (argument(after: i) ?? NSTemporaryDirectory())
     MainActor.assumeIsolated { FeatureTests.pillDemo(directory: dir) }
-}
-if let i = arguments.firstIndex(of: "--taskdemo") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
-    MainActor.assumeIsolated { FeatureTests.taskDemo(directory: dir) }
 }
 if arguments.contains("--libtest") { FeatureTests.liveLibraryTest() }
 if arguments.contains("--tokenbench") { FeatureTests.tokenBench() }
-if let i = arguments.firstIndex(of: "--agentbartest"), i + 1 < arguments.count { FeatureTests.agentBarTest(directory: arguments[i + 1]) }
-if let i = arguments.firstIndex(of: "--catsheet"), i + 1 < arguments.count { FeatureTests.catSheet(path: arguments[i + 1]) }
-if let i = arguments.firstIndex(of: "--barpicture"), i + 1 < arguments.count { MainActor.assumeIsolated { FeatureTests.barPicture(path: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--uishots"), i + 1 < arguments.count { MainActor.assumeIsolated { UIShots.run(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--chromeshots"), i + 1 < arguments.count { MainActor.assumeIsolated { ChromeShots.run(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--glyphshots"), i + 1 < arguments.count { MainActor.assumeIsolated { GlyphGallery.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--sectorshots"), i + 1 < arguments.count { MainActor.assumeIsolated { SectorEditorView.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--libdemo") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
+    let dir = (argument(after: i) ?? NSTemporaryDirectory())
     MainActor.assumeIsolated { FeatureTests.libraryDemo(directory: dir) }
 }
 if let i = arguments.firstIndex(of: "--sidebartest") {
-    SelfTest.sidebarTest(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : nil)
+    SelfTest.sidebarTest(outputDirectory: argument(after: i))
 }
 if let i = arguments.firstIndex(of: "--glowtest") {
-    SelfTest.glowTest(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : nil)
+    SelfTest.glowTest(outputDirectory: argument(after: i))
 }
 if let i = arguments.firstIndex(of: "--placetest") {
-    SelfTest.placeTest(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : nil)
+    SelfTest.placeTest(outputDirectory: argument(after: i))
 }
 if arguments.contains("--permtest") {
     // What macOS currently lets this copy of Margin do (run via `open`, so it's checked as Margin itself).
@@ -316,33 +270,33 @@ if arguments.contains("--micprobe") {
 }
 if arguments.contains("--saytest") { SelfTest.sayTest() }
 if let i = arguments.firstIndex(of: "--youtubetest") {
-    SelfTest.youtubeTest(id: arguments.indices.contains(i + 1) ? arguments[i + 1] : "arj7oStGLkU")
+    SelfTest.youtubeTest(id: (argument(after: i) ?? "arj7oStGLkU"))
 }
 if let i = arguments.firstIndex(of: "--videodemo") {
-    Demo.videos(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory())
+    Demo.videos(outputDirectory: (argument(after: i) ?? NSTemporaryDirectory()))
 }
 if let i = arguments.firstIndex(of: "--graphtest") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : nil
+    let dir = argument(after: i)
     MainActor.assumeIsolated { SelfTest.graphTest(outputDirectory: dir) }
 }
 if let i = arguments.firstIndex(of: "--localdemo") {
-    LocalTests.demo(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory())
+    LocalTests.demo(outputDirectory: (argument(after: i) ?? NSTemporaryDirectory()))
 }
 if let i = arguments.firstIndex(of: "--summarydemo") {
-    Demo.summaries(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory())
+    Demo.summaries(outputDirectory: (argument(after: i) ?? NSTemporaryDirectory()))
 }
 if let i = arguments.firstIndex(of: "--graphdemo") {
-    let dir = arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory()
+    let dir = (argument(after: i) ?? NSTemporaryDirectory())
     MainActor.assumeIsolated { Demo.graphs(outputDirectory: dir) } // top-level code runs on the main thread
 }
 if let i = arguments.firstIndex(of: "--voicedemo") {
-    Demo.voice(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory())
+    Demo.voice(outputDirectory: (argument(after: i) ?? NSTemporaryDirectory()))
 }
 if let i = arguments.firstIndex(of: "--render-icon"), arguments.indices.contains(i + 1) {
     ClaudeMark.renderIconset(to: arguments[i + 1])
 }
 if let i = arguments.firstIndex(of: "--demo") {
-    Demo.run(outputDirectory: arguments.indices.contains(i + 1) ? arguments[i + 1] : NSTemporaryDirectory())
+    Demo.run(outputDirectory: (argument(after: i) ?? NSTemporaryDirectory()))
 }
 
 let app = NSApplication.shared

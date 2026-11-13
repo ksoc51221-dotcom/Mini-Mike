@@ -11,12 +11,14 @@ final class AgentSidebar {
         var phase: AgentPhase
         /// This chat is the one open on screen right now.
         var isOpen: Bool
-        /// A background task rather than a chat.
-        var isTask = false
+        /// The chat's star (shown on the row, and clickable there).
+        var starred = false
+        var canStar = false
     }
 
     var onSelect: ((ObjectIdentifier) -> Void)?
     var onDelete: ((ObjectIdentifier) -> Void)?
+    var onStar: ((ObjectIdentifier) -> Void)?
 
     // Geometry (points).
     static let width: CGFloat = 244
@@ -80,21 +82,7 @@ final class AgentSidebar {
     func debugDragHeader(by delta: NSSize) -> Bool {
         let local = NSPoint(x: 60, y: panel.frame.height - 20)
         guard startsDrag(at: local) else { return false }
-        let start = NSPoint(x: panel.frame.minX + local.x, y: panel.frame.minY + local.y)
-        func send(_ type: NSEvent.EventType, at screen: NSPoint) {
-            let location = NSPoint(x: screen.x - panel.frame.minX, y: screen.y - panel.frame.minY)
-            guard let e = NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
-                                             timestamp: ProcessInfo.processInfo.systemUptime,
-                                             windowNumber: panel.windowNumber, context: nil,
-                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return }
-            panel.sendEvent(e)
-        }
-        send(.leftMouseDown, at: start)
-        for i in 1...6 {
-            let f = CGFloat(i) / 6
-            send(.leftMouseDragged, at: NSPoint(x: start.x + delta.width * f, y: start.y + delta.height * f))
-        }
-        send(.leftMouseUp, at: NSPoint(x: start.x + delta.width, y: start.y + delta.height))
+        panel.debugPlayDrag(from: local, by: delta)
         return true
     }
     var debugHasSavedPosition: Bool { Settings.shared.sidebarAnchor != nil }
@@ -114,7 +102,6 @@ final class AgentSidebar {
     }
 
     var frame: NSRect { panel.frame }
-    var isShown: Bool { panel.isVisible && panel.alphaValue > 0.01 }
 
     // MARK: - Rows
 
@@ -132,6 +119,7 @@ final class AgentSidebar {
                 let view = RowView(id: row.id)
                 view.onSelect = { [weak self] id in self?.onSelect?(id) }
                 view.onDelete = { [weak self] id in self?.onDelete?(id) }
+                view.onStar = { [weak self] id in self?.onStar?(id) }
                 view.apply(row)
                 views[row.id] = view
                 content.addSubview(view)
@@ -142,8 +130,7 @@ final class AgentSidebar {
         }
         rows = newRows
         content.setDots(newRows.map { ($0.phase, $0.isOpen) })
-        let chats = newRows.filter { !$0.isTask }.count
-        content.setCount(chats, of: Settings.shared.maxAgents, tasks: newRows.count - chats)
+        content.setCount(newRows.count, of: Settings.shared.maxAgents)
         arrange(animated: true)
     }
 
@@ -288,7 +275,6 @@ final class AgentSidebar {
     var debugPanelFrame: NSRect { panel.frame }
     var debugIsVisible: Bool { panel.isVisible }
     func debugTitles() -> [String] { rows.map(\.title) }
-    func debugSubtitles() -> [String] { rows.compactMap { views[$0.id]?.debugSubtitle } }
     func debugFlashAll() { views.keys.forEach(flash) }
     var debugRowCount: Int { rows.count }
     func debugClickRow(_ index: Int) { if rows.indices.contains(index) { onSelect?(rows[index].id) } }
@@ -298,9 +284,7 @@ final class AgentSidebar {
     func debugSnapshot(backdrop: NSColor = NSColor(white: 0.30, alpha: 1)) -> NSBitmapImageRep? {
         let pad: CGFloat = 16
         let size = NSSize(width: panel.frame.width + pad * 2, height: panel.frame.height + pad * 2)
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2),
-                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        guard let rep = NSBitmapImageRep.rgba(pixelsWide: Int(size.width * 2), pixelsHigh: Int(size.height * 2)) else { return nil }
         rep.size = size
         guard let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext else { return nil }
         ctx.setFillColor(backdrop.cgColor)
@@ -338,8 +322,7 @@ extension AgentSidebar {
         }
         content.layoutSubtreeIfNeeded()
         content.appearance = NSAppearance.currentDrawing()
-        guard let rep = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { return nil }
-        content.cacheDisplay(in: content.bounds, to: rep)
+        guard let rep = content.snapshotRep() else { return nil }
         _ = keep
         return rep.cgImage
     }
@@ -348,7 +331,7 @@ extension AgentSidebar {
 // MARK: - Window content
 
 /// The black card: header with a fold button, or (folded) a strip with a dot per agent.
-private final class SidebarView: NSView {
+private final class SidebarView: FirstMouseView {
     var onToggle: (() -> Void)?
 
     static let dotSize: CGFloat = 10
@@ -398,9 +381,9 @@ private final class SidebarView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func setCount(_ n: Int, of max: Int, tasks: Int = 0) {
+    func setCount(_ n: Int, of max: Int) {
         // No counter in the header; the number lives in the tooltip.
-        titleField.toolTip = tasks > 0 ? "\(n) of \(max) chats · \(tasks) \(tasks == 1 ? "task" : "tasks")" : "\(n) of \(max) chats"
+        titleField.toolTip = "\(n) of \(max) chats"
     }
     func setDots(_ dots: [(AgentPhase, Bool)]) { strip.setDots(dots) }
 
@@ -426,11 +409,10 @@ private final class SidebarView: NSView {
     }
 
     // Rows sit above the header and strip; a click on the empty card does nothing.
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }
 
 /// The folded sidebar: an unfold arrow and one small dot per agent, colored by what it's doing.
-private final class StripView: NSView {
+private final class StripView: FirstMouseView {
     var onClick: (() -> Void)?
     private var dots: [CAShapeLayer] = []
     private let arrow = NSImageView()
@@ -484,13 +466,12 @@ private final class StripView: NSView {
         CATransaction.commit()
     }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseDown(with event: NSEvent) {}
     override func mouseUp(with event: NSEvent) { onClick?() }
 }
 
 /// A small round icon button (used for the fold control).
-private final class IconButton: NSView {
+private final class IconButton: FirstMouseView {
     var onClick: (() -> Void)?
     private let icon = NSImageView()
     private var hovering = false { didSet { layer?.backgroundColor = (hovering ? Theme.surfaceRaised.dark : NSColor.clear).cgColor } }
@@ -512,7 +493,6 @@ private final class IconButton: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { frame.contains(point) ? self : nil }
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
@@ -525,15 +505,19 @@ private final class IconButton: NSView {
 // MARK: - Row
 
 /// One chat in the sidebar: circle, title, status line, and a × (on hover) that deletes the chat.
-private final class RowView: NSView {
+private final class RowView: FirstMouseView {
     let id: ObjectIdentifier
     var onSelect: ((ObjectIdentifier) -> Void)?
     var onDelete: ((ObjectIdentifier) -> Void)?
+    var onStar: ((ObjectIdentifier) -> Void)?
 
     let discView = DiscView(diameter: AgentSidebar.disc, pad: 10)
     private let titleField = NSTextField(labelWithString: "")
     private let subtitleField = NSTextField(labelWithString: "")
     private let cross = NSImageView()
+    private let star = NSImageView()
+    private var starred = false
+    private var canStar = false
     private let highlight = CALayer()
     /// The 2 pt accent bar on the open row's left edge.
     private let selectionBar = CALayer()
@@ -560,7 +544,7 @@ private final class RowView: NSView {
         addSubview(discView)
 
         let textX: CGFloat = 52
-        let textWidth = bounds.width - textX - 30
+        let textWidth = bounds.width - textX - 52
         titleField.font = .margin(13, .semibold)
         titleField.textColor = Theme.ink.dark
         subtitleField.font = .margin(12, .medium)
@@ -578,6 +562,9 @@ private final class RowView: NSView {
         cross.frame = crossRect
         cross.isHidden = true
         addSubview(cross)
+        star.frame = starRect
+        star.isHidden = true
+        addSubview(star)
 
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
@@ -585,8 +572,8 @@ private final class RowView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    var debugSubtitle: String { subtitleField.stringValue }
 
+    private var starRect: NSRect { NSRect(x: bounds.width - 50, y: (bounds.height - 20) / 2, width: 20, height: 20) }
     private var crossRect: NSRect { NSRect(x: bounds.width - 28, y: (bounds.height - 20) / 2, width: 20, height: 20) }
 
     override func layout() {
@@ -604,6 +591,8 @@ private final class RowView: NSView {
         subtitleField.stringValue = row.subtitle
         subtitleField.textColor = Self.statusColor(row.phase)
         isOpenRow = row.isOpen
+        starred = row.starred
+        canStar = row.canStar
         discView.setPhase(row.phase)
         refresh()
     }
@@ -619,6 +608,10 @@ private final class RowView: NSView {
 
     private func refresh() {
         cross.isHidden = !hovering
+        star.image = NSImage(systemSymbolName: starred ? "star.fill" : "star", accessibilityDescription: starred ? "Unstar" : "Star")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+                .applying(.init(paletteColors: [starred ? Theme.ink.dark : Theme.inkSecondary.dark])))
+        star.isHidden = !canStar || !(hovering || starred) // a starred chat always shows its star: one star, click to unstar
         highlight.backgroundColor = (isOpenRow ? Theme.surfaceSelected.dark : (hovering ? Theme.surfaceRaised.dark : NSColor.clear)).cgColor
         selectionBar.opacity = isOpenRow ? 1 : 0
     }
@@ -653,7 +646,6 @@ private final class RowView: NSView {
         discView.celebrate()
     }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { isHidden ? nil : (frame.contains(point) ? self : nil) }
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
@@ -662,7 +654,9 @@ private final class RowView: NSView {
     override func mouseUp(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         guard bounds.contains(p) else { return }
-        if !cross.isHidden, crossRect.insetBy(dx: -6, dy: -6).contains(p) {
+        if !star.isHidden, starRect.insetBy(dx: -4, dy: -6).contains(p) {
+            onStar?(id)
+        } else if !cross.isHidden, crossRect.insetBy(dx: -6, dy: -6).contains(p) {
             onDelete?(id)
         } else {
             onSelect?(id)

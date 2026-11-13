@@ -4,13 +4,12 @@ A macOS menu-bar helper for quick side-questions about text you're reading, usua
 
 ## What Margin can do, at a glance
 
-Five main things, and the smaller features that belong to each:
+Four main things, and the smaller features that belong to each:
 
 1. **Answer questions about whatever you're reading.** Highlight text anywhere and ask (spark button, or ⌥⇧Tab for a blank chat); snip anything you can't highlight (Tab + \\); ask about a whole page or PDF. Claude can search the web and see your screen; up to 4 chats run at once and rest in a sidebar.
 2. **Explain in more than words.** Pronunciation voice messages, drawn graphs, summaries (overall meaning, keywords), video summaries (YouTube, Listen Along, files; just type or say “summarize this video” in a chat), and **Quiz me**.
 3. **Remember and organize.** Every chat is saved and **automatically titled and filed into a sector** (Math, Language, Physics…) **when you close them**, unless you named them yourself; **⌘⇧L** opens the history; **Keep it** saves the good explanations to a notebook, mirrored as Markdown files.
-4. **Listen to you.** Hold **⌘⇧V**, say it, let go: Margin starts recording the instant you press. It can answer a question, **add an event to your calendar** ("add dinner to my calendar tomorrow 7 to 8"), or hand a job to an agent.
-5. **Do jobs for you in the background: agents** (⌘⇧A). Each agent is a pixel cat on a bar at the top of your screen: **Tidy** (clean up Desktop/Downloads), **Find** files, **Study** notes and flashcards from a textbook, **Batch** file conversions, a **custom** agent for anything else you can say about your files (“scatter these screenshots around the desktop”, “rename my PDFs Paper 1, Paper 2…”), and a **Connected** agent for your online accounts (“complete the ESL cover work from Roz and put it in a Google Doc called ESL Coverwork”, “how much have I spent since September” from BIDV alert emails). They show you a plan, you press **Allow** or **Deny**, and everything can be undone. A big job tells you its token cost first.
+4. **Listen to you.** Hold **⌘⇧V**, say it, let go: Margin starts recording the instant you press. It can answer a question, **add an event to your calendar** ("add dinner to my calendar tomorrow 7 to 8").
 
 And it spends as few Claude tokens as it can: it only sends what a question needs, and an optional Local mode answers simple questions on your Mac.
 
@@ -89,18 +88,13 @@ How it works: Claude puts a small JSON description inside a `<graph>` tag. Margi
 
 ## Summarize a video
 
-**Just ask.** In any chat, or in the agent box, or by voice (⌘⇧V), type or say **“summarize this video”** (also “what's this video about?”, “tl;dr of this video”, “summarize the lecture”, or paste a YouTube link). Margin understands that on your Mac with no Claude call and opens the video summary for the YouTube video in your front browser tab; “listen along” or “summarize what's playing” listens to whatever is playing instead. It's the same summarizer as the menu's, three ways in:
+**Just ask.** In any chat, or by voice (⌘⇧V), type or say **“summarize this video”** (also “what's this video about?”, “tl;dr of this video”, “summarize the lecture”, or paste a YouTube link). Margin understands that on your Mac with no Claude call and opens the video summary for the YouTube video in your front browser tab; “listen along” or “summarize what's playing” listens to whatever is playing instead. It's the same summarizer as the menu's, three ways in:
 
 - **YouTube tab:** with a YouTube video open in Safari, Chrome, Arc, Brave, Edge, Vivaldi, or Opera, choose **YouTube Video in Current Tab**. Margin reads the video's captions straight from YouTube, so you don't have to play it. The first time, macOS asks whether Margin may read your browser's tab address. If you highlight text in a browser, or highlight a YouTube link anywhere, a **▶ Summarize video** chip also shows up in the popup.
 - **Listen along:** for anything else that's playing (Instagram, a course site, a Zoom recording), choose **Listen Along…**. Margin transcribes your Mac's sound on-device while it plays. Press **Stop & summarize** when you've heard enough. You can put it away in the sidebar while it listens. It stops by itself after 3 hours.
 - **A file:** choose **Video or Audio File…** and pick a video or audio file. It's transcribed on-device, faster than real time.
 
-The summary is tight (about 450 words, not every point) and always has the same shape:
-- 📌 **Executive Summary & Overview**: the core premise in one sentence, who it's for and what they take away, and the speaker and format.
-- 🔑 **Key Takeaways & Core Concepts**: three bullets (the biggest insight, the main framework or argument, the key warning or conclusion).
-- ⏱️ **Topic-by-Topic Breakdown**: each main section with its timestamp (for YouTube, clicking it opens the video at that moment) and its core argument and key example.
-- 🛠️ **Actionable Steps & Implementation**: numbered steps, only for tutorials and how-to videos (left out otherwise).
-- 💡 **Important Quotes, Tools & References**: a quote, tools or books mentioned, and people or studies cited (empty lines left out).
+The summary has no fixed template. The model first works out what kind of video it is (tutorial, lecture, interview, review, commentary, story…), opens with what it is and the bottom line, then keeps what's worth keeping in the form that fits: a tutorial gets ordered steps with the exact commands and numbers, a review gets the verdict, pros, cons and who it's for, and so on. Moments worth jumping to carry a timestamp (for YouTube, clicking it opens the video there). The length scales with the video, up to about 400 words for an hour or more.
 
 Then you can ask follow-ups or **Go deeper**, like any other chat.
 
@@ -141,7 +135,7 @@ Margin now keeps your chats on this Mac (turn it off with **Save chat history** 
 - **Named when you close it.** When you close a chat that went on for more than one exchange, one small extra call (Haiku, about 600 tokens) reads what was actually said and gives it a better name and sector. **If you renamed a chat yourself, or moved it to a sector, Margin never changes that** (a lock icon in the History window shows it, and you can click it to let Margin name the chat again). Turn it off with **Name chats when I close them** in the History window's ⋯ menu.
 - **Chat History…** (menu bar, or **⌘⇧L** anywhere; press it again to close) opens the **dashboard**: a dark three-pane window (sidebar, list, page). The sidebar has **All** (chats, notes and screenshots together), **Chats**, **Notebook**, **Screenshots** and the **Bin**, with your sectors underneath. The list is grouped by day (TODAY, YESTERDAY…) with a sector dot, how long ago, and a line of what it says; ⌘K searches, the arrows next to the list's title flip newest/oldest and pick a sector, and ↑/↓ move between rows. A page shows the path across the top (sectors / math / parabola-direction), reading time, and a box at the bottom that starts a chat about what you're reading. It **floats over your work on the Space you're on without switching you to Margin**: the app you were using stays the active one, so you can keep typing there after a glance, and ⌘⇧L never pulls you away. Drag it anywhere, resize it, close it with ⌘⇧L or the red button. Rename a chat, move it to another sector (or a new one), copy it as Markdown, or **Quiz me on this**.
 - **Clearing things.** Every row in All, Chats, Notebook and Screenshots has a **trash button on its right**. One click moves it to the Bin and a bar at the bottom says so, with **Undo** (it stays for 8 seconds). The **Delete** key does the same for the selected row, right-click has it too, and the ⋯ menu has *Move all chats / screenshots to the Bin…*.
-- **The Bin.** Nothing you delete in the dashboard is gone right away: chats, notes and screenshots go to the Bin (sidebar, or menu bar → **Bin…**), and so does an **agent** you take off the bar with its × (its report, links and what it was asked). Each row has **Restore** and **Delete forever**; **Empty** at the top deletes everything for good. Things wait there **30 days** (each row says how many days are left), then they're deleted for good. A restored agent is the very same cat (report and Undo included) if Margin hasn't been quit since; after a restart it comes back showing what it reported, and one dismissed before it finished runs again from what you asked. What a **Connected** agent read from your accounts is **never written to the Bin on disk** (only that it ran). A screenshot's picture stays on disk while it's in the Bin, and goes when you delete it for good. Margin's own files only: the screenshot files macOS saved are never touched.
+- **The Bin.** Nothing you delete in the dashboard is gone right away: chats, notes and screenshots go to the Bin (sidebar, or menu bar → **Bin…**). Each row has **Restore** and **Delete forever**; **Empty** at the top deletes everything for good. Things wait there **30 days** (each row says how many days are left), then they're deleted for good. A screenshot's picture stays on disk while it's in the Bin, and goes when you delete it for good. Margin's own files only: the screenshot files macOS saved are never touched.
 - **Screenshots, saved on their own.** Every screenshot you take goes into the dashboard's **Screenshots** section (menu bar → **Screenshots…**, or the History window's sidebar): your snips (**Tab + \\**) as you take them, and the ones macOS makes with **⌘⇧3, ⌘⇧4 and ⌘⇧5** as soon as the file lands in your screenshots folder (the Desktop, or wherever ⌘⇧5 → Options saves them). Margin keeps its own copy and **never moves or deletes the original**. Each one is read for its words on your Mac (Apple's on-device text recognition) and **labeled by its context**: the window's title (the page, document or chat it shows), else the heading in the picture, else the app; with **Local Mode** on, the model on your Mac writes a proper title and files it under a sector (Math, Language…), so it all costs no Claude tokens. Search finds screenshots by the words in them, their label, app or sector. In a screenshot's page you can rename it (your name is never replaced), move it to another sector, **Ask Margin about it** (the one time it's sent to Claude), copy it, or **Re-label** it (the model on your Mac, or a small Claude call of about 400 tokens if Local Mode is off). Screenshots taken in a password manager are never saved; a screenshot copied to the clipboard instead of a file (Control + ⌘⇧4) can't be seen by Margin. Turn it off with **Save My Screenshots to the Dashboard** in the menu bar, and delete them all from the History window's ⋯ menu. The first time, macOS may ask to let Margin read your Desktop (or whichever folder holds your screenshots).
 - **Keep it.** Tap **Keep** under an answer to save it to your **Notebook…** (also searchable, filed by sector). Kept notes are also written as Markdown files, one per sector, in `Documents/Margin Notes` (switch that off in the ⋯ menu).
 
@@ -157,9 +151,7 @@ When the app in front has a file or web page open (Preview, Safari, Chrome, Word
 
 Hold the keys, say what you want, let go. (While Margin runs, ⌘⇧V is Margin's, so apps' "Paste and Match Style" on that chord won't fire.) Your voice is turned into text by Apple's speech model **on your Mac**; it is never saved or sent. Only the text goes on:
 - a calendar request becomes a card (below);
-- a job for the background agents ("tidy my desktop") starts that agent and shows the agent bar;
-- **hold ⌘⇧V and press A as well** (or hold ⌘⇧A and press V) to talk **to the agents**: the pill shows a cat, and whatever you say is taken as a job ("organize my downloads", "find the elasticity PDF", "summarize chapter 4 of my econ textbook"). If it isn't a job the agents can do, the new-job box opens with your words in it;
-- "show my agents", "what are my agents doing?" or "check on my cats" shows the agent bar;
+- "summarize this video" (or "listen along") opens the video summarizer;
 - anything else goes to the chat that's open as a follow-up, or opens a new chat at your mouse (with whatever is highlighted) and asks it.
 
 There's nothing to set up. Voice is English only, and **it starts recording the instant you press**: the pill is up at once, and the words appear as you speak. Margin loads Apple's speech model when it starts, so a press never waits for it, and what you say before the recognizer has fully woken up is kept (in memory only) and handed to it, so no words are lost. The text is ready a fraction of a second after you let go. The first time ever, macOS asks for the microphone. (If Apple's English speech model isn't on the Mac, a small pill asks before downloading it.)
@@ -170,42 +162,6 @@ Say or type, in a chat: *"Hey, add “doing this and this” to my calendar at 8
 - **Add to Calendar** puts it in your Mac's Calendar. If your **Google account is added in System Settings → Internet Accounts with Calendars on**, it goes to your Google calendar (you can pick the calendar). The first time, macOS asks to let Margin use Calendars. **Undo** takes it back.
 - **Open in Google Calendar** opens Google's own new-event page in your browser with everything filled in, for any Google account, with no permission needed.
 
-## Background agents: **Cmd+Shift+A**
-
-The agents have their own home, separate from your chats. **Minimized**, there's no box at all: each agent is a big **cat asleep in the bottom-right corner of the screen**, a little in from the edge and right on the bottom (about 155 points wide, every pixel of the art 2 points, so you can see the stripes and the face), whatever it's doing (an orange **?** means one needs you; expand the bar to see who's working). They breathe: on each breath the back rises one block of the art (2 points) and settles. Their **zzz float up one after another** in whole blocks and fade, then start again. Neighbours aren't in step. With no agents there's still one sleeping cat. Click a cat to open the bar. **Leave the mouse on the cats for 6 seconds** and they wake up, sit up, and run off the right edge of the screen for good: they stay gone (even after Margin is quit and reopened) until you press **⌘⇧C**, which makes them trot back in from the right and curl up again. While the cat is here, ⌘⇧C is left alone for the app you're in; once it has gone, Margin takes it. The bar still opens with ⌘⇧A while the cat is away. **Expanded**, it flies up to a black **agent bar** at the top centre of the screen. Click a cat, press ⌘⇧A, ask by voice, or use **Agents → Show Agents** to expand it; click elsewhere, press Esc or ⌘⇧A, or use the bar's ⤡ button to minimize it. Each agent is a different **pixel cat**:
-- **standing**: waiting for your OK (a small orange **?** shows it needs you), or stopped (denied, or it hit a problem);
-- **running** back and forth, facing the way it's going: working (with a progress line when it knows how far along it is);
-- **a loaf**: finished;
-- **curled up asleep, with zzz**: waiting its turn behind another agent that's still working.
-
-There are eight coats (brown tabby, dark brown tabby, gray tabby, black, ginger, gray-and-white, Siamese, tuxedo), and each agent gets its own. The cats have a white outline so the dark ones show on the black bar. They're cut from a pixel-art sheet (`Resources/art/cat-sheet.webp`) into one picture, `Sources/Margin/CatAtlas.swift`, by `scripts/make-cat-atlas.swift`; to change them, replace the sheet and run:
-
-```bash
-swiftc -O scripts/make-cat-atlas.swift -o /tmp/make-cat-atlas
-/tmp/make-cat-atlas Resources/art/cat-sheet.webp Sources/Margin/CatAtlas.swift
-/tmp/make-cat-atlas --sleepers=5 Resources/art/cat-sheet.webp Sources/Margin/CatSleepAtlas.swift
-```
-
-The second command makes the big sleepers for the corner: the sheet is only about 70 pixels wide per cat, so instead of smoothing it up they're drawn as hard 5×5 blocks with a pixel-grid outline. The z's are separate pictures in the same cells, so Margin can animate them. To change their size, change `restPixels` in `AgentBar.swift`.
-
-**When an agent needs your OK, the buttons are right on its cat:** it says what it wants to do ("19 changes · 2 to the Trash") with an orange **Allow** and a **Deny**. Allow carries the plan out; Deny changes nothing and the agent stays listed saying so. (Agents that need you to choose first, like which chapters to study, show **Review** instead, which opens the card.) The bar stays up while an agent is waiting for you, even if you click elsewhere, so the buttons can't slip away.
-
-Click a cat to open its card underneath (the full plan, with **Allow** and **Deny** at the top, or what it's doing, or what it did, with Undo); click it again to put the card away. When the bar opens and an agent is waiting for you, its card opens by itself. **+** gives an agent a new job: type it, pick a suggestion, or drop files on the box. Hover a cat that isn't busy for its **×** to take it off the bar (it goes to the **Bin**, so you can put it back). When an agent needs your OK or finishes, the bar comes down by itself with that card open. Minimized or not, the agents keep working. (While Margin runs, ⌘⇧A is Margin's, not the app in front.)
-
-- **Tidy** (“tidy my desktop”, “clean up downloads”): sorts loose files by kind and month (Screenshots/2026-10, PDFs, Images, Documents, Installers…), moves old installers (30+ days) and identical duplicate copies to the Trash, and clears empty folders. Screenshots are read with on-device text recognition and named from what's in them (“2026-10-09 Supply and demand graph”); an optional switch lets Claude write better names from that text (never the images), and **shows its token cost first** (off by default). Your own folders, hidden files, shortcuts, apps and anything changed in the last 10 minutes are left alone.
-- **Find** (“where's the PDF with the elasticity table?”): Spotlight searches names and the text inside your files, with no Claude call. Show / Open buttons on each result.
-- **Study** (“summarize chapter 4 of my econ textbook”, or drop a PDF): reads the file, offers its chapters (from the PDF's contents), and for the ones you pick writes a **summary, key terms, practice questions and/or flashcards** (a tab-separated file for Anki) as Markdown in `Documents/Margin Notes/Study/…`, and adds them to your notebook. It shows about how many Claude tokens it will use before it starts.
-- **Batch**: convert HEIC photos to JPG, merge PDFs, read the text out of images or scans into .txt files. These make **new files** and never change the originals.
-- **Anything else about your files**, said on the spot (“take all the screenshots out of the Screenshots folder and scatter them around the desktop”, “rename my PDFs Paper 1, Paper 2”, “put everything older than a month in an Archive folder”, “trash the DMGs in Downloads”). Nothing is hard-coded: Claude is shown the **names, sizes and ages** of what's in the folders (never what's inside a file) and replies with a plan made of a few safe steps: **move, copy, rename, trash, make a folder, place icons on the Desktop, write a small text file**. Margin checks every step against its safety rules, drops anything it wouldn't allow (saying why), and shows you the plan to Allow or Deny. “These screenshots” means whatever is selected in Finder. Scattering moves icons with Finder (macOS asks once to let Margin control Finder); Sort By is switched to None so they stay where they land, and **Undo puts the icons and Sort By back**. **Token warning:** a small job (about 2,000 to 3,000 tokens, under a few dozen files) just runs; a job that would read more than about 200 files stops first and says “This is a bigger job, about 7k tokens. Go ahead?” with **Go ahead** and **Cancel** (also on the cat), and one that's far too big asks for something narrower.
-
-**How it stays safe.** Claude never touches your files and has no shell. An agent only builds a *plan*; you see it, switch off any part, and press **Allow**. Margin itself carries it out, and only:
-- in your Desktop, Downloads and Documents folders;
-- never on hidden files, shortcuts, or anything inside an app or package;
-- never overwriting (a taken name becomes “name 2”);
-- never deleting for good: “remove” means the Trash;
-- with every change written to a ledger, so **Undo** puts the whole task back.
-Up to three tasks run at once; the **Stop** button works at any point.
-
 ## Use fewer Claude tokens
 
 Four things cut what Margin sends to Claude. All of them come down to not sending what a question doesn't need.
@@ -215,10 +171,6 @@ Four things cut what Margin sends to Claude. All of them come down to not sendin
 **Smart screen context (default).** If you highlighted text and your question isn't about the screen or about facts that change (*latest*, *check*, *this button*…), Margin sends Claude just the highlight and its surrounding text: no screenshot and no web tools. The screenshot is still taken and kept, so a follow-up like "what's on my screen?" moves the chat to a full session that includes it. Nothing highlighted, snips, and videos still get the screenshot. Pick **Whole Screen** or **Just the App Window** under Screen Context to always send it.
 
 **Only the instructions a question can use.** Claude's standing instructions used to include the long rules for saying words aloud and for drawing graphs in every chat. Now they go in only when the question can use them (Pronounce, Visualize, graph-ish or foreign-language words, or math/physics/economics/language text), and a later question that needs one brings it along. `Margin --tokenbench` measures it on real calls: a plain question's instructions went from 2,568 to 1,008 input tokens (60% less). Quizzes, history and calendar cards cost nothing extra: the title and sector for the History come from a single hidden line in the answer, and "add to my calendar" is understood on your Mac without calling Claude. Document chats send only the matching passages, never the whole file.
-
-**Connected agent (your accounts).** Gmail, Google Drive and Docs, and Microsoft 365 (Teams) through Claude's own connectors (Claude → Settings → Connectors): Margin never holds a password or token. Always Claude, never the Mac's model. It asks before reading anything (what it reads goes to Claude; usually 20 to 80k tokens). Each step is a separate Claude run that only gets the tools that step needs: the **read** step can only search and read (sending, replying, forwarding, sharing, editing and deleting are hidden *and* refused by the CLI); a Doc is shown to you first, and only after **Allow** does a **create** step run with one tool, `create_file`, after which Margin checks the call against what you approved (same title, no other folder, one file) and trashes it at once if not. **Undo** runs a step that can only trash that one Doc (Drive keeps it 30 days). Money questions list every transaction and **Margin adds them up**, not Claude. Email and document text is treated as data, never as instructions. Teams usually needs your school to allow the Microsoft 365 connector; if it doesn't, download the file and drop it on the agent bar with your request.
-
-**Background tasks.** Tidy, Find and Batch use no Claude at all; only the optional screenshot naming does (about 1.5k tokens for 3 screenshots, with an estimate shown before you approve) and Study (an estimate is shown first). **The common file jobs cost nothing:** “scatter my screenshots”, “arrange these in a grid/row/column”, “trash the old installers in Downloads”, “put my PDFs in a Papers folder”, “move my screenshots to a folder called School” are planned **on your Mac by rules** (`LocalJobs.swift`), and the plan says “Planned on your Mac: no Claude tokens used.” Anything with a twist (rename, size filters, “and then…”) goes to Claude: one Haiku call that reads file *names* (sizes and ages only when the request is about age or size), about 1,500 to 2,500 tokens, shown on the plan; a job that would cost more than about 4,000 asks before spending anything.
 
 **Chat naming** on close is done by **Ollama when Local Mode is on** (0 Claude tokens), falling back to one small Haiku call (about 600 tokens) if Ollama can't.
 
@@ -277,7 +229,7 @@ In a lean chat (Pronounce, Visualize, Summarize, Quiz me, or any question about 
 
 For a video summary, Claude gets the transcript, the title, channel, and length, and the link, but no screenshot. Margin asks YouTube for the captions directly. Listen Along and file transcription happen on your Mac, and only the finished text goes to Claude.
 
-Chat history, the notebook and quiz results are saved only on your Mac (`~/Library/Application Support/Margin/Library`, notes also as Markdown in `Documents/Margin Notes`); turn history off in the menu. Voice clips are transcribed on your Mac; only the words go to Claude (or to the calendar parser, which doesn't call Claude). Calendar events go to your Mac's Calendar, or to a Google Calendar link you open yourself. Background tasks touch only Desktop, Downloads and Documents, never overwrite, and move to the Trash rather than delete.
+Chat history, the notebook and quiz results are saved only on your Mac (`~/Library/Application Support/Margin/Library`, notes also as Markdown in `Documents/Margin Notes`); turn history off in the menu. Voice clips are transcribed on your Mac; only the words go to Claude (or to the calendar parser, which doesn't call Claude). Calendar events go to your Mac's Calendar, or to a Google Calendar link you open yourself.
 
 Each agent that needs Claude runs its own `claude -p` process (the Claude Code CLI) on your normal Claude subscription, started when you ask the first question. Its only tools are **WebSearch** and **WebFetch** (a lean chat has none): it can't read your files or run commands. It loads no settings files, MCP servers, or saved session, and it's stopped when the chat closes.
 
@@ -287,7 +239,6 @@ Each agent that needs Claude runs its own `claude -p` process (the Claude Code C
 - Model (Sonnet by default)
 - **Web Search** on/off
 - **Quick Answers (Haiku 5.5)** (or **Local Mode (Ollama)**) on/off, with a line showing whether the model is ready
-- **Agents** (Show Agents ⌘⇧A, New Job…, Tidy Desktop, Tidy Downloads)
 - **Chat History…** ⌘⇧L
 - **⌃⇧L** (a shortcut, not a menu item): move the open chat between Claude and your Mac
 - **Voice**: a reminder of the keys (nothing to set up)
@@ -329,15 +280,9 @@ swift build -c release
 - `--voicecheck` prints what voice has to work with (microphone permission, which speech models are installed) without recording or downloading. `--voicetest` runs the speech-to-text and calendar chain with a synthesized voice in place of the microphone. `--voicedictation` feeds synthesized speech into the hold-to-talk recorder the way the microphone would (including words that arrive before the recognizer is ready) and checks nothing is lost and the text is ready fast. `--voicelag` times each step of starting to listen. `--micprobe` (run through `open`, so it's checked as Margin itself) turns the real microphone on for 1.5 seconds and reports only how fast it started and how loud it was: nothing is kept or recognized. `--pilldemo <dir>` pictures the listening pill.
 - `--doctest` is a live run: a 40-page PDF, a question about one page, and a real Claude answer from only the matching passage.
 - `--tokenbench` sends the same small question with and without the optional voice/graph instructions to Haiku (3 tiny calls) and prints the input tokens each used.
-- `--agentbartest <dir>` checks the agent bar: no agents in the chat sidebar, the bar at the top centre, a different cat per agent in the right pose, the card under its cat, clicks on a cat, × and +, hide and show. Uses temporary folders and no Claude; saves pictures of the bar and the card.
-- The unit tests also cover the Mac-planned jobs (what's understood, what's left to Claude, running and undoing them), the graph templates (each one draws with nothing skipped; clear fits, ties and misses), and Ollama chat naming with its fall-back. `--namingtest local` is a live run of naming through Ollama.
+- The unit tests also cover the graph templates (each one draws with nothing skipped; clear fits, ties and misses), and Ollama chat naming with its fall-back. `--namingtest local` is a live run of naming through Ollama.
 - `--switchtest` is a live run (real Ollama and Claude, Local Mode switched on for the test and put back): ⌃⇧L moves one chat to Claude and back while another chat, Local Mode and a new chat stay on the Mac; a 4,000-character summary is answered on the Mac; a real TED talk is summarized on the Mac in the five-section shape, read in parts, with working timestamp links and a follow-up. Test chats open in the top-left corner of the screen, never the middle.
-- `--connectedtest` is a live run against your real connectors: a read step told to share a file, send an email and make a file must not even see those tools, and nothing that writes may run; then it makes one throwaway Doc (“Margin test (safe to delete)”), checks the link, presses Undo, and asks Drive whether it's gone. It reads none of your mail or files.
-- `--customtest` is a live run of the custom agent against a made-up Desktop in a temporary folder and a pretend Finder (your Desktop is never touched): the real Claude plans “take all the screenshots out of the Screenshots folder and scatter them around the desktop”, a rename-and-file job and an impossible one; it checks the plans are safe and valid, the files end up where they should, Undo works, and the cost is under 4,000 tokens. The AppleScript sent to Finder is compiled (not run). The unit tests cover the same with a pretend Claude: understanding the request, choosing files, refusing unsafe steps, running and undoing every kind of step, and the token warning.
 - `--namingtest` is a live run: real Claude names two made-up chats as if closed (in a temporary library), and a chat you rename while Claude is thinking keeps your name. `--videochattest` checks that “summarize this video” typed into a chat opens the video summary.
-- `--barpicture <png>` draws the agent bar (a running, a waiting-for-OK, a finished and a queued agent), the cats resting in the corner, the empty bar and the voice pill's cat into one picture (and the chat box, answered by Claude and by Qwen, into `<png>.chat.png`, and a breathing cat out and in at 4× into `<png>.breath.png`), without opening a window: the way to look at the bar without it appearing on your screen.
-- `--catsheet <png>` draws every cat in every pose (standing, the 4 running frames, loaf, asleep) on white and on black, without opening a window. The unit tests check that every coat has every pose, the feet stay on one line (so a cat never jumps when it changes pose), every sleeper has its zzz, and each agent state picks the right pose.
-- `--taskdemo <dir>` runs Tidy on a fake messy desktop in a temporary folder: scan, plan, approval with Claude naming the screenshots, result, undo. Your real folders are never touched. It needs the permission to have been granted to whatever runs it.
 
 ```bash
 .build/release/Margin --demo /tmp/margin-demo
@@ -377,7 +322,6 @@ swift build -c release
 | `Video.swift` | Video sources, YouTube captions (via YouTube's app API), reading the browser tab, transcript formatting |
 | `Transcription.swift` | On-device speech-to-text (SpeechAnalyzer): system audio for Listen Along, or a file |
 | `scripts/setup-signing.sh` | One-time private signing identity so permissions survive rebuilds |
-| `scripts/make-cat-atlas.swift` | Developer tool: cuts the cat sprite sheet into the atlas (cleans the background, adds the white edge, aligns the feet) |
 | `Motion.swift` | Shared curves, spring pop-ins, and the snapshot "ghost" used for minimize and expand |
 | `TriggerIcon.swift` | The floating **?** bubble, plus shared theme helpers |
 | `AskPanel.swift` | One agent: draggable popup window, minimize/expand, phases, picking who answers, screenshot handoff, 20s fade |
@@ -389,7 +333,7 @@ swift build -c release
 | `Router.swift` | Local mode's policy: who answers a question (the local model, a lean Claude call, or full Claude), and when a chat moves up. Pure functions, unit-tested |
 | `Ollama.swift` | The Ollama client (is it running? is the model there? load it ahead of time) and `LocalSession`, which streams an answer from the model on your Mac |
 | `UsageLog.swift` | The private count of what each answer used, and the Token Savings summary |
-| `LocalTests.swift` | Tests and demo for Local mode (`--unittest`, `--localtest`, `--localdemo`) |
+| `LocalTests.swift` | Tests and demo for Local mode and token savings (`--unittest`, `--localtest`, `--localdemo`, `--switchtest`) |
 | `Prompts.swift` | System prompt and message templates. Tweak answer style here |
 | `StatusMenu.swift` | Menu-bar menu |
 | `Library.swift` | Saved chats and notes (JSON files on this Mac), sectors and the keyword guess, search, Markdown notebook, and the Bin (soft delete, restore, 30-day purge) |
@@ -402,24 +346,10 @@ swift build -c release
 | `EventCard.swift` | The editable event card |
 | `Voice.swift` | Hold-to-talk: microphone, the listening pill, and where a spoken command goes |
 | `PageReader.swift` | Reads a PDF, file or web page, cuts it into passages and finds the ones that match (BM25), plus on-device OCR |
-| `FileSafety.swift` | The only code that changes your files: allowed folders, no overwrite, Trash only, ledger and Undo |
-| `ClaudeOneShot.swift` | One-off Claude calls for the background agents |
-| `TaskModels.swift`, `TaskEngine.swift` | Plans, reports, the running-task list, and the Tidy agent |
-| `Tidy.swift`, `FindAgent.swift`, `BatchAgent.swift`, `StudyAgent.swift` | The four stock background agents |
-| `Connected.swift` | The Connected agent: locked-down Claude runs with only the connector tools each step allows, the read → Allow → create → Undo flow, checking what was made, and adding up money |
-| `CustomAgent.swift` | The open-ended agent: lists names, sizes and ages, asks Claude for a plan out of safe steps, validates it, warns about the token cost, runs it and keeps the ledger |
-| `FinderDesktop.swift` | Desktop icon positions through Finder (AppleScript): scatter, grid, row and column layouts, Finder's selection, and putting everything back |
+| `ClaudeOneShot.swift` | One-off Claude calls (naming, summaries) |
 | `ChatNaming.swift` | Names and files a chat when it's closed, never one you named yourself |
-| `VideoIntent.swift` | Understands “summarize this video” in a chat, by voice or in the agent box, and finds the video in your browser tab |
+| `VideoIntent.swift` | Understands “summarize this video” in a chat or by voice, and finds the video in your browser tab |
 | `VideoDigest.swift` | Local video summaries: cuts a transcript into parts, the notes prompts, timestamp links, and transcript passages for follow-ups |
-| `LocalJobs.swift` | Plans the common file jobs (scatter, arrange, trash old installers, put files in a folder) on this Mac by rules: no Claude call |
 | `GraphTemplates.swift` | Seven ready-made graphs and the session that hands one over with no model (Local Mode) |
-| `CustomAgentTests.swift` | Tests for the open-ended agent (pretend Claude, pretend Finder) and `--customtest` |
-| `AgentBar.swift` | The agent bar at the top of the screen (⌘⇧A): one cat per agent, cards under the cats, + for a new job |
 | `Dictation.swift` | Hold-to-talk recording: microphone on instantly, held in memory until the recognizer is ready, English only, nothing saved |
-| `PixelCat.swift` | The eight pixel cats and their poses (standing, running, loaf, asleep): cuts each picture out of the atlas, and the cat view that trots back and forth |
-| `CatAtlas.swift` | The cats' pictures (8 coats × 6 poses) as one embedded PNG. Generated by `scripts/make-cat-atlas.swift` from `Resources/art/cat-sheet.webp`; don't edit by hand |
-| `CatSleepAtlas.swift` | The big sleeping cats for the corner of the screen (8 coats, hard 5×5 blocks) as an embedded PNG. Generated with `--sleepers=5`; don't edit by hand |
-| `CatTests.swift` | Tests for the cats (`--unittest`) and the silent `--barpicture` |
-| `TaskBox.swift` | The new-job box, the request router, and the task card |
 | `FeatureTests.swift` | Tests and demos for all of the above |
