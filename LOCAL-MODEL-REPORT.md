@@ -1,10 +1,10 @@
-# Margin: what a local model saves, and what it costs
+# Merlin: what a local model saves, and what it costs
 
 Written 2026-10-09 from measurements made on this Mac (Apple M2, 16 GB), using Claude Sonnet and the local model Qwen3 8B (4-bit, via Ollama).
 
 ## The short version
 
-- **Update, 2026-10-12: steps 1 and 2 of the recommendation are now built** (lean Claude calls, and Local mode, off until you switch it on). Graph templates are not. Every saving below is still a projection built from measured per-request numbers; Margin's new "Token Savings…" menu item will show real ones from your own use.
+- **Update, 2026-10-12: steps 1 and 2 of the recommendation are now built** (lean Claude calls, and Local mode, off until you switch it on). Graph templates are not. Every saving below is still a projection built from measured per-request numbers; Merlin's new "Token Savings…" menu item will show real ones from your own use.
 - **Local mode alone** (quick questions, follow-ups, short summaries and template graphs answered by Qwen3 8B) would cut Claude tokens by **about 25–50%** across the three usage profiles below, assuming 1 in 5 local answers gets re-asked on Claude.
 - **Sending Claude less per call saves about as much, with no local model at all.** Dropping the screenshot and web tools from calls that don't need them cut each call's input by about half (measured). On the same profiles that is **40–42%**.
 - **Both together:** about **51–60%** fewer Claude tokens.
@@ -28,8 +28,8 @@ Written 2026-10-09 from measurements made on this Mac (Apple M2, 16 GB), using C
 
 ## How I measured
 
-- **Claude numbers today:** the in-app benchmark from earlier (`BENCHMARK.md`): real Margin prompts through the real Claude process, Sonnet, 3 runs per request type. Tokens are input plus output, counting cached input in full.
-- **Leaner Claude calls:** a new test with Margin's exact system prompt rebuilt from its source, 4 request types, 4 setups (with and without the screenshot, with and without the web tools), 3 runs each. Its "today" setup reproduced the app's 6.8k input tokens, so it matches the app.
+- **Claude numbers today:** the in-app benchmark from earlier (`BENCHMARK.md`): real Merlin prompts through the real Claude process, Sonnet, 3 runs per request type. Tokens are input plus output, counting cached input in full.
+- **Leaner Claude calls:** a new test with Merlin's exact system prompt rebuilt from its source, 4 request types, 4 setups (with and without the screenshot, with and without the web tools), 3 runs each. Its "today" setup reproduced the app's 6.8k input tokens, so it matches the app.
 - **Local model:** the same prompts sent to Claude and to Qwen3 8B side by side, 3 runs each, 8 request types, with no screenshot and web search off for both.
 - **Skill tests:** 20 Russian words for stress; 8 graph requests as free-form JSON; 16 graph requests as template choices.
 - **One odd result:** a single run in the lean test took 73 minutes (cause unknown). Its token counts matched the other runs, so I kept it; no timing in this report comes from that test.
@@ -55,7 +55,7 @@ Claude tokens per request (input plus output). "Lean" means no screenshot and no
 - "est." rows apply those measured amounts; I measured the lean setup directly only for quick questions, pronunciation, graphs and short summaries. Lean calls gave answers of similar length, but I did not judge whether dropping the screenshot made the answers worse.
 - Local model tokens don't touch your Claude limit. They cost memory and GPU time on your Mac instead.
 
-## Savings per day, by how you might use Margin
+## Savings per day, by how you might use Merlin
 
 These mixes of 100 requests a day are assumptions, not your real usage. Assumptions in the "local" columns: 1 in 5 local answers is re-asked on Claude at full price ("Ask Claude"), and 60% of graph requests fit a template.
 
@@ -80,7 +80,7 @@ These mixes of 100 requests a day are assumptions, not your real usage. Assumpti
 | Local mode only | 391k (−50%) | 570k (−25%) | 378k (−50%) |
 | Local mode and lean calls | 307k (−60%) | 371k (−51%) | 306k (−60%) |
 
-Note: the "lean" columns count YouTube summaries without the web tools (about 1.5k tokens each). As built, Margin keeps the web tools on for video chats, so the real savings from lean calls are about 1 to 2 percentage points lower than these tables show.
+Note: the "lean" columns count YouTube summaries without the web tools (about 1.5k tokens each). As built, Merlin keeps the web tools on for video chats, so the real savings from lean calls are about 1 to 2 percentage points lower than these tables show.
 
 ### Claude cost per day at API prices
 
@@ -132,7 +132,7 @@ Local answers start sooner and finish about as fast on short tasks, because they
 
 ### Risks
 
-- **Routing guesses.** Margin has to guess whether a typed question needs facts or the web. A wrong guess gives a confident local answer that was never checked. The Ask Claude button is the safety net, and I would route obvious cases ("check", "latest", "is that accurate") to Claude by keyword.
+- **Routing guesses.** Merlin has to guess whether a typed question needs facts or the web. A wrong guess gives a confident local answer that was never checked. The Ask Claude button is the safety net, and I would route obvious cases ("check", "latest", "is that accurate") to Claude by keyword.
 - **No screenshot for local answers.** The local model can't see images, so "what is this button?" style questions would need Claude. It still gets the highlighted text and the text around it.
 - **The 20% re-ask rate is a guess.** If you re-ask more often, the savings shrink, as the table above shows.
 
@@ -162,4 +162,4 @@ In this order, because each step is safer and bigger than the next:
 2. **Local mode, off by default.** Quick questions, follow-ups and short summaries, with an "Ask Claude" button on every local answer, a label on which model answered, and an automatic fall back to Claude if Ollama isn't running.
 3. **Graph templates**, handled locally, with everything else going to Claude.
 
-The biggest unknown is your real usage. I can add a small log to Margin that records each request's type and tokens, so after a week we'd have your actual mix instead of the three assumed ones above.
+The biggest unknown is your real usage. I can add a small log to Merlin that records each request's type and tokens, so after a week we'd have your actual mix instead of the three assumed ones above.

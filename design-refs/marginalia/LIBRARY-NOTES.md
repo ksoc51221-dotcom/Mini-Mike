@@ -1,7 +1,7 @@
 # Library restyle notes (2026-10-29)
 
 Changed (LibraryWindow.swift, small edits in AskView.swift, UIShots.swift, BinTests.swift):
-- One "Margin" title; one storage line at the sidebar foot; banner and header badge removed.
+- One "Merlin" title; one storage line at the sidebar foot; banner and header badge removed.
 - Sidebar: solid-highlighter New Chat (only solid yellow), All, Sectors (7pt dot + count), Types, Bin pinned at the bottom with "Empties after 30 days" (true: Library.binDays = 30). Selected rows use highlighterWash, 8pt radius, no bar.
 - Rows: question 13 medium, answer snippet 12, meta line (sector chip, relative time, quiz glyph). Trash only on hover/selection, context menu (Open, Copy question, Move to Bin). Sentence-case sticky time buckets with a count.
 - Times: now / 5m / 2h / Yesterday / Mon / 12 Oct. Test strings updated.

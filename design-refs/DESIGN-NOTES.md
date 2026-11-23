@@ -1,4 +1,4 @@
-# Margin UI notes (2026-10-23 design pass)
+# Merlin UI notes (2026-10-23 design pass)
 
 ## Principles used (from Apple HIG and designer write-ups)
 - Text contrast of at least 4.5:1 on its background, in both light and dark mode. Terracotta #D97857 is fine on dark but
@@ -27,5 +27,5 @@
 - `--agentbartest` "cat per agent" check now tests width, since the strip lays cats out in a row.
 
 ## How to check
-`--demo <dir>` (popup, bubble; `MARGIN_LIGHT=1` for light mode), `--libdemo <dir>`, `--agentbartest <dir>`, `--pilldemo <dir>`,
+`--demo <dir>` (popup, bubble; `MERLIN_LIGHT=1` for light mode), `--libdemo <dir>`, `--agentbartest <dir>`, `--pilldemo <dir>`,
 `--calendardemo <dir>`, `--videodemo <dir>`, `--unittest`.

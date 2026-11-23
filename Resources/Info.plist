@@ -3,15 +3,15 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>com.kien.margin</string>
+    <string>com.kien.merlin</string>
     <key>CFBundleName</key>
-    <string>Margin</string>
+    <string>Merlin</string>
     <key>CFBundleDisplayName</key>
-    <string>Margin</string>
+    <string>Merlin</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundleExecutable</key>
-    <string>Margin</string>
+    <string>Merlin</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -21,21 +21,21 @@
     <key>LSMinimumSystemVersion</key>
     <string>26.0</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Margin reads the address of your browser's current tab when you ask it to summarize the video you're watching, and asks Finder to move your Desktop icons when you ask an agent to scatter or arrange them.</string>
+    <string>Merlin reads the address of your browser's current tab when you ask it to summarize the video you're watching.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Margin transcribes a video's audio on your Mac so Claude can summarize it.</string>
+    <string>Merlin transcribes a video's audio on your Mac so Claude can summarize it.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>
-    <string>Margin adds the events you ask for (like "add dinner to my calendar at 7") to your calendar, and can undo them.</string>
+    <string>Merlin adds the events you ask for (like "add dinner to my calendar at 7") to your calendar, and can undo them.</string>
     <key>NSCalendarsUsageDescription</key>
-    <string>Margin adds the events you ask for to your calendar.</string>
+    <string>Merlin adds the events you ask for to your calendar.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Margin listens while you hold its talk shortcut, turning your voice into text on your Mac so you can ask questions and add calendar events by speaking.</string>
+    <string>Merlin listens while you hold its talk shortcut, turning your voice into text so you can ask questions and add calendar events by speaking. With the Groq Whisper voice engine on, the audio goes to Groq.</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>Margin's background agents tidy and read your Desktop when you ask them to.</string>
+    <string>Merlin keeps the screenshots that macOS saves on your Desktop, and reads a file there when you ask about it.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>Margin's background agents tidy and read your Downloads folder when you ask them to.</string>
+    <string>Merlin reads a file in your Downloads folder when you ask about it.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>Margin reads your documents and textbooks when you ask it to, and saves your notes in Documents/Margin Notes.</string>
+    <string>Merlin reads your documents and textbooks when you ask it to, and saves your notes in Documents/Merlin Notes.</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSHighResolutionCapable</key>

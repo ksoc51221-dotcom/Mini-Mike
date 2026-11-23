@@ -1,6 +1,6 @@
-# Margin MCP server
+# Merlin MCP server
 
-`Margin --mcp` serves your mini chats to Claude Code and the Claude desktop app over MCP (stdio). Local-only (no network, no Claude calls) and read-only (it never writes, moves or deletes anything in your Library). Binned items are not served.
+`Merlin --mcp` serves your mini chats to Claude Code and the Claude desktop app over MCP (stdio). Local-only (no network, no Claude calls) and read-only (it never writes, moves or deletes anything in your Library). Binned items are not served.
 
 ## Tools
 - `list_chats` {sector?, query?, limit=20}: id, title, sector, app, date, turns, newest first.
@@ -11,11 +11,11 @@
 
 ## Claude Code
 ```
-claude mcp add margin -- ~/Applications/Margin.app/Contents/MacOS/Margin --mcp
+claude mcp add merlin -- ~/Applications/Merlin.app/Contents/MacOS/Merlin --mcp
 ```
 Add `-s user` to make it available in every project:
 ```
-claude mcp add -s user margin -- ~/Applications/Margin.app/Contents/MacOS/Margin --mcp
+claude mcp add -s user merlin -- ~/Applications/Merlin.app/Contents/MacOS/Merlin --mcp
 ```
 
 ## Claude desktop
@@ -23,8 +23,8 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (use the 
 ```json
 {
   "mcpServers": {
-    "margin": {
-      "command": "/Users/YOU/Applications/Margin.app/Contents/MacOS/Margin",
+    "merlin": {
+      "command": "/Users/YOU/Applications/Merlin.app/Contents/MacOS/Merlin",
       "args": ["--mcp"]
     }
   }

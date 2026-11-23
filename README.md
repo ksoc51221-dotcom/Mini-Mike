@@ -1,15 +1,15 @@
-# Margin
+# Merlin
 
 A macOS menu-bar helper for quick side-questions about text you're reading, usually a part of a Claude explanation that didn't click. It can search the web and see your screen to get the answer right, and an optional Local mode answers quick questions on your Mac to save Claude tokens. You can run up to 4 questions at once.
 
-## What Margin can do, at a glance
+## What Merlin can do, at a glance
 
 Four main things, and the smaller features that belong to each:
 
 1. **Answer questions about whatever you're reading.** Highlight text anywhere and ask (spark button, or ⌥⇧Tab for a blank chat); snip anything you can't highlight (Tab + \\); ask about a whole page or PDF. Claude can search the web and see your screen; up to 4 chats run at once and rest in a sidebar.
 2. **Explain in more than words.** Pronunciation voice messages, drawn graphs, summaries (overall meaning, keywords), video summaries (YouTube, Listen Along, files; just type or say “summarize this video” in a chat), and **Quiz me**.
 3. **Remember and organize.** Every chat is saved and **automatically titled and filed into a sector** (Math, Language, Physics…) **when you close them**, unless you named them yourself; **⌘⇧L** opens the history; **Keep it** saves the good explanations to a notebook, mirrored as Markdown files.
-4. **Listen to you.** Hold **⌘⇧V**, say it, let go: Margin starts recording the instant you press. It can answer a question, **add an event to your calendar** ("add dinner to my calendar tomorrow 7 to 8").
+4. **Listen to you.** Hold **⌘⇧V**, say it, let go: Merlin starts recording the instant you press. It can answer a question, **add an event to your calendar** ("add dinner to my calendar tomorrow 7 to 8").
 
 And it spends as few Claude tokens as it can: it only sends what a question needs, and an optional Local mode answers simple questions on your Mac.
 
@@ -26,7 +26,7 @@ And it spends as few Claude tokens as it can: it only sends what a question need
 Press **Option+Shift+Tab** anywhere for a chat right at your mouse (**New Chat** in the menu bar does the same).
 - If you've highlighted text, it comes along. Otherwise you get a blank "Ask anything" chat, and Claude sees your screen as usual.
 - Chats open side by side, so you can have several going at once: with the mouse over a chat, the shortcut gives it the keyboard back (or, if you're already typing in it, puts it away in the sidebar); anywhere else it opens a **new** chat at the mouse. New chats step down and to the right so none hides another.
-- It works even while Margin is paused.
+- It works even while Merlin is paused.
 
 Every chat pops up with a soft light-orange glow (it blooms, then settles) and follows the chat as it moves, grows, and fades.
 
@@ -38,11 +38,11 @@ For scanned PDFs, images, diagrams, or any app that won't let you select text, h
 
 An agent opens right there with your snip as its "highlight". It can also see the full screenshot, if screen context is on. The same thing is in the menu as **Snip & Ask…**.
 
-The Tab key itself still works normally: Margin only swallows the **\\** while Tab is held, so nothing gets typed into your document. It uses the US-layout backslash key.
+The Tab key itself still works normally: Merlin only swallows the **\\** while Tab is held, so nothing gets typed into your document. It uses the US-layout backslash key.
 
 ## Make it bigger
 
-The **⤢** button in the chat header makes the popup 50% bigger: 380 → 570pt wide, and the answer area 360 → 540pt tall. Click **⤡** to go back. Margin remembers your choice for the next popup.
+The **⤢** button in the chat header makes the popup 50% bigger: 380 → 570pt wide, and the answer area 360 → 540pt tall. Click **⤡** to go back. Merlin remembers your choice for the next popup.
 
 ## Hear it: pronunciation voice messages
 
@@ -58,7 +58,7 @@ Highlight or snip a word or a whole sentence (Russian, French, anything), then t
 - The Mac's built-in voice for that language then speaks Claude's IPA, offline.
 - Claude can't produce audio itself, so it picks the correct pronunciation and macOS does the speaking.
 
-**Better voice:** the Mac ships with a basic "compact" Russian voice (Milena). For a more natural sound, open **System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…** and download **Milena (Enhanced)** or another Russian voice. Margin automatically uses the best one installed. One caveat: I've only tested that IPA stress works with the built-in voice, so if an enhanced voice gets stress wrong, tell me.
+**Better voice:** the Mac ships with a basic "compact" Russian voice (Milena). For a more natural sound, open **System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…** and download **Milena (Enhanced)** or another Russian voice. Merlin automatically uses the best one installed. One caveat: I've only tested that IPA stress works with the built-in voice, so if an enhanced voice gets stress wrong, tell me.
 
 ## Summarize
 
@@ -72,7 +72,7 @@ Summaries take up to about 20,000 characters of highlighted text (other question
 
 Tap **📈 Visualize**, or ask for a graph, a diagram or "show me", and Claude draws one right in the chat. It also draws on its own when a picture would explain faster.
 
-- **Exact curves:** Claude writes the formulas (like `a*(x-h)^2 + k` or `8 - 0.7*x`), and Margin computes and draws them. Parabolas, intersections, tangent lines, equilibrium points and shaded areas come out mathematically right, not hand-drawn.
+- **Exact curves:** Claude writes the formulas (like `a*(x-h)^2 + k` or `8 - 0.7*x`), and Merlin computes and draws them. Parabolas, intersections, tangent lines, equilibrium points and shaded areas come out mathematically right, not hand-drawn.
 - **Sliders:** many graphs come with sliders for "what happens if…". Drag one to shift demand, change a parabola's *a*, *h* or *k*, or move a tangent point, and the graph updates live.
 - **Hover** over a graph with numbers to read the curves' values at your mouse.
 - **What it can draw:**
@@ -84,14 +84,14 @@ Tap **📈 Visualize**, or ask for a graph, a diagram or "show me", and Claude d
   - diagrams: boxes and arrows for processes and cycles, like the circular flow of income.
 - **Keep it:** drag the graph into Notes or Finder as a PNG, or right-click for **Copy Image** and **Save Image As…**. The picture includes your slider settings.
 
-How it works: Claude puts a small JSON description inside a `<graph>` tag. Margin reads it with its own math parser (nothing is run as code) and draws it natively. If part of it doesn't make sense, that part is skipped and the rest still draws.
+How it works: Claude puts a small JSON description inside a `<graph>` tag. Merlin reads it with its own math parser (nothing is run as code) and draws it natively. If part of it doesn't make sense, that part is skipped and the rest still draws.
 
 ## Summarize a video
 
-**Just ask.** In any chat, or by voice (⌘⇧V), type or say **“summarize this video”** (also “what's this video about?”, “tl;dr of this video”, “summarize the lecture”, or paste a YouTube link). Margin understands that on your Mac with no Claude call and opens the video summary for the YouTube video in your front browser tab; “listen along” or “summarize what's playing” listens to whatever is playing instead. It's the same summarizer as the menu's, three ways in:
+**Just ask.** In any chat, or by voice (⌘⇧V), type or say **“summarize this video”** (also “what's this video about?”, “tl;dr of this video”, “summarize the lecture”, or paste a YouTube link). Merlin understands that on your Mac with no Claude call and opens the video summary for the YouTube video in your front browser tab; “listen along” or “summarize what's playing” listens to whatever is playing instead. It's the same summarizer as the menu's, three ways in:
 
-- **YouTube tab:** with a YouTube video open in Safari, Chrome, Arc, Brave, Edge, Vivaldi, or Opera, choose **YouTube Video in Current Tab**. Margin reads the video's captions straight from YouTube, so you don't have to play it. The first time, macOS asks whether Margin may read your browser's tab address. If you highlight text in a browser, or highlight a YouTube link anywhere, a **▶ Summarize video** chip also shows up in the popup.
-- **Listen along:** for anything else that's playing (Instagram, a course site, a Zoom recording), choose **Listen Along…**. Margin transcribes your Mac's sound on-device while it plays. Press **Stop & summarize** when you've heard enough. You can put it away in the sidebar while it listens. It stops by itself after 3 hours.
+- **YouTube tab:** with a YouTube video open in Safari, Chrome, Arc, Brave, Edge, Vivaldi, or Opera, choose **YouTube Video in Current Tab**. Merlin reads the video's captions straight from YouTube, so you don't have to play it. The first time, macOS asks whether Merlin may read your browser's tab address. If you highlight text in a browser, or highlight a YouTube link anywhere, a **▶ Summarize video** chip also shows up in the popup.
+- **Listen along:** for anything else that's playing (Instagram, a course site, a Zoom recording), choose **Listen Along…**. Merlin transcribes your Mac's sound on-device while it plays. Press **Stop & summarize** when you've heard enough. You can put it away in the sidebar while it listens. It stops by itself after 3 hours.
 - **A file:** choose **Video or Audio File…** and pick a video or audio file. It's transcribed on-device, faster than real time.
 
 The summary has no fixed template. The model first works out what kind of video it is (tutorial, lecture, interview, review, commentary, story…), opens with what it is and the bottom line, then keeps what's worth keeping in the form that fits: a tutorial gets ordered steps with the exact commands and numbers, a review gets the verdict, pros, cons and who it's for, and so on. Moments worth jumping to carry a timestamp (for YouTube, clicking it opens the video there). The length scales with the video, up to about 400 words for an hour or more.
@@ -100,7 +100,7 @@ Then you can ask follow-ups or **Go deeper**, like any other chat.
 
 **With Local Mode on, an English video is summarized on your Mac with no Claude call.** The model on your Mac has a small memory, so it reads a long transcript in parts (“Reading part 2 of 3 on your Mac…”), boils each down to timestamped notes, and writes the summary from the notes. That takes about 2 minutes for a 15-minute talk (longer for a long lecture) and costs no Claude tokens, where Claude would read the whole transcript (roughly 7k tokens for a 15-minute talk, 20k for an hour). A small model is less careful than Claude: it can blur a detail or miss a point, so for a video with dense data or analysis press **⌃⇧L** to have Claude redo it. Timestamps are turned into links here, from the time itself, so they always open the right moment. Questions after the summary send the model only the few transcript passages they're about. Videos in other languages always go to Claude.
 
-**Videos that aren't in English** make Margin ask how you want the summary:
+**Videos that aren't in English** make Merlin ask how you want the summary:
 - **English + key Russian phrases:** English summary, plus useful phrases from the video as voice clips.
 - **English only.**
 - **Russian (practice):** the summary in simple Russian, with stress marks and short English glosses for the harder words.
@@ -115,7 +115,7 @@ Every chat rests in a **black sidebar** at the top-right of your laptop screen, 
 - **Light purple (working):** the ring pulses, a point of light orbits it, the spark in the middle turns slowly, and a soft glow breathes and radiates outward in slow ripples. The row says what it's doing ("Searching “…”").
 - **Dark green (done):** one burst of light outward, then a steady emerald glow with a ✓. The row says "Done. Click to read".
 - **Red glow:** something went wrong. Click the row to see what.
-- **Fold it:** the button at the top right of the sidebar (or **Fold Chat Sidebar** in the menu-bar menu) shrinks it to a slim strip with one colored dot per chat. Click the strip to unfold. Margin remembers which you chose.
+- **Fold it:** the button at the top right of the sidebar (or **Fold Chat Sidebar** in the menu-bar menu) shrinks it to a slim strip with one colored dot per chat. Click the strip to unfold. Merlin remembers which you chose.
 
 **Moving a chat:** drag the top edge of the chat window (the little grip, or anywhere along the header away from its buttons) and drop it wherever you like. It stays there: reopening it from the sidebar brings it back to that spot, and it no longer fades away by itself.
 
@@ -123,21 +123,21 @@ Every chat rests in a **black sidebar** at the top-right of your laptop screen, 
 
 **Putting away and deleting:**
 - **Esc**, the header's sidebar button, or a click on the chat's row in the sidebar **put the chat away in the sidebar**. They never delete it, even when it has finished. A click on a row opens a chat that's away.
-- **×** on the chat itself or on its sidebar row (it shows when you hover the row) closes the chat and stops its agent. A chat you've had an answer in stays in the dashboard's History; deleting it from there goes to the **Bin** (below).
+- **×** on the chat itself or on its sidebar row (it shows when you hover the row) closes the chat and stops its Claude session. A chat you've had an answer in stays in the dashboard's History; deleting it from there goes to the **Bin** (below).
 - One exception: a completely empty chat (opened with Option+Shift+Tab, nothing typed, nothing highlighted) has nothing to come back to, so opening another chat just replaces it.
 - When you take a snip (Tab + \\), your open chats hide for a moment so they aren't in the picture, and come straight back.
 
 ## History, sectors and the notebook
 
-Margin now keeps your chats on this Mac (turn it off with **Save chat history** in the History window's ⋯ menu), so you can find an explanation again.
+Merlin now keeps your chats on this Mac (turn it off with **Save chat history** in the History window's ⋯ menu), so you can find an explanation again.
 
 - **Auto-named and filed.** Claude ends its first answer in a chat with a hidden line that names the chat (3–6 words) and files it under a **sector**: Math, Physics, Chemistry, Biology, Computer Science, Economics, Language, History, Writing, Health, Business, or a new one it makes up when none fits. It costs about 30 extra words and **no extra call**. If Claude doesn't, a quick keyword guess on your Mac files it. The sidebar row shows the sector ("Math · Done. Click to read").
-- **Named when you close it.** When you close a chat that went on for more than one exchange, one small extra call (Haiku, about 600 tokens) reads what was actually said and gives it a better name and sector. **If you renamed a chat yourself, or moved it to a sector, Margin never changes that** (a lock icon in the History window shows it, and you can click it to let Margin name the chat again). Turn it off with **Name chats when I close them** in the History window's ⋯ menu.
-- **Chat History…** (menu bar, or **⌘⇧L** anywhere; press it again to close) opens the **dashboard**: a dark three-pane window (sidebar, list, page). The sidebar has **All** (chats, notes and screenshots together), **Chats**, **Notebook**, **Screenshots** and the **Bin**, with your sectors underneath. The list is grouped by day (TODAY, YESTERDAY…) with a sector dot, how long ago, and a line of what it says; ⌘K searches, the arrows next to the list's title flip newest/oldest and pick a sector, and ↑/↓ move between rows. A page shows the path across the top (sectors / math / parabola-direction), reading time, and a box at the bottom that starts a chat about what you're reading. It **floats over your work on the Space you're on without switching you to Margin**: the app you were using stays the active one, so you can keep typing there after a glance, and ⌘⇧L never pulls you away. Drag it anywhere, resize it, close it with ⌘⇧L or the red button. Rename a chat, move it to another sector (or a new one), copy it as Markdown, or **Quiz me on this**.
+- **Named when you close it.** When you close a chat that went on for more than one exchange, one small extra call (Haiku, about 600 tokens) reads what was actually said and gives it a better name and sector. **If you renamed a chat yourself, or moved it to a sector, Merlin never changes that** (a lock icon in the History window shows it, and you can click it to let Merlin name the chat again). Turn it off with **Name chats when I close them** in the History window's ⋯ menu.
+- **Chat History…** (menu bar, or **⌘⇧L** anywhere; press it again to close) opens the **dashboard**: a dark three-pane window (sidebar, list, page). The sidebar has **All** (chats, notes and screenshots together), **Chats**, **Notebook**, **Screenshots** and the **Bin**, with your sectors underneath. The list is grouped by day (TODAY, YESTERDAY…) with a sector dot, how long ago, and a line of what it says; ⌘K searches, the arrows next to the list's title flip newest/oldest and pick a sector, and ↑/↓ move between rows. A page shows the path across the top (sectors / math / parabola-direction), reading time, and a box at the bottom that starts a chat about what you're reading. It **floats over your work on the Space you're on without switching you to Merlin**: the app you were using stays the active one, so you can keep typing there after a glance, and ⌘⇧L never pulls you away. Drag it anywhere, resize it, close it with ⌘⇧L or the red button. Rename a chat, move it to another sector (or a new one), copy it as Markdown, or **Quiz me on this**.
 - **Clearing things.** Every row in All, Chats, Notebook and Screenshots has a **trash button on its right**. One click moves it to the Bin and a bar at the bottom says so, with **Undo** (it stays for 8 seconds). The **Delete** key does the same for the selected row, right-click has it too, and the ⋯ menu has *Move all chats / screenshots to the Bin…*.
-- **The Bin.** Nothing you delete in the dashboard is gone right away: chats, notes and screenshots go to the Bin (sidebar, or menu bar → **Bin…**). Each row has **Restore** and **Delete forever**; **Empty** at the top deletes everything for good. Things wait there **30 days** (each row says how many days are left), then they're deleted for good. A screenshot's picture stays on disk while it's in the Bin, and goes when you delete it for good. Margin's own files only: the screenshot files macOS saved are never touched.
-- **Screenshots, saved on their own.** Every screenshot you take goes into the dashboard's **Screenshots** section (menu bar → **Screenshots…**, or the History window's sidebar): your snips (**Tab + \\**) as you take them, and the ones macOS makes with **⌘⇧3, ⌘⇧4 and ⌘⇧5** as soon as the file lands in your screenshots folder (the Desktop, or wherever ⌘⇧5 → Options saves them). Margin keeps its own copy and **never moves or deletes the original**. Each one is read for its words on your Mac (Apple's on-device text recognition) and **labeled by its context**: the window's title (the page, document or chat it shows), else the heading in the picture, else the app; with **Local Mode** on, the model on your Mac writes a proper title and files it under a sector (Math, Language…), so it all costs no Claude tokens. Search finds screenshots by the words in them, their label, app or sector. In a screenshot's page you can rename it (your name is never replaced), move it to another sector, **Ask Margin about it** (the one time it's sent to Claude), copy it, or **Re-label** it (the model on your Mac, or a small Claude call of about 400 tokens if Local Mode is off). Screenshots taken in a password manager are never saved; a screenshot copied to the clipboard instead of a file (Control + ⌘⇧4) can't be seen by Margin. Turn it off with **Save My Screenshots to the Dashboard** in the menu bar, and delete them all from the History window's ⋯ menu. The first time, macOS may ask to let Margin read your Desktop (or whichever folder holds your screenshots).
-- **Keep it.** Tap **Keep** under an answer to save it to your **Notebook…** (also searchable, filed by sector). Kept notes are also written as Markdown files, one per sector, in `Documents/Margin Notes` (switch that off in the ⋯ menu).
+- **The Bin.** Nothing you delete in the dashboard is gone right away: chats, notes and screenshots go to the Bin (sidebar, or menu bar → **Bin…**). Each row has **Restore** and **Delete forever**; **Empty** at the top deletes everything for good. Things wait there **30 days** (each row says how many days are left), then they're deleted for good. A screenshot's picture stays on disk while it's in the Bin, and goes when you delete it for good. Merlin's own files only: the screenshot files macOS saved are never touched.
+- **Screenshots, saved on their own.** Every screenshot you take goes into the dashboard's **Screenshots** section (menu bar → **Screenshots…**, or the History window's sidebar): your snips (**Tab + \\**) as you take them, and the ones macOS makes with **⌘⇧3, ⌘⇧4 and ⌘⇧5** as soon as the file lands in your screenshots folder (the Desktop, or wherever ⌘⇧5 → Options saves them). Merlin keeps its own copy and **never moves or deletes the original**. Each one is read for its words on your Mac (Apple's on-device text recognition) and **labeled by its context**: the window's title (the page, document or chat it shows), else the heading in the picture, else the app; with **Local Mode** on, the model on your Mac writes a proper title and files it under a sector (Math, Language…), so it all costs no Claude tokens. Search finds screenshots by the words in them, their label, app or sector. In a screenshot's page you can rename it (your name is never replaced), move it to another sector, **Ask Merlin about it** (the one time it's sent to Claude), copy it, or **Re-label** it (the model on your Mac, or a small Claude call of about 400 tokens if Local Mode is off). Screenshots taken in a password manager are never saved; a screenshot copied to the clipboard instead of a file (Control + ⌘⇧4) can't be seen by Merlin. Turn it off with **Save My Screenshots to the Dashboard** in the menu bar, and delete them all from the History window's ⋯ menu. The first time, macOS may ask to let Merlin read your Desktop (or whichever folder holds your screenshots).
+- **Keep it.** Tap **Keep** under an answer to save it to your **Notebook…** (also searchable, filed by sector). Kept notes are also written as Markdown files, one per sector, in `Documents/Merlin Notes` (switch that off in the ⋯ menu).
 
 ## Quiz me
 
@@ -145,50 +145,50 @@ After an answer, tap **Quiz me** for four questions on what you just read: three
 
 ## Ask about the whole page or PDF
 
-When the app in front has a file or web page open (Preview, Safari, Chrome, Word and so on), a chat offers **Ask about “name”**. Margin reads the whole thing on your Mac (PDFs, text, Word and RTF files, web pages; **scanned PDFs are read with on-device text recognition**, the first 40 pages) and cuts it into passages. For each question it finds the few passages that match and sends **only those** to Claude, with page numbers, so a 400-page textbook costs about as much as a paragraph. Claude cites pages like (p. 45). **Summarize document** and **Key terms** use excerpts spread through the document. A document chat is a lean call: no screenshot and no web.
+When the app in front has a file or web page open (Preview, Safari, Chrome, Word and so on), a chat offers **Ask about “name”**. Merlin reads the whole thing on your Mac (PDFs, text, Word and RTF files, web pages; **scanned PDFs are read with on-device text recognition**, the first 40 pages) and cuts it into passages. For each question it finds the few passages that match and sends **only those** to Claude, with page numbers, so a 400-page textbook costs about as much as a paragraph. Claude cites pages like (p. 45). **Summarize document** and **Key terms** use excerpts spread through the document. A document chat is a lean call: no screenshot and no web.
 
-## Talk to Margin: hold **Cmd+Shift+V**
+## Talk to Merlin: hold **Cmd+Shift+V**
 
-Hold the keys, say what you want, let go. (While Margin runs, ⌘⇧V is Margin's, so apps' "Paste and Match Style" on that chord won't fire.) Your voice is turned into text by Apple's speech model **on your Mac**; it is never saved or sent. Only the text goes on:
+Hold the keys, say what you want, let go. (While Merlin runs, ⌘⇧V is Merlin's, so apps' "Paste and Match Style" on that chord won't fire.) Your voice is turned into text by Apple's speech model **on your Mac**; it is never saved or sent. Only the text goes on:
 - a calendar request becomes a card (below);
 - "summarize this video" (or "listen along") opens the video summarizer;
 - anything else goes to the chat that's open as a follow-up, or opens a new chat at your mouse (with whatever is highlighted) and asks it.
 
-There's nothing to set up. Voice is English only, and **it starts recording the instant you press**: the pill is up at once, and the words appear as you speak. Margin loads Apple's speech model when it starts, so a press never waits for it, and what you say before the recognizer has fully woken up is kept (in memory only) and handed to it, so no words are lost. The text is ready a fraction of a second after you let go. The first time ever, macOS asks for the microphone. (If Apple's English speech model isn't on the Mac, a small pill asks before downloading it.)
+There's nothing to set up. Voice is English only, and **it starts recording the instant you press**: the pill is up at once, and the words appear as you speak. Merlin loads Apple's speech model when it starts, so a press never waits for it, and what you say before the recognizer has fully woken up is kept (in memory only) and handed to it, so no words are lost. The text is ready a fraction of a second after you let go. The first time ever, macOS asks for the microphone. (If Apple's English speech model isn't on the Mac, a small pill asks before downloading it.)
 
 ## Add to your calendar by typing or speaking
 
-Say or type, in a chat: *"Hey, add “doing this and this” to my calendar at 8-9 on 8th of Jan 2027"*, or *"schedule a meeting with Anna next Tuesday 2-3pm"*, or *"block 9 to 11 tomorrow for studying"*. Margin reads it **on your Mac with no Claude call** (dates like "tomorrow", "next Friday", "8th of January", "in two weeks"; times like "8-9", "3pm", "noon", "for 2 hours") and shows a card with the title, date and times for you to check. Anything it had to guess is marked (for "8-9" with no am/pm it guesses and offers an **AM → PM** switch). Nothing is added until you press a button:
-- **Add to Calendar** puts it in your Mac's Calendar. If your **Google account is added in System Settings → Internet Accounts with Calendars on**, it goes to your Google calendar (you can pick the calendar). The first time, macOS asks to let Margin use Calendars. **Undo** takes it back.
+Say or type, in a chat: *"Hey, add “doing this and this” to my calendar at 8-9 on 8th of Jan 2027"*, or *"schedule a meeting with Anna next Tuesday 2-3pm"*, or *"block 9 to 11 tomorrow for studying"*. Merlin reads it **on your Mac with no Claude call** (dates like "tomorrow", "next Friday", "8th of January", "in two weeks"; times like "8-9", "3pm", "noon", "for 2 hours") and shows a card with the title, date and times for you to check. Anything it had to guess is marked (for "8-9" with no am/pm it guesses and offers an **AM → PM** switch). Nothing is added until you press a button:
+- **Add to Calendar** puts it in your Mac's Calendar. If your **Google account is added in System Settings → Internet Accounts with Calendars on**, it goes to your Google calendar (you can pick the calendar). The first time, macOS asks to let Merlin use Calendars. **Undo** takes it back.
 - **Open in Google Calendar** opens Google's own new-event page in your browser with everything filled in, for any Google account, with no permission needed.
 
 ## Use fewer Claude tokens
 
-Four things cut what Margin sends to Claude. All of them come down to not sending what a question doesn't need.
+Four things cut what Merlin sends to Claude. All of them come down to not sending what a question doesn't need.
 
-**Lean calls (always on).** Pronounce, Visualize and Summarize on highlighted text never use your screen or the web, so Margin sends them to Claude without the screenshot and without the web tools. In measurements that's about half the tokens of an ordinary question (about 3.5k instead of 6.9k). The chat's footnote says "text only · web search off" when it did this. If you then ask a follow-up that needs the web or the screen, the chat moves to a full Claude session by itself, carrying the conversation along.
+**Lean calls (always on).** Pronounce, Visualize and Summarize on highlighted text never use your screen or the web, so Merlin sends them to Claude without the screenshot and without the web tools. In measurements that's about half the tokens of an ordinary question (about 3.5k instead of 6.9k). The chat's footnote says "text only · web search off" when it did this. If you then ask a follow-up that needs the web or the screen, the chat moves to a full Claude session by itself, carrying the conversation along.
 
-**Smart screen context (default).** If you highlighted text and your question isn't about the screen or about facts that change (*latest*, *check*, *this button*…), Margin sends Claude just the highlight and its surrounding text: no screenshot and no web tools. The screenshot is still taken and kept, so a follow-up like "what's on my screen?" moves the chat to a full session that includes it. Nothing highlighted, snips, and videos still get the screenshot. Pick **Whole Screen** or **Just the App Window** under Screen Context to always send it.
+**Smart screen context (default).** If you highlighted text and your question isn't about the screen or about facts that change (*latest*, *check*, *this button*…), Merlin sends Claude just the highlight and its surrounding text: no screenshot and no web tools. The screenshot is still taken and kept, so a follow-up like "what's on my screen?" moves the chat to a full session that includes it. Nothing highlighted, snips, and videos still get the screenshot. Pick **Whole Screen** or **Just the App Window** under Screen Context to always send it.
 
-**Only the instructions a question can use.** Claude's standing instructions used to include the long rules for saying words aloud and for drawing graphs in every chat. Now they go in only when the question can use them (Pronounce, Visualize, graph-ish or foreign-language words, or math/physics/economics/language text), and a later question that needs one brings it along. `Margin --tokenbench` measures it on real calls: a plain question's instructions went from 2,568 to 1,008 input tokens (60% less). Quizzes, history and calendar cards cost nothing extra: the title and sector for the History come from a single hidden line in the answer, and "add to my calendar" is understood on your Mac without calling Claude. Document chats send only the matching passages, never the whole file.
+**Only the instructions a question can use.** Claude's standing instructions used to include the long rules for saying words aloud and for drawing graphs in every chat. Now they go in only when the question can use them (Pronounce, Visualize, graph-ish or foreign-language words, or math/physics/economics/language text), and a later question that needs one brings it along. `Merlin --tokenbench` measures it on real calls: a plain question's instructions went from 2,568 to 1,008 input tokens (60% less). Quizzes, history and calendar cards cost nothing extra: the title and sector for the History come from a single hidden line in the answer, and "add to my calendar" is understood on your Mac without calling Claude. Document chats send only the matching passages, never the whole file.
 
 **Chat naming** on close is done by **Ollama when Local Mode is on** (0 Claude tokens), falling back to one small Haiku call (about 600 tokens) if Ollama can't.
 
 **Graph templates (Local Mode on).** Visualize on a highlight that clearly fits one of seven ready-made graphs (supply and demand with demand and supply shift sliders, parabola, straight line, sine wave, tangent line/derivative, exponential growth/decay, bell curve) is drawn on your Mac with no Claude call; the answer says “Answered on your Mac · graph template”, and **Ask Claude** under it asks for a custom one. If it isn't a clear fit (or two fit equally), or you ask a follow-up, Claude takes over.
 
-**Measured floor.** A `claude -p` call with nothing in it costs about 730 input tokens (about 610 on Haiku); web tools add about 1.4k, and the default tool set about 23k (Margin always turns it off). No further `claude` flag lowers this (`--disable-slash-commands` and `--exclude-dynamic-system-prompt-sections` change nothing), so the remaining savings are in not calling Claude at all.
+**Measured floor.** A `claude -p` call with nothing in it costs about 730 input tokens (about 610 on Haiku); web tools add about 1.4k, and the default tool set about 23k (Merlin always turns it off). No further `claude` flag lowers this (`--disable-slash-commands` and `--exclude-dynamic-system-prompt-sections` change nothing), so the remaining savings are in not calling Claude at all.
 
-**Quick Answers / Local mode (off until you turn it on).** The quick model is now **Claude Haiku 5.5 at medium effort** (`claude-haiku-5-5`, through the same `claude` command, with no tools, no screenshot and no web): switch on **Quick Answers (Haiku 5.5)** in the menu and nothing else needs installing. **It can see pictures**: a snip, a blank chat (it gets the screenshot) and a question about your screen ("what does this button do?") all go to Haiku, with the snip and/or the screenshot attached, instead of the full Claude. The web, quizzes, pronunciation, translation, graphs and whole pages/documents still go to Claude. It is a cloud model, so these answers are **not** private to your Mac and they count toward your Claude usage (lightly, and about as cheap as Claude gets); the footnote says "Haiku 5.5 · quick answers". If you'd rather keep them on your Mac, install [Ollama](https://ollama.com) and the model (`ollama pull qwen3:8b`) and run `defaults write com.kien.margin localModel qwen3:8b`; the rest of this section describes that mode, and works the same with Haiku except where it mentions Ollama, your Mac, or memory. `defaults write com.kien.margin localEffort low|medium|high` changes Haiku's effort. Quick questions (Simpler, Example?, Define terms, and typed questions), **summaries of highlighted text of any length Margin accepts (up to 20,000 characters)**, and English **video summaries** are then answered by the model on your Mac:
+**Quick Answers / Local mode (off until you turn it on).** The quick model is now **Claude Haiku 5.5 at medium effort** (`claude-haiku-5-5`, through the same `claude` command, with no tools, no screenshot and no web): switch on **Quick Answers (Haiku 5.5)** in the menu and nothing else needs installing. **It can see pictures**: a snip, a blank chat (it gets the screenshot) and a question about your screen ("what does this button do?") all go to Haiku, with the snip and/or the screenshot attached, instead of the full Claude. The web, quizzes, pronunciation, translation, graphs and whole pages/documents still go to Claude. It is a cloud model, so these answers are **not** private to your Mac and they count toward your Claude usage (lightly, and about as cheap as Claude gets); the footnote says "Haiku 5.5 · quick answers". If you'd rather keep them on your Mac, install [Ollama](https://ollama.com) and the model (`ollama pull qwen3:8b`) and run `defaults write com.kien.merlin localModel qwen3:8b`; the rest of this section describes that mode, and works the same with Haiku except where it mentions Ollama, your Mac, or memory. `defaults write com.kien.merlin localEffort low|medium|high` changes Haiku's effort. Quick questions (Simpler, Example?, Define terms, and typed questions), **summaries of highlighted text of any length Merlin accepts (up to 20,000 characters)**, and English **video summaries** are then answered by the model on your Mac:
 - With Ollama nothing is sent to Claude for those, and the answer is labelled "Answered on your Mac · qwen3:8b" (with Haiku: "Answered by Haiku 5.5"), and **Ask Claude** under it asks Claude the same thing instead (it can search the web and see your screen).
 - Always Claude: pronunciation, graphs, anything that needs the web or your screen (*check*, *verify*, *latest*, *price*, *this button*, …), translation, snips, blank chats, summaries of more than 20,000 characters, videos in other languages, and any text that's mostly in a non-Latin alphabet (the small model gets Russian stress wrong).
 - A local chat stays local for follow-ups, but one that needs Claude (say, "is that the latest?") moves to Claude by itself.
 - If Ollama isn't running, or the model isn't installed, the question goes to Claude and the footnote says why.
-- It takes about 6 GB of memory while the model is loaded, and the model unloads after 5 idle minutes. Margin loads it while you're typing your question.
-- To use another Ollama model: `defaults write com.kien.margin localModel <name>`.
+- It takes about 6 GB of memory while the model is loaded, and the model unloads after 5 idle minutes. Merlin loads it while you're typing your question.
+- To use another Ollama model: `defaults write com.kien.merlin localModel <name>`.
 - **The Qwen / Claude button, next to the question field, does the same with a click.** It shows who answers this chat (Claude in orange, your Mac's model in grey); click it to hand the chat to the other one. Before you've asked anything, it picks who will answer the first question. Same limits as ⌃⇧L, and a note says what happened.
-- **⌃⇧L moves just the open chat between Claude and your Mac.** Say a summary turns out to have complex data that needs real analysis: press **Control+Shift+L** and Claude answers that question again, in that chat only. Press it again to hand the chat back to your Mac. It never changes the Local Mode switch, any other chat, or chats you start later (they still follow the default). A note over the chat says what happened. It won't force a chat onto your Mac when it can't run there (a snip, a blank chat, a question about the web or your screen, a non-English video, or Ollama not running). The footnote of a Mac-answered chat reminds you: “⌃⇧L for Claude”. (While Margin runs, ⌃⇧L is Margin's, not the app in front.)
+- **⌃⇧L moves just the open chat between Claude and your Mac.** Say a summary turns out to have complex data that needs real analysis: press **Control+Shift+L** and Claude answers that question again, in that chat only. Press it again to hand the chat back to your Mac. It never changes the Local Mode switch, any other chat, or chats you start later (they still follow the default). A note over the chat says what happened. It won't force a chat onto your Mac when it can't run there (a snip, a blank chat, a question about the web or your screen, a non-English video, or Ollama not running). The footnote of a Mac-answered chat reminds you: “⌃⇧L for Claude”. (While Merlin runs, ⌃⇧L is Merlin's, not the app in front.)
 
-**Token Savings…** in the menu shows what Claude and your Mac each answered and an estimate of the Claude tokens saved. The numbers come from a small log (`~/Library/Application Support/Margin/usage.jsonl`) that holds counts and labels only, never your text. [LOCAL-MODEL-REPORT.md](LOCAL-MODEL-REPORT.md) has the measurements behind the estimates.
+**Token Savings…** in the menu shows what Claude and your Mac each answered and an estimate of the Claude tokens saved. The numbers come from a small log (`~/Library/Application Support/Merlin/usage.jsonl`) that holds counts and labels only, never your text. [LOCAL-MODEL-REPORT.md](LOCAL-MODEL-REPORT.md) has the measurements behind the estimates.
 
 ## Build & run
 
@@ -198,11 +198,11 @@ No Xcode needed, only Command Line Tools.
 ./build.sh --install
 ```
 
-This builds, copies the app to `~/Applications/Margin.app`, and launches it.
+This builds, copies the app to `~/Applications/Merlin.app`, and launches it.
 
-Margin needs two permissions, in **System Settings → Privacy & Security**:
+Merlin needs two permissions, in **System Settings → Privacy & Security**:
 - **Accessibility:** reads the highlighted text, and presses ⌘C as a fallback.
-- **Screen Recording:** takes one screenshot when you click **?**, and powers Tab+\\ snips. macOS may ask you to quit and reopen Margin after you grant it.
+- **Screen Recording:** takes one screenshot when you click **?**, and powers Tab+\\ snips. macOS may ask you to quit and reopen Merlin after you grant it.
 
 **Keep permissions across updates (one-time):** by default each build is signed "ad hoc", so macOS treats every update as a new app and forgets its permissions. To fix that:
 
@@ -212,7 +212,7 @@ Margin needs two permissions, in **System Settings → Privacy & Security**:
 
 This creates a private "Margin Local Signing" certificate in its own keychain file (`~/Library/Application Support/Margin Signing/`), separate from your login keychain. It then prints one `security add-trusted-cert` command for you to run. That command trusts the certificate for code signing only, and macOS asks for your password.
 
-After that, `build.sh` signs every build with this certificate. Grant Margin's permissions one last time and they'll stick through updates.
+After that, `build.sh` signs every build with this certificate. Grant Merlin's permissions one last time and they'll stick through updates.
 
 ## What it sends, and when
 
@@ -223,13 +223,13 @@ Nothing leaves your Mac until you click **?** and ask. Then Claude gets:
 - **one screenshot** taken the moment you clicked **?**,
 - your question.
 
-The screenshot shows either the whole screen or just that app's window, per the menu setting. Margin's own windows are never included. It's sent only with your first question in that chat and isn't stored.
+The screenshot shows either the whole screen or just that app's window, per the menu setting. Merlin's own windows are never included. It's sent only with your first question in that chat and isn't stored.
 
 In a lean chat (Pronounce, Visualize, Summarize, Quiz me, or any question about highlighted text in Smart mode) there is no screenshot. In Local mode, a quick question is answered on your Mac and none of this is sent anywhere.
 
-For a video summary, Claude gets the transcript, the title, channel, and length, and the link, but no screenshot. Margin asks YouTube for the captions directly. Listen Along and file transcription happen on your Mac, and only the finished text goes to Claude.
+For a video summary, Claude gets the transcript, the title, channel, and length, and the link, but no screenshot. Merlin asks YouTube for the captions directly. Listen Along and file transcription happen on your Mac, and only the finished text goes to Claude.
 
-Chat history, the notebook and quiz results are saved only on your Mac (`~/Library/Application Support/Margin/Library`, notes also as Markdown in `Documents/Margin Notes`); turn history off in the menu. Voice clips are transcribed on your Mac; only the words go to Claude (or to the calendar parser, which doesn't call Claude). Calendar events go to your Mac's Calendar, or to a Google Calendar link you open yourself.
+Chat history, the notebook and quiz results are saved only on your Mac (`~/Library/Application Support/Merlin/Library`, notes also as Markdown in `Documents/Merlin Notes`); turn history off in the menu. Voice clips are transcribed on your Mac; only the words go to Claude (or to the calendar parser, which doesn't call Claude). Calendar events go to your Mac's Calendar, or to a Google Calendar link you open yourself.
 
 Each agent that needs Claude runs its own `claude -p` process (the Claude Code CLI) on your normal Claude subscription, started when you ask the first question. Its only tools are **WebSearch** and **WebFetch** (a lean chat has none): it can't read your files or run commands. It loads no settings files, MCP servers, or saved session, and it's stopped when the chat closes.
 
@@ -249,15 +249,15 @@ Each agent that needs Claude runs its own `claude -p` process (the Claude Code C
 - How to Use
 - Quit
 
-The menu also shows how many agents are running and links to any permission that's missing. Settings apply to the next agent you open.
+The menu also shows how many chats are open and links to any permission that's missing. Settings apply to the next chat you open.
 
 ## Tests
 
 ```bash
 swift build -c release
-.build/release/Margin --unittest
-.build/release/Margin --selftest
-.build/release/Margin --capturetest
+.build/release/Merlin --unittest
+.build/release/Merlin --selftest
+.build/release/Merlin --capturetest
 ```
 
 - `--unittest` checks context trimming, markdown, prompts, tool status labels, the Local mode router (who answers what), Ollama reply parsing, and clipboard save/restore. It puts your real clipboard back afterwards.
@@ -272,12 +272,12 @@ swift build -c release
 - `--glowtest [dir]` opens a chat through the shortcut's code path and checks the glow follows it through pop-up, minimize, expand, resize, and close. With a folder, it saves a picture.
 - `--placetest [dir]` shows the sidebar with 10 finished chats on your real screen. It checks that it fits, that each circle is in its slot with its glow centered, and that the check is centered inside. With a folder, it also saves a picture.
 - `--sidebartest [dir]` runs the sidebar's rules with test chats on your real screen (no questions are asked): clicking away keeps a chat, a row reopens it, dragging the header moves it and it comes back to the same spot, only × deletes, the sidebar folds and unfolds, ten chats fit and sit open side by side (stepped, not stacked), an eleventh is refused, a snip hides them for a moment and brings them back, the sidebar header drags the sidebar (it keeps its top-right corner as it grows and folds, and a double-click sends it home), and with "Chats stay open" off it works the old way. With a folder, it saves a picture.
-- `--bintest` is silent: it opens the dashboard on a throwaway library as an invisible, click-through window that never takes your keyboard, and sends real clicks where the buttons are drawn. Every row in the Notebook, Chats, Screenshots and All lists must have a trash button on its right; pressing it moves the thing to the Bin and offers Undo; Undo works; the Bin shows Restore and Delete forever on each row; Restore, Delete forever (picture included) and the Bin's kind filter work. `MARGIN_BINTEST_KEYS=1 .build/debug/Margin --bintest` also tries ↑/↓ and the Delete key, which needs the window to show and take the keyboard for a moment.
-- `--historytest` opens the History window and checks it doesn't take over: Margin does not become the active app and the app in front is unchanged, the window is a floating non-activating panel that opens on the current Space (also over full-screen apps), the search box can still take typing, and ⌘⇧L toggles it.
+- `--bintest` is silent: it opens the dashboard on a throwaway library as an invisible, click-through window that never takes your keyboard, and sends real clicks where the buttons are drawn. Every row in the Notebook, Chats, Screenshots and All lists must have a trash button on its right; pressing it moves the thing to the Bin and offers Undo; Undo works; the Bin shows Restore and Delete forever on each row; Restore, Delete forever (picture included) and the Bin's kind filter work. `MERLIN_BINTEST_KEYS=1 .build/debug/Merlin --bintest` also tries ↑/↓ and the Delete key, which needs the window to show and take the keyboard for a moment.
+- `--historytest` opens the History window and checks it doesn't take over: Merlin does not become the active app and the app in front is unchanged, the window is a floating non-activating panel that opens on the current Space (also over full-screen apps), the search box can still take typing, and ⌘⇧L toggles it.
 - `--capturetest` checks Screen Recording permission and grabs one frame.
-- `--libtest` is a live run: the first answer must carry a title and sector, and "Quiz me" must come back as a quiz Margin can parse. `--libdemo <dir>` saves pictures of the quiz and the dashboard in each view (chats, notebook, screenshots, all, the Bin, a cleared row with its Undo bar) with sample chats in a temporary library. It shows the dashboard at the bottom-right for about 20 seconds (click-through, and it never takes your keyboard).
+- `--libtest` is a live run: the first answer must carry a title and sector, and "Quiz me" must come back as a quiz Merlin can parse. `--libdemo <dir>` saves pictures of the quiz and the dashboard in each view (chats, notebook, screenshots, all, the Bin, a cleared row with its Undo bar) with sample chats in a temporary library. It shows the dashboard at the bottom-right for about 20 seconds (click-through, and it never takes your keyboard).
 - `--calendardemo <dir>` asks a test chat to add an event and saves a picture of the card (nothing is added; no calendar access is requested).
-- `--voicecheck` prints what voice has to work with (microphone permission, which speech models are installed) without recording or downloading. `--voicetest` runs the speech-to-text and calendar chain with a synthesized voice in place of the microphone. `--voicedictation` feeds synthesized speech into the hold-to-talk recorder the way the microphone would (including words that arrive before the recognizer is ready) and checks nothing is lost and the text is ready fast. `--voicelag` times each step of starting to listen. `--micprobe` (run through `open`, so it's checked as Margin itself) turns the real microphone on for 1.5 seconds and reports only how fast it started and how loud it was: nothing is kept or recognized. `--pilldemo <dir>` pictures the listening pill.
+- `--voicecheck` prints what voice has to work with (microphone permission, which speech models are installed) without recording or downloading. `--voicetest` runs the speech-to-text and calendar chain with a synthesized voice in place of the microphone. `--voicedictation` feeds synthesized speech into the hold-to-talk recorder the way the microphone would (including words that arrive before the recognizer is ready) and checks nothing is lost and the text is ready fast. `--voicelag` times each step of starting to listen. `--micprobe` (run through `open`, so it's checked as Merlin itself) turns the real microphone on for 1.5 seconds and reports only how fast it started and how loud it was: nothing is kept or recognized. `--pilldemo <dir>` pictures the listening pill.
 - `--doctest` is a live run: a 40-page PDF, a question about one page, and a real Claude answer from only the matching passage.
 - `--tokenbench` sends the same small question with and without the optional voice/graph instructions to Haiku (3 tiny calls) and prints the input tokens each used.
 - The unit tests also cover the graph templates (each one draws with nothing skipped; clear fits, ties and misses), and Ollama chat naming with its fall-back. `--namingtest local` is a live run of naming through Ollama.
@@ -285,14 +285,14 @@ swift build -c release
 - `--namingtest` is a live run: real Claude names two made-up chats as if closed (in a temporary library), and a chat you rename while Claude is thinking keeps your name. `--videochattest` checks that “summarize this video” typed into a chat opens the video summary.
 
 ```bash
-.build/release/Margin --demo /tmp/margin-demo
+.build/release/Merlin --demo /tmp/merlin-demo
 ```
 
 `--videodemo <dir>` saves snapshots of the Listen Along screen, the "how should I summarize it?" choice, and a real YouTube summary.
 
 `--graphdemo <dir>` renders sample graphs (quadratic, supply and demand, tangent, sine, unit circle, circular flow, bell curve) in dark and light, plus a chat with a graph answer.
 
-`--demo` drives one real agent through the whole cycle: open, ask, minimize while it's thinking, turn green, expand, close. It saves PNG snapshots of Margin's own windows at each step. It never takes keyboard focus and ignores your clicks, so you can keep working while it runs.
+`--demo` drives one real agent through the whole cycle: open, ask, minimize while it's thinking, turn green, expand, close. It saves PNG snapshots of Merlin's own windows at each step. It never takes keyboard focus and ignores your clicks, so you can keep working while it runs.
 
 ## How it stays smooth
 
@@ -308,7 +308,7 @@ swift build -c release
 |---|---|
 | `SelectionWatcher.swift` | Global mouse monitors that decide "the user just highlighted something" |
 | `SelectionReader.swift` | Accessibility-API and ⌘C reading, nearby-context lookup, clipboard snapshot |
-| `ScreenCapture.swift` | One-shot screenshot via ScreenCaptureKit (screen or front window, Margin excluded) |
+| `ScreenCapture.swift` | One-shot screenshot via ScreenCaptureKit (screen or front window, Merlin excluded) |
 | `Hotkeys.swift` | The global chords, Option+Shift+Tab and Tab+\\ (one event tap on its own thread) |
 | `MathExpr.swift` | The safe math parser for graph formulas (implicit multiplication, x², functions, sliders) |
 | `Graph.swift` | Reads Claude's graph JSON and computes curves, intersections, areas and lines |
@@ -326,7 +326,7 @@ swift build -c release
 | `TriggerIcon.swift` | The floating **?** bubble, plus shared theme helpers |
 | `AskPanel.swift` | One agent: draggable popup window, minimize/expand, phases, picking who answers, screenshot handoff, 20s fade |
 | `AskView.swift` | SwiftUI content: quote, chips, live status, streaming answers, Minimize, Go deeper, Ask Claude |
-| `AgentDock.swift` | Up to 4 agents, which one is open, the "all busy" notice |
+| `AgentDock.swift` | Up to 10 chats, which one is open, the "all busy" notice |
 | `AgentSidebar.swift` | The black sidebar: rows, fold/unfold, hover ×, where circles fly to |
 | `AgentBubble.swift` | The row circle with the purple or green glow, and the aura around it |
 | `ClaudeSession.swift` | `claude -p` process: stream-json in and out, images, tool activity, per-turn token counts. Also the `AnswerSession` protocol Claude and the local model share |
@@ -337,7 +337,7 @@ swift build -c release
 | `Prompts.swift` | System prompt and message templates. Tweak answer style here |
 | `StatusMenu.swift` | Menu-bar menu |
 | `Library.swift` | Saved chats and notes (JSON files on this Mac), sectors and the keyword guess, search, Markdown notebook, and the Bin (soft delete, restore, 30-day purge) |
-| `LibraryWindow.swift` | The dashboard: sidebar, day-grouped lists with a trash button on each row, pages, the Bin, the Undo bar (a floating panel that never activates Margin) |
+| `LibraryWindow.swift` | The dashboard: sidebar, day-grouped lists with a trash button on each row, pages, the Bin, the Undo bar (a floating panel that never activates Merlin) |
 | `BinTests.swift`, `BinLiveTest.swift` | Tests for the Bin and the dashboard's logic (`--unittest`) and the silent click test (`--bintest`) |
 | `Screenshots.swift` | The screenshot inbox: watches the screenshots folder, copies and reads each one, labels it by its context |
 | `Quiz.swift` | The quiz format, local grading, and the quiz card |

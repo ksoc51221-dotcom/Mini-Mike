@@ -1,6 +1,6 @@
 import Foundation
 
-/// Margin's patch: upstream SwiftMath finds its fonts through `Bundle.module`, which doesn't work inside a hand-assembled
+/// Merlin's patch: upstream SwiftMath finds its fonts through `Bundle.module`, which doesn't work inside a hand-assembled
 /// signed .app. Fonts live in Resources/Fonts instead: the app's Resources/Fonts first, then the repo's, for `swift run` and tests.
 enum MathFontLocator {
     static func url(_ name: String, _ ext: String) -> URL? {

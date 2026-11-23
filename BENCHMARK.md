@@ -1,10 +1,10 @@
-# Margin benchmark, 2026-10-09
+# Merlin benchmark, 2026-10-09
 
-Measured with a `--benchmark` option (since removed from Margin): every kind of request Margin makes, through its real prompts and the
+Measured with a `--benchmark` option (since removed from Merlin): every kind of request Merlin makes, through its real prompts and the
 real `claude` process, 3 runs each, on the same Mac. 114 Claude turns in all (about $2.12 at API list prices).
 
 **What to know when reading it**
-- The screenshot is a synthetic page of text at Margin's real capture size (1568 px), so its token cost is realistic but the content isn't.
+- The screenshot is a synthetic page of text at Merlin's real capture size (1568 px), so its token cost is realistic but the content isn't.
 - One topic (opportunity cost) for most rows, plus one real 14-minute TED talk for the video and long-text summaries. Three runs per row, so treat averages as ±1 second.
 - Answers vary run to run (Claude decides whether to search the web, how long to write). Web-search rows are the most variable.
 - "Cost" is what the Claude tool reports at API list prices. On a subscription it counts against your usage limits instead.
@@ -19,7 +19,7 @@ Clicking instantly, with no head start (Sonnet, Simpler chip):
 | Simpler (chip) | typed follow-up | 3 | 0.7s | 3.5s | 2 | 7.0k | 161 | $0.0037 | no |
 | Simpler (chip) | Go deeper | 3 | 0.9s | 5.9s | 2 | 7.2k | 405 | $0.0063 | no |
 
-Work Margin does on your Mac after the answer arrives (Sonnet, 3 runs): rendering the voice clips takes under a second:
+Work Merlin does on your Mac after the answer arrives (Sonnet, 3 runs): rendering the voice clips takes under a second:
 
 | Category | Seconds |
 |---|--:|

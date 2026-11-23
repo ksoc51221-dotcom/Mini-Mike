@@ -1,9 +1,9 @@
-# Margin UI direction: "Marginalia" (2026-10-29)
+# Merlin UI direction: "Marginalia" (2026-10-29)
 
 Owner: Kien. Planned by Opus, executed by Sonnet agents in phases. UI/UX only: no changes to engines, routing, prompts, Claude plumbing or agent logic.
 
 ## Why change
-The current look is "Claude, but small": terracotta #D97857 borrowed from Claude, a lavender glow for working, green for done, and orange cats. That makes four unrelated hues and no idea of its own. Margin's one gesture is **highlighting text in the margin of what you read**, so the brand is ink, paper and a highlighter.
+The current look is "Claude, but small": terracotta #D97857 borrowed from Claude, a lavender glow for working, green for done, and orange cats. That makes four unrelated hues and no idea of its own. Merlin's one gesture is **highlighting text in the margin of what you read**, so the brand is ink, paper and a highlighter.
 
 ## World
 - **Paper** (light) and **ink** (dark) surfaces, which stay frosted (keep NSVisualEffectView) but are tinted toward warm paper and ink rather than neutral grey.
@@ -60,6 +60,6 @@ Verify every text/background pair for contrast (better-colors skill). Body ≥4.
 ## Rules for executing agents
 - Read this file, the matching skill files in `~/.claude/skills/` (emil-design-eng, apple-design, better-colors, better-typography, write-swift, impeccable's `reference/craft-floor.md`) before editing.
 - **Never open windows on the user's screen.** Do not run `--demo`, `--placetest`, `--sidebartest`, `--glowtest` or any live test. Pictures come only from headless `ImageRenderer` flags (`--barpicture`, and the new `--uishots` from phase 1).
-- **Never run `./build.sh --install`** (it kills the user's running Margin). Use `swift build -c release` and `.build/release/Margin --unittest`.
+- **Never run `./build.sh --install`** (it kills the user's running Merlin). Use `swift build -c release` and `.build/release/Merlin --unittest`.
 - Targeted edits; keep behaviour, copy and layout constants unless this file says otherwise. Do not touch `CatAtlas.swift` / `CatSleepAtlas.swift` (generated).
 - Do not commit.

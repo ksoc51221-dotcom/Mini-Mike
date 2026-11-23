@@ -1,6 +1,6 @@
 # Redesign 3 — "Instrument"
 
-Margin stops looking like a notebook and starts looking like a precision instrument: near-black and off-white,
+Merlin stops looking like a notebook and starts looking like a precision instrument: near-black and off-white,
 hairline structure, one electric accent used rarely, monochrome glyphs, Geist type. Whole app, not just the library.
 
 Owner decisions (Kien, 2026-10-29): whole app · "Mono instrument" · Geist + Geist Mono · B&W glyphs for sector icons
@@ -47,7 +47,7 @@ Dark-mode rule from round 2 still holds: no low-alpha warm washes over black.
 
 ## 2. Type (Geist + Geist Mono, bundled)
 Files: `Resources/Fonts/{Geist-Variable,Geist-Italic-Variable,GeistMono-Variable}.ttf` + `OFL.txt`.
-- `build.sh` copies `Resources/Fonts/*` into `Margin.app/Contents/Resources/Fonts/`.
+- `build.sh` copies `Resources/Fonts/*` into `Merlin.app/Contents/Resources/Fonts/`.
 - Register at launch with `CTFontManagerRegisterFontsForURL(..., .process, ...)` from `Bundle.main.resourceURL/Fonts`,
   falling back to `<repo>/Resources/Fonts` relative to the executable when run from `.build/release` (shot/test flags),
   and finally to SF Pro / SF Mono if registration fails (never crash, never blank text).
@@ -67,7 +67,7 @@ Scale (keep the `Font.m*` names; add mono variants):
 | mCode | Geist Mono 13 | 20 | code |
 | mNum (new) | Geist Mono 12 `.monospacedDigit()` | | numbers that change (counts, tokens, $) |
 
-`NSFont.margin(size, weight)` returns Geist; add `NSFont.marginMono`. Replace every raw `.font(.system(size:…))`
+`NSFont.merlin(size, weight)` returns Geist; add `NSFont.merlinMono`. Replace every raw `.font(.system(size:…))`
 with a scale token (or `.mUI.weight(.semibold)` etc.). Raw `.system` is allowed only for SF Symbols.
 `LibraryWindow`'s local `Font.mono(_:_:)` becomes Geist Mono.
 
@@ -174,6 +174,6 @@ indicator. Everything else plays once.
 - **Integrator** (me + one Sonnet pass): remove aliases, review all shots light/dark, fix, install.
 
 Rules for every agent: don't edit CatAtlas.swift / CatSleepAtlas.swift; borders as two fills; no windows on the user's
-screen (headless shots only); don't commit; `swift build -c release` and `.build/release/Margin --unittest` must pass
+screen (headless shots only); don't commit; `swift build -c release` and `.build/release/Merlin --unittest` must pass
 (UNITTEST PASS) before you report; if the build breaks in a file another agent owns, wait 60 s and retry rather than
 editing it.

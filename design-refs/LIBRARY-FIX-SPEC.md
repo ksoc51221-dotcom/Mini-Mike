@@ -1,11 +1,11 @@
 # Library window fix spec (judge pass, 2026-10-29)
 
-Target: `Sources/Margin/LibraryWindow.swift` (plus `Theme.swift` only if a token is missing). UI only: keep the data model, storage, `Library.swift` APIs, and every existing action (open, delete to Bin, restore, undo, prompt bar, kind picker, sectors). Follow `design-refs/DIRECTION-MARGINALIA.md` and its agent rules (no windows, no `--install`, no commits, verify with `--uishots` + `--unittest`).
+Target: `Sources/Merlin/LibraryWindow.swift` (plus `Theme.swift` only if a token is missing). UI only: keep the data model, storage, `Library.swift` APIs, and every existing action (open, delete to Bin, restore, undo, prompt bar, kind picker, sectors). Follow `design-refs/DIRECTION-MARGINALIA.md` and its agent rules (no windows, no `--install`, no commits, verify with `--uishots` + `--unittest`).
 
 Reference apps: Apple Notes / Bear (dense rows with a snippet), Things 3 (smart lists above user groups), Readwise Reader (one-key triage), Linear (hover actions, keyboard), ChatGPT/Claude.ai (time buckets).
 
 ## What is wrong now (from the after-phase2 shots)
-1. "Margin" branding appears twice, and there are two storage badges. Keep one quiet storage line at the sidebar foot.
+1. "Merlin" branding appears twice, and there are two storage badges. Keep one quiet storage line at the sidebar foot.
 2. Every row has an always-visible trash icon. Show it only on hover or selection, and add a context menu (Open, Copy question, Move to Bin).
 3. Every row says "now". Use relative time with tabular numbers (now / 5m / 2h / Yesterday / Mon / 12 Oct).
 4. The caps "TODAY 7 ENTRIES" header is shouty. Use sentence-case sticky time buckets (Today, Yesterday, Previous 7 days, Previous 30 days, then month names) in 11pt medium inkTertiary, with the count in a lighter weight.
@@ -26,6 +26,6 @@ Reference apps: Apple Notes / Bear (dense rows with a snippet), Things 3 (smart 
 Row hover wash 120ms ease-out; selection change spring 0.22 / 0.86; hover actions fade in at 120ms. Reduce Motion means opacity only. No sweep in the library.
 
 ## Done means
-- `swift build -c release` clean, `.build/release/Margin --unittest` passes.
+- `swift build -c release` clean, `.build/release/Merlin --unittest` passes.
 - `--uishots` regenerated. Copy `library-light.png` and `library-dark.png` into `design-refs/marginalia/after-library/`, plus a Bin and an empty-detail shot if the uishots harness can do them cheaply (add cases to `UIShots.swift` if needed).
 - A short `design-refs/marginalia/LIBRARY-NOTES.md`: what changed, and what was skipped and why.

@@ -1,7 +1,7 @@
-# Design brief: Margin, a macOS "ask Claude about this" helper
+# Design brief: Merlin, a macOS "ask Claude about this" helper
 
 ## What it is
-Margin is a small native macOS menu-bar utility. When you're reading something (usually an explanation from Claude) and one part is confusing, you highlight it and ask a quick side-question in a floating popup. Your main chat stays uncluttered. Each question runs as its own small AI agent. The agent sees the highlighted text and a screenshot of your screen, and it can search the web. Up to 4 agents can run at once, and you can park them as glowing circles in the corner of the screen.
+Merlin is a small native macOS menu-bar utility. When you're reading something (usually an explanation from Claude) and one part is confusing, you highlight it and ask a quick side-question in a floating popup. Your main chat stays uncluttered. Each question runs as its own small AI agent. The agent sees the highlighted text and a screenshot of your screen, and it can search the web. Up to 4 agents can run at once, and you can park them as glowing circles in the corner of the screen.
 
 ## How it works (user flow)
 1. Highlight text in any app. A small "?" bubble pops in next to the cursor.

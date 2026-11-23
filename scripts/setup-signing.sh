@@ -1,5 +1,5 @@
 #!/bin/zsh
-# One-time setup: a private code-signing identity for Margin, so every build has the same identity
+# One-time setup: a private code-signing identity for Merlin (the certificate keeps its old "Margin" name on purpose), so every build has the same identity
 # and macOS keeps its Accessibility / Screen Recording permissions across updates.
 #
 # It lives in its own keychain file (not your login keychain) and is only used by build.sh.
@@ -62,7 +62,7 @@ if ! security list-keychains -d user | grep -qF "$KC"; then
   steps+=("security list-keychains -d user -s $current\"$KC\"")
 fi
 if (( ${#steps} == 0 )); then
-  echo "All set: build.sh will sign with it, and Margin keeps its permissions across updates."
+  echo "All set: build.sh will sign with it, and Merlin keeps its permissions across updates."
 else
   echo
   echo "Left for you (these change your keychain settings, so you run them):"
