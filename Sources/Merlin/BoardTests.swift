@@ -116,9 +116,12 @@ extension FeatureTests {
               rule.contains("≤8 nodes") && rule.contains("5 steps") && rule.contains("Captions explain") && rule.contains("≤2 sentences outside")
                 && rule.contains("Settled facts only") && rule.contains("not curves"))
         func f(_ q: String) -> Prompts.Features { Prompts.features(question: q, selection: "") }
-        check("board gate: how / why / explain / compare / steps questions get it",
+        check("board gate: how / why / explain / steps questions get it",
               ["Why does a price ceiling cause a shortage?", "How does a bill become law?", "Explain photosynthesis",
-               "Compare mitosis and meiosis", "What are the steps of the water cycle?", "Can you draw a diagram of this?"].allSatisfy { f($0).contains(.board) })
+               "What are the steps of the water cycle?", "Can you draw a diagram of this?"].allSatisfy { f($0).contains(.board) })
+        check("board gate: a comparison gets the table rule, not a board",
+              ["Compare mitosis and meiosis", "Contrast a monopoly with perfect competition", "Monopoly vs oligopoly"].allSatisfy {
+                  !f($0).contains(.board) && f($0).contains(.table) })
         check("board gate: Visualize gets it", f(Prompts.visualize).contains(.board))
         check("board gate: plain questions, Pronounce and quizzes don't",
               !f("What does this mean?").contains(.board) && !f(Prompts.pronounce).contains(.board) && !f(Prompts.quiz).contains(.board)

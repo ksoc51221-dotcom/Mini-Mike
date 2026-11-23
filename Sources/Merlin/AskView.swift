@@ -1001,10 +1001,18 @@ struct MarkdownText: View {
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(raised))
                         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
                 } else {
-                    ForEach(Array(MathRender.blocks(seg.text).enumerated()), id: \.offset) { _, piece in
-                        switch piece {
-                        case .block(let latex): MathBlock(latex: latex)
-                        case .text(let t), .inline(let t), .auto(_, let t): prose(t)
+                    // Tables first (a table's lines are not prose), then display equations and prose as before.
+                    ForEach(Array(MarkdownTable.blocks(seg.text, streaming: streaming).enumerated()), id: \.offset) { _, block in
+                        switch block {
+                        case .table(let table):
+                            TableCard(table: table, streaming: streaming)
+                        case .text(let text):
+                            ForEach(Array(MathRender.blocks(text).enumerated()), id: \.offset) { _, piece in
+                                switch piece {
+                                case .block(let latex): MathBlock(latex: latex)
+                                case .text(let t), .inline(let t), .auto(_, let t): prose(t)
+                                }
+                            }
                         }
                     }
                 }
@@ -1151,6 +1159,160 @@ struct MarkdownText: View {
             out[run.range].backgroundColor = Theme.surfaceRaised.color
         }
         return out
+    }
+}
+
+/// A Markdown table in an answer: Merlin's surface, a hairline between rows, the header in smaller secondary ink, the first
+/// column in medium weight, 10 pt cell padding, text wrapping inside its cell. Columns share the width by content (90 pt
+/// at least); a table that still needs more scrolls sideways inside its own card. "Copy table" shows on hover.
+struct TableCard: View {
+    let table: MarkdownTable
+    var streaming = false
+    /// Pictures only: show the Copy table button as if the pointer were on the table.
+    var forceHover = false
+    @State private var available: CGFloat = 0
+    @State private var hovering = false
+    @State private var copied = false
+    @State private var atEnd = false
+    @Environment(\.colorScheme) private var scheme
+
+    static let padding: CGFloat = 10
+    static let bodyFont = Font.geist(14), firstFont = Font.geist(14, .medium), headerFont = Font.geist(12, .medium)
+
+    var body: some View {
+        let widths = Self.widths(table, available: available, dark: scheme == .dark)
+        let total = widths.reduce(0, +)
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
+        VStack(alignment: .leading, spacing: 0) {
+            // Measures the width the answer gives the table.
+            Color.clear.frame(maxWidth: .infinity).frame(height: 0)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { available = $0 }
+            // Before the width is known (first layout pass) the grid also sits in the scroll view, so it can never push the
+            // chat wider than itself.
+            if available <= 0 || total > available + 0.5 {
+                ScrollView(.horizontal, showsIndicators: true) { grid(widths) }
+                    .onScrollGeometryChange(for: Bool.self, of: { $0.contentOffset.x + $0.containerSize.width >= $0.contentSize.width - 2 }) { _, end in
+                        atEnd = end
+                    }
+                    // A soft fade at the right edge says there is more to the side, until the end is reached.
+                    .overlay(alignment: .trailing) {
+                        if !atEnd {
+                            LinearGradient(colors: [Theme.surface.color.opacity(0), Theme.surface.color], startPoint: .leading, endPoint: .trailing)
+                                .frame(width: 28)
+                                .allowsHitTesting(false)
+                        }
+                    }
+            } else {
+                grid(widths)
+            }
+        }
+        .background(shape.fill(Theme.surface.color))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(hair, lineWidth: 1))
+        .overlay(alignment: .topTrailing) {
+            if (hovering || forceHover) && !streaming {
+                Button(action: copy) {
+                    Label(copied ? "Copied" : "Copy table", systemImage: copied ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(TableCopyStyle())
+                .padding(5)
+                .transition(.opacity)
+            }
+        }
+        .animation(Motion.still ? nil : Motion.animation(Motion.small), value: hovering)
+        .onHover { hovering = $0 }
+    }
+
+    private func grid(_ widths: [CGFloat]) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            row(table.padded(table.header), widths, header: true)
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, cells in
+                Rectangle().fill(hair).frame(height: 1)
+                row(table.padded(cells), widths, header: false)
+            }
+        }
+        .frame(width: widths.reduce(0, +), alignment: .leading)
+    }
+
+    private func row(_ cells: [String], _ widths: [CGFloat], header: Bool) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(cells.enumerated()), id: \.offset) { c, cell in
+                MathLine(text: Self.cellText(cell), streaming: streaming,
+                         font: header ? Self.headerFont : (c == 0 ? Self.firstFont : Self.bodyFont))
+                    .foregroundStyle(header ? inkSecondary : inkColor)
+                    .frame(width: max(0, (widths.indices.contains(c) ? widths[c] : MarkdownTable.minimumColumn) - Self.padding * 2),
+                           alignment: .topLeading)
+                    .padding(Self.padding)
+            }
+        }
+    }
+
+    /// `<br>` inside a cell is a line break.
+    static func cellText(_ cell: String) -> String {
+        cell.replacingOccurrences(of: #"\s*<br\s*/?>\s*"#, with: "\n", options: [.regularExpression, .caseInsensitive])
+    }
+
+    private func copy() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(table.tsv, forType: .string)
+        copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
+    }
+
+    /// Column widths for the table at this width: content measured in the cell fonts (formulas as their typeset images).
+    static func widths(_ table: MarkdownTable, available: CGFloat, dark: Bool) -> [CGFloat] {
+        let n = table.columnCount
+        var natural = [CGFloat](repeating: 0, count: n), minimum = [CGFloat](repeating: 0, count: n)
+        for (r, cells) in ([table.header] + table.rows).enumerated() {
+            for (c, cell) in table.padded(cells).enumerated() {
+                let font: NSFont = r == 0 ? .merlin(12, .medium) : (c == 0 ? .merlin(14, .medium) : .merlin(14))
+                let m = measure(cell, font: font, dark: dark)
+                natural[c] = max(natural[c], m.line + padding * 2)
+                minimum[c] = max(minimum[c], m.word + padding * 2)
+            }
+        }
+        return MarkdownTable.columnWidths(natural: natural, minimum: minimum, available: available)
+    }
+
+    /// A cell's width on one line, and its widest piece that can't wrap (a long word counts up to 130 pt: it can break).
+    private static func measure(_ cell: String, font: NSFont, dark: Bool) -> (line: CGFloat, word: CGFloat) {
+        let spans = MarkdownTable.mathSpans(cell)
+        let words = MarkdownTable.plainCell(spans.rest)
+        func width(_ s: String) -> CGFloat { ceil(NSAttributedString(string: s, attributes: [.font: font]).size().width * 1.06) }
+        // A cell with <br> is as wide as its longest line.
+        var line = cellText(spans.rest).components(separatedBy: "\n").map { width(MarkdownTable.plainCell($0)) }.max() ?? 0
+        var widest: CGFloat = 0
+        for word in words.split(separator: " ") { widest = max(widest, min(130, width(String(word)))) }
+        for latex in spans.latex {
+            let w = MathRender.render(latex, size: 15, display: false, dark: dark).image?.size.width
+                ?? width(MathRender.fallbackText(latex))
+            // The typeset image sits in text with a little side bearing: allow for it, or the formula touches the edge.
+            line += w + 8
+            widest = max(widest, w + 8)
+        }
+        return (line, widest)
+    }
+}
+
+/// The quiet Copy table button: secondary ink on the surface, ink on hover, dips to 0.97 when pressed.
+private struct TableCopyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View { CopyBody(configuration: configuration) }
+
+    private struct CopyBody: View {
+        let configuration: Configuration
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .font(.geist(12, .medium))
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(hovering ? inkColor : inkSecondary)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).fill(Theme.surface.color))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous).strokeBorder(hair, lineWidth: 1))
+                .contentShape(Rectangle())
+                .pressAndHover(configuration.isPressed, $hovering)
+        }
     }
 }
 

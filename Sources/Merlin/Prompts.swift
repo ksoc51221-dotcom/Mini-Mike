@@ -12,9 +12,12 @@ enum Prompts {
         /// Learn mode's one short rule (mark the key words). Never part of `.all` and never guessed from a question: the chat
         /// asks for it when Learn mode is on, so with Learn off every prompt is exactly what it was.
         static let learn = Features(rawValue: 8)
-        /// The short whiteboard rule (`boardRule`): sent for how / why / explain / compare questions, Visualize, and Learn
-        /// mode. Like `.learn`, never part of `.all`.
+        /// The short whiteboard rule (`boardRule`): sent for how / why / explain / steps / causes questions, Visualize, and
+        /// Learn mode. Comparisons go to a table instead (`.table`). Like `.learn`, never part of `.all`.
         static let board = Features(rawValue: 16)
+        /// The short table rule (`tableRule`). It rides with the graphs rule (so `.graphs` brings it too); this bit is for a
+        /// question that asks for a table, terms, definitions or a comparison without needing graphs. Never part of `.all`.
+        static let table = Features(rawValue: 64)
         /// The short 3D scene rule (`sceneRule`): sent only when a local keyword check finds a 3D question (an atom, a
         /// molecule, orbits, "3D model of" …), and for Visualize only when the highlight has such a word. Never part of `.all`.
         static let scene = Features(rawValue: 32)
@@ -40,6 +43,7 @@ enum Prompts {
         }
         if features.contains(.voice) { rules.append(sayRule) }
         if features.contains(.graphs) { rules.append(Prompts.graphs) }
+        if features.contains(.graphs) || features.contains(.table) { rules.append(tableRule) }
         if features.contains(.board) { rules.append(boardRule) }
         if features.contains(.scene) { rules.append(sceneRule) }
         if features.contains(.graphs) || features.contains(.maths) { rules.append(mathsRule) }
@@ -95,7 +99,7 @@ enum Prompts {
 
     /// Learn mode: the answer's length follows the question (a line for a fact, a short lesson for one idea, as long as needed for a
     /// big summary or analysis, which gets a fixed scannable structure), in plain words, with the key terms marked for highlighting.
-    static let learnRule = "Learn mode is on: teach, don't just answer. This replaces the 2-4 sentence limit. Size the answer to the question and the material: one sentence and nothing more when they ask for a single fact, name, unit, date or definition (no background, no worked example, no link back to the selected text); about 80-200 words for one idea (what it is, why it happens, then one everyday example or worked step); and for a big job (summarising, analysing or teaching a long text, a document or several ideas) as long as it takes to keep every important point, number, name, date, cause and step. Never drop a useful detail to save space: cut repetition, filler and recap instead. Always use everyday words, one idea per short sentence, and say what each technical term means in a few plain words the first time you use it. When an answer would pass about 200 words, structure it so it can be scanned: first a line starting **In short:** that gives the whole answer in one or two sentences; then 2-6 parts in the order a student should learn them, each a bold label alone on its line (**Label**; never # headings or tables) followed by short bullets written as \"- name: what it is or why it matters\", one fact per bullet, numbers kept exact; write steps or a sequence as numbered lines; finish with a line starting **Remember:** naming the 2-3 things to keep. Shorter answers stay plain paragraphs. In any answer that explains or works something out, mark the 2-5 terms a student should remember (up to 8 in a long structured answer) as ==like this==: concept names first (the law, principle, quantity or condition being used), then the key result. Example: Heating speeds a reaction up because of ==collision theory==: more particles reach the ==activation energy==. Mark words, not sentences, and never inside code, $…$, links or <say>; if the key relation sits in $…$, mark its name beside it. No marks only for a one-line factual reply."
+    static let learnRule = "Learn mode is on: teach, don't just answer. This replaces the 2-4 sentence limit. Size the answer to the question and the material: one sentence and nothing more when they ask for a single fact, name, unit, date or definition (no background, no worked example, no link back to the selected text); about 80-200 words for one idea (what it is, why it happens, then one everyday example or worked step); and for a big job (summarising, analysing or teaching a long text, a document or several ideas) as long as it takes to keep every important point, number, name, date, cause and step. Never drop a useful detail to save space: cut repetition, filler and recap instead. Always use everyday words, one idea per short sentence, and say what each technical term means in a few plain words the first time you use it. When an answer would pass about 200 words, structure it so it can be scanned: first a line starting **In short:** that gives the whole answer in one or two sentences; then 2-6 parts in the order a student should learn them, each a bold label alone on its line (**Label**; never # headings; use a table when the content is terms with definitions, or a comparison across the same fields) followed by short bullets written as \"- name: what it is or why it matters\", one fact per bullet, numbers kept exact; write steps or a sequence as numbered lines; finish with a line starting **Remember:** naming the 2-3 things to keep. Shorter answers stay plain paragraphs. In any answer that explains or works something out, mark the 2-5 terms a student should remember (up to 8 in a long structured answer) as ==like this==: concept names first (the law, principle, quantity or condition being used), then the key result. Example: Heating speeds a reaction up because of ==collision theory==: more particles reach the ==activation energy==. Mark words, not sentences, and never inside code, $…$, links or <say>; if the key relation sits in $…$, mark its name beside it. No marks only for a one-line factual reply."
 
     /// How Claude speaks: <say> clips that Merlin turns into voice messages. Only sent when it is likely to be used.
     static let sayRule = """
@@ -121,8 +125,11 @@ enum Prompts {
     /// Maths in the question or highlight: carets, roots, number fractions, "2x", or maths words.
     private static let mathSymbols = regex(#"\^|√|∫|∑|π|≤|≥|\d\s*/\s*\d|\b\d+[a-z]\b|\b[a-z]\s*=\s*[-\d(]"#)
     private static let mathWords = regex(#"\b(?:solve|simplify|factor(?:ise|ize|ing)?|expand|integra\w*|differentiat\w*|derivatives?|equations?|formulas?|fractions?|exponents?|powers?|roots?|logs?|logarithms?|sin|cos|tan|lim|limits? (?:as|of)|matrix|matrices|proof|prove|theorem|algebra|calculus|calculate|compute|quadratic|polynomials?|inequalit\w*|radicals?|surds?|velocity|acceleration|energy|normal form|standard form)\b"#)
-    /// Questions a step-by-step board can answer: how / why / explain / diagram / compare / process / steps …
-    private static let boardWords = regex(#"\b(?:how|why|explain\w*|diagrams?|compar\w*|contrast|differen(?:ce|ces|t)|process(?:es)?|steps?|stages?|cycles?|mechanisms?|causes?|caus(?:ed|ing)|leads? to|what happens|visuali[sz]\w*)\b"#)
+    /// Questions a step-by-step board can answer: how / why / explain / diagram / process / steps / causes … (comparisons go to
+    /// a table: `tableWords`).
+    private static let boardWords = regex(#"\b(?:how|why|explain\w*|diagrams?|process(?:es)?|steps?|stages?|cycles?|mechanisms?|causes?|caus(?:ed|ing)|leads? to|what happens|visuali[sz]\w*)\b"#)
+    /// Questions a table answers: a table, terms, definitions, a glossary, or a comparison ("in terms of" is not one).
+    private static let tableWords = regex(#"\b(?:tables?|tabulate|terms\b(?! of\b)|definitions?|glossary|compar\w*|contrast\w*|versus|vs|differen(?:ce|ces|t))\b"#)
     /// Questions where a 3D arrangement is the point. Kept narrow: the rule must not ride along on ordinary questions.
     private static let sceneWords = regex(#"\b(?:3-?d|three[- ]dimensional|model of|atoms?|atomic structure|molecul\w*|solar system|orbit\w*|crystal lattice|forces? on|layers of)\b"#)
     private static let graphWords = regex(#"\b(?:graphs?|plot|plots|chart|charts|draw|diagrams?|visuali[sz]\w*|curves?|sketch|illustrate|sliders?|show me|picture this|supply|demand|equilibrium|parabolas?|quadratic|derivative|tangent|vertex|slope|function|equation|probability|distribution|vector|trigonometr\w*|sine|cosine|elasticity)\b"#)
@@ -140,6 +147,7 @@ enum Prompts {
         if question == visualize || has(graphWords, question)
             || ["Math", "Economics", "Physics"].contains(Sector.guess(from: selection) ?? "") { out.insert(.graphs) }
         if question == visualize || (question != pronounce && question != quiz && wordCount(question) >= 2 && has(boardWords, question)) { out.insert(.board) }
+        if question != pronounce && question != quiz && has(tableWords, question) { out.insert(.table) }
         // Visualize's own words never match; its highlight decides. Other questions: only the question's own words.
         if question == visualize ? has(sceneWords, selection) : (question != pronounce && question != quiz && has(sceneWords, question)) {
             out.insert(.scene)
@@ -155,6 +163,8 @@ enum Prompts {
         var needed = features(question: question, selection: "").subtracting(have)
         if learn && !have.contains(.learn) { needed.insert(.learn) }
         if have.contains(.graphs) { needed.remove(.maths) } // a graph chat's prompt already has the maths rule
+        if have.contains(.graphs) || have.contains(.table) { needed.remove(.table) } // …and the table rule
+        if needed.contains(.graphs) && !have.contains(.table) { needed.insert(.table) } // the graphs rule brings the table rule
         // Learn mode brings the board rule along (a Learn chat starts with both), so it's only sent once.
         if have.contains(.learn) { needed.remove(.board) }
         if needed.contains(.learn) && !have.contains(.board) { needed.insert(.board) }
@@ -162,6 +172,7 @@ enum Prompts {
         var parts: [String] = []
         if needed.contains(.voice) { parts.append(sayRule) }
         if needed.contains(.graphs) { parts.append(graphs) }
+        if needed.contains(.table) { parts.append(tableRule) }
         if needed.contains(.board) && !needed.contains(.learn) { parts.append(boardRule) }
         if needed.contains(.maths) { parts.append(mathsRule) }
         if needed.contains(.learn) { parts.append(learnRule) }
@@ -190,7 +201,11 @@ enum Prompts {
 
     /// How Claude draws a whiteboard: a <board> Merlin lays out and animates itself (see BoardSpec). Kept to 80 tokens
     /// or fewer (320 characters at about 4 per token): the drawing costs nothing, only this rule and the small JSON do.
-    static let boardRule = #"Steps/causes/comparisons (not curves/simple facts/disputes): <board>{"n":[{"id":"a","t":"Cap","r":0},{"id":"b","t":"Gap","c":1,"r":1,"key":1}],"e":[{"f":"a","to":"b"}],"s":[{"c":"…","n":["a","b"]}]}</board> ≤8 nodes, 5 steps, 3 new/step; t ≤4 words, sub ≤6. Captions explain; ≤2 sentences outside. Settled facts only."#
+    static let boardRule = #"Steps/causes (not curves/comparisons/simple facts/disputes): <board>{"n":[{"id":"a","t":"Cap","r":0},{"id":"b","t":"Gap","c":1,"r":1,"key":1}],"e":[{"f":"a","to":"b"}],"s":[{"c":"…","n":["a","b"]}]}</board> ≤8 nodes, 5 steps, 3 new/step; t ≤4 words, sub ≤6. Captions explain; ≤2 sentences outside. Settled facts only."#
+
+    /// When Claude writes a table (Merlin draws Markdown tables; see MarkdownTable). Kept to 40 tokens or fewer (160 characters
+    /// at about 4 per token). Sent with the graphs rule, and for questions that ask for a table, terms or a comparison.
+    static let tableRule = "Terms with definitions, or items compared on the same fields: a Markdown table (header row, |---| row, ≤5 short columns). Not for steps or one fact."
 
     /// How Claude builds a 3D scene: a <scene> Merlin renders natively (see SceneSpec). Kept to about 90 tokens (360
     /// characters at about 4 per token).

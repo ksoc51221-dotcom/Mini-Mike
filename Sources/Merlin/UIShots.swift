@@ -80,6 +80,26 @@ enum UIShots {
                 shot(name, margin: 20, BoardView(source: BoardSpec.priceCeilingSample, initialStep: step)
                     .frame(width: AskPanelController.width - 32))
             }
+            // Tables (R1): Merlin's economics terms table at the normal and the wide answer width, half-streamed, with the
+            // Copy table button showing, and inside a normal and a wide chat. Hosted, because a ScrollView may be inside.
+            let narrow = AskPanelController.width - 32, wide = AskPanelController.width * AskModel.largeScale - 32
+            func tableShot(_ name: String, width: CGFloat, height: CGFloat, _ view: some View) {
+                shot(name, hostedSize: CGSize(width: width + 32, height: height),
+                     panel(mode, radius: AskPanelController.cornerRadius,
+                           view.frame(width: width).padding(16).frame(width: width + 32, height: height, alignment: .top)))
+            }
+            tableShot("table-1-narrow", width: narrow, height: 760, MarkdownText(text: MarkdownTable.economicsSample))
+            tableShot("table-2-wide", width: wide, height: 470, MarkdownText(text: MarkdownTable.economicsSample))
+            let halfway = MarkdownTable.economicsSample.components(separatedBy: "willing")[0] + "wil"
+            tableShot("table-3-streaming", width: narrow, height: 420, MarkdownText(text: halfway, streaming: true))
+            if let table = MarkdownTable.blocks(MarkdownTable.economicsSample).compactMap({ if case .table(let t) = $0 { return t } else { return nil } }).first {
+                tableShot("table-4-copy", width: wide, height: 450, TableCard(table: table, forceHover: true))
+            }
+            for (name, large) in [("table-5-chat", false), ("table-6-chat-wide", true)] {
+                let model = tableChatModel(large: large)
+                shot(name, hostedSize: CGSize(width: model.width, height: large ? 700 : 560),
+                     panel(mode, radius: AskPanelController.cornerRadius, AskView(model: model).frame(width: model.width, height: large ? 700 : 560)))
+            }
             shot("board-4-chat", hostedSize: CGSize(width: AskPanelController.width, height: 520), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: boardChatModel()).frame(width: AskPanelController.width, height: 520)))
             // The 3D scenes (atom; forces on a block) at the chat's answer width. A live SCNView can't be captured, so
             // with Motion.still the card shows an offscreen SCNRenderer picture of the same scene (orbits at their start).
@@ -370,6 +390,17 @@ enum UIShots {
         model.turns = [AskModel.Turn(question: "Why does a price ceiling cause a shortage?",
                                      answer: "A ceiling below P* changes both sides of the market at once.\n<board>\(BoardSpec.priceCeilingSample)</board>",
                                      done: true)]
+        return model
+    }
+
+    /// A finished chat whose answer is the economics terms table; `large` is the wide (1.5×) chat. Settings are not touched.
+    private static func tableChatModel(large: Bool) -> AskModel {
+        let selection = Selection(text: "Price elasticity of demand measures how responsive quantity demanded is to price.",
+                                  appName: "Safari", context: ContextBox(resolved: nil), pid: 0, mouse: .zero)
+        let model = AskModel(selection: selection, footnote: "Sonnet · sees your screen")
+        model.isLarge = large
+        model.turns = [AskModel.Turn(question: "Make a table of 5 microeconomics terms with definitions and formulas.",
+                                     answer: MarkdownTable.economicsSample, done: true)]
         return model
     }
 

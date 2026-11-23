@@ -170,6 +170,8 @@ final class BoundedCache<Key: Hashable, Value: AnyObject> {
 struct MathLine: View {
     let text: String
     var streaming = false
+    /// The text's font (a table's header and first column use smaller or heavier Geist).
+    var font: Font = .mBody
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -201,7 +203,7 @@ struct MathLine: View {
                 }
             }
         }
-        .font(.mBody).lineSpacing(4)
+        .font(font).lineSpacing(4)
         .fixedSize(horizontal: false, vertical: true)
     }
 

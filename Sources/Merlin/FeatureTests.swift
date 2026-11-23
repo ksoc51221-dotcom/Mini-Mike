@@ -30,6 +30,7 @@ enum FeatureTests {
         talkKeyChecks(check)
         groqChecks(check)
         boardChecks(check)
+        tableChecks(check)
         sceneChecks(check)
         voiceOrbChecks(check)
         pointToAskChecks(check)
@@ -228,7 +229,9 @@ enum FeatureTests {
                 && Prompts.learnRule.contains("replaces the 2-4 sentence limit") && Prompts.learnRule.contains("everyday words")
                 && Prompts.learnRule.contains("one sentence and nothing more") && Prompts.learnRule.contains("as long as it takes")
                 && Prompts.learnRule.contains("Never drop a useful detail") && Prompts.learnRule.contains("**In short:**")
-                && Prompts.learnRule.contains("**Remember:**") && Prompts.learnRule.contains("never # headings or tables"))
+                && Prompts.learnRule.contains("**Remember:**")
+                && Prompts.learnRule.contains("never # headings; use a table when the content is terms with definitions, or a comparison across the same fields")
+                && !Prompts.learnRule.contains("or tables"))
         check("learn rule: never part of .all and never guessed from a question",
               !Prompts.Features.all.contains(.learn)
                 && ["Solve 2x^2 + 3x - 2 = 0", "How do I say this?", "Plot y = x^2", "Explain this more simply.", Prompts.quiz].allSatisfy {
@@ -701,7 +704,8 @@ enum FeatureTests {
         check("tokens: the full prompt has both", full.contains("<graph>") && full.contains("<say>"))
         check("tokens: every prompt still asks for the title/sector line", lean.contains("<meta"))
         let extra = Prompts.extraInstructions(for: Prompts.visualize, have: [])
-        check("tokens: a later graph question carries the graph rule with it", extra?.text.contains("<graph>") == true && extra?.added == [.graphs, .board])
+        check("tokens: a later graph question carries the graph rule (and the table rule that rides with it)",
+              extra?.text.contains("<graph>") == true && extra?.text.contains(Prompts.tableRule) == true && extra?.added == [.graphs, .table, .board])
         check("tokens: nothing extra when the chat already has it", Prompts.extraInstructions(for: Prompts.visualize, have: [.all, .board]) == nil)
         check("tokens: nothing extra for a plain follow-up", Prompts.extraInstructions(for: "why?", have: []) == nil)
         let smart = Router.Input(prompt: "Why does this happen?", selection: "Demand curves slope down.", smart: true)

@@ -137,7 +137,8 @@ enum Answer {
     static func plainText(_ answer: String) -> String {
         pieces(answer).compactMap { piece -> String? in
             switch piece {
-            case .text(let t): return Highlights.strip(t).trimmingCharacters(in: .whitespacesAndNewlines) // key-word marks are for the screen only
+            // Key-word marks are for the screen only; a table becomes readable lines ("Term: … Definition: …"), never pipes.
+            case .text(let t): return Highlights.strip(MarkdownTable.plainText(t)).trimmingCharacters(in: .whitespacesAndNewlines)
             case .say(let request): return "“\(request.text)”"
             case .graph: return "[a graph was shown here]"
             case .quiz: return "[a quiz was shown here]"
