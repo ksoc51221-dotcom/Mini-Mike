@@ -159,7 +159,7 @@ enum SelfTest {
             let frame = edge.debugPanelFrame
             let screen = (NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(frame) } ?? NSScreen.main!).frame
             let fits = screen.insetBy(dx: -0.5, dy: -0.5).contains(frame)
-            let centred = abs(frame.midY - screen.midY) < 1 && abs(frame.maxX - (screen.maxX - EdgePanelLayout.gap)) < 1
+            let centred = abs(frame.midY - screen.midY) < 1 && abs(frame.maxX - (screen.maxX - EdgePanelLayout.listInset)) < 1
             ok = ok && fits && centred && edge.debugIsVisible
             print(String(format: "edge panel %.0f×%.0f at (%.0f, %.0f) — %@ the screen, %@ on its right edge",
                          frame.width, frame.height, frame.minX, frame.minY, fits ? "inside" : "OUTSIDE", centred ? "centred" : "NOT centred"))
@@ -392,7 +392,7 @@ enum SelfTest {
                 let frame = sidebar.debugPanelFrame
                 let edgeScreen = (NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(frame) } ?? screen).frame
                 check("the edge panel fits on screen with ten rows (it scrolls past eight)", edgeScreen.insetBy(dx: -0.5, dy: -0.5).contains(frame))
-                check("…at the middle of the right edge", abs(frame.midY - edgeScreen.midY) < 1 && abs(frame.maxX - (edgeScreen.maxX - EdgePanelLayout.gap)) < 1)
+                check("…at the middle of the right edge", abs(frame.midY - edgeScreen.midY) < 1 && abs(frame.maxX - (edgeScreen.maxX - EdgePanelLayout.listInset)) < 1)
                 let open = dock.debugOpenAgents
                 check("all ten chats are open at once", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 10 && open.count == 10)
                 check("none of them is hidden or faded", dock.debugAgents.allSatisfy { $0.debugPanelAlpha > 0.9 })

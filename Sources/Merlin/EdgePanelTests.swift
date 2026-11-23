@@ -162,10 +162,10 @@ extension FeatureTests {
 
         // Sizes: the box grows into the list (one shape, a new size).
         let m = EdgePanelModel()
-        check("edge sizes: the box is the small two-choice card", m.cardSize == EdgePanelLayout.boxSize)
+        check("edge sizes: stage one is the half-disc with two items", m.cardSize == EdgePanelLayout.boxSize)
         m.chats = (0..<3).map { _ in .init(id: ObjectIdentifier(token), title: "t", subtitle: "s", phase: .idle, isOpen: false) }
         m.choose(.chats)
-        check("edge sizes: choosing Chats grows it into the list", m.section == .chats && m.cardSize.width > EdgePanelLayout.boxSize.width
+        check("edge sizes: choosing Chats opens the list card", m.section == .chats && m.cardSize.width > EdgePanelLayout.boxSize.width
               && m.cardSize.height == EdgePanelLayout.listSize(rows: 3, newNoteRow: false).height)
         check("edge sizes: an empty list keeps room for its one quiet line; past 8 rows it scrolls",
               EdgePanelLayout.listSize(rows: 0, newNoteRow: false).height == EdgePanelLayout.headerHeight + EdgePanelLayout.pad * 2 + EdgePanelLayout.lineHeight
@@ -225,11 +225,10 @@ extension FeatureTests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         let local = NSRect(origin: .zero, size: EdgePanelLayout.windowSize)
-        let box = EdgePanelLayout.cardFrame(window: local, card: EdgePanelLayout.boxSize)
-        click(NSPoint(x: box.midX, y: box.maxY - EdgePanelLayout.pad - EdgePanelLayout.choiceHeight / 2))
+        click(EdgePanelLayout.itemCentre(.chats, window: local))
         RunLoop.current.run(until: Date().addingTimeInterval(0.5)) // the grow and the rows' fade
         check("edge (real events): a click on Chats grows the box into the Chats list", edge.model.section == .chats)
-        let list = EdgePanelLayout.cardFrame(window: local, card: EdgePanelLayout.listSize(rows: 3, newNoteRow: false))
+        let list = EdgePanelLayout.listFrame(window: local, card: EdgePanelLayout.listSize(rows: 3, newNoteRow: false))
         let firstRow = list.maxY - EdgePanelLayout.headerHeight - (EdgePanelLayout.pad - 1) - EdgePanelLayout.rowHeight / 2
         click(NSPoint(x: list.minX + 90, y: firstRow - EdgePanelLayout.rowHeight)) // the second row
         check("edge (real events): a click on a row opens that chat", opened == [ObjectIdentifier(owners[1])])

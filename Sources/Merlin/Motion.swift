@@ -21,10 +21,12 @@ enum Motion {
     static let smooth = functional
     static let quick = small
     // The edge panel (R3). Values checked against motion.dev's guidance; the spec's own values are kept.
-    /// Slide in from the screen edge: 0.22 s on a strong ease-out (0.23, 1, 0.32, 1).
-    static let edgeIn = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
-    /// Slide out: 0.16 s, faster than the entry.
-    static let edgeOut = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
+    /// Slide in from the screen edge, and the list card opening: 0.22 s on a strong ease-out (0.16, 1, 0.3, 1).
+    static let edgeIn = Animation.timingCurve(0.16, 1, 0.3, 1, duration: 0.22)
+    /// Slide out: 0.16 s, faster than the entry, speeding up as it leaves (0.4, 0, 1, 1).
+    static let edgeOut = Animation.timingCurve(0.4, 0, 1, 1, duration: 0.16)
+    /// A round item changing state (hover, active): 0.12 s ease-out.
+    static let edgeState = Animation.easeOut(duration: 0.12)
     /// The box growing into its list: one shape changing size, 0.28 s, no bounce.
     static let edgeGrow = Animation.spring(duration: 0.28, bounce: 0)
     /// The rise under the pointer: a spring with no bounce.

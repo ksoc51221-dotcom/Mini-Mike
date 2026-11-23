@@ -25,11 +25,13 @@ extension FeatureTests {
         let external = NSRect(x: 1440, y: 0, width: 1920, height: 1055)
         for (name, screen) in [("laptop", laptop), ("second screen", external)] {
             let window = EdgePanelLayout.windowFrame(screen: screen)
-            let list = EdgePanelLayout.cardFrame(window: window, card: EdgePanelLayout.listSize(rows: EdgePanelLayout.maxRows, newNoteRow: true))
-            let box = EdgePanelLayout.cardFrame(window: window, card: EdgePanelLayout.boxSize)
+            let list = EdgePanelLayout.listFrame(window: window, card: EdgePanelLayout.listSize(rows: EdgePanelLayout.maxRows, newNoteRow: true))
+            let box = EdgePanelLayout.discFrame(window: window)
             check("edge panel (\(name)): its window ends at the screen's right edge", window.maxX == screen.maxX)
-            check("edge panel (\(name)): the card sits 8 pt from the edge, centred on the screen", abs(list.maxX - (screen.maxX - 8)) < 0.01
-                  && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1 && box.maxX == list.maxX)
+            check("edge panel (\(name)): the disc is flush with the edge and the list sits 8 pt left of it, both centred on the screen",
+                  box.maxX == screen.maxX && abs(list.maxX - (box.minX - 8)) < 0.01
+                  && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1)
+            check("edge panel (\(name)): the disc fits on the screen", screen.contains(box))
             check("edge panel (\(name)): the tallest list fits on the screen", screen.contains(list))
         }
         check("chats: room for ten", Settings.shared.maxAgents == 10)

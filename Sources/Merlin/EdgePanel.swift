@@ -173,7 +173,31 @@ enum EdgePanelLayout {
     static let lineHeight: CGFloat = 40
     static let maxRows = 8
 
-    static var boxSize: CGSize { CGSize(width: boxWidth, height: pad * 2 + choiceHeight * 2) }
+    /// The half-disc: flush with the screen edge, its round side to the left.
+    static let discRadius: CGFloat = 100
+    /// The round items sit on an arc of this radius around the middle of the disc's flat side.
+    static let itemRadius: CGFloat = 60
+    static let itemSize: CGFloat = 40
+    /// Half the angle between the two items, in degrees from the horizontal.
+    static let itemAngle: CGFloat = 32
+    /// From the list card's right side to the screen edge: the disc and the gap.
+    static var listInset: CGFloat { discRadius + gap }
+
+    /// Stage one, the half-disc (the name is from when it was a box).
+    static var boxSize: CGSize { CGSize(width: discRadius, height: discRadius * 2) }
+
+    /// An item's centre inside the disc, from its top-left corner (y down). Chats is the upper item.
+    static func itemCentre(_ s: EdgePanelModel.Section) -> CGPoint {
+        let a = itemAngle * .pi / 180
+        let dy = itemRadius * sin(a) * (s == .chats ? -1 : 1)
+        return CGPoint(x: discRadius - itemRadius * cos(a), y: discRadius + dy)
+    }
+
+    /// The same centre in a window frame's coordinates (y up).
+    static func itemCentre(_ s: EdgePanelModel.Section, window: NSRect) -> NSPoint {
+        let d = discFrame(window: window), c = itemCentre(s)
+        return NSPoint(x: d.minX + c.x, y: d.maxY - c.y)
+    }
 
     /// The list card: header, rows (or one quiet line when empty, scrolling past `maxRows`), and Notes' "New note" row.
     static func listSize(rows: Int, newNoteRow: Bool) -> CGSize {
@@ -184,7 +208,7 @@ enum EdgePanelLayout {
     static var maxCardHeight: CGFloat { listSize(rows: maxRows, newNoteRow: true).height }
 
     static var windowSize: CGSize {
-        CGSize(width: listWidth + gap + slack, height: maxCardHeight + slack * 2)
+        CGSize(width: listWidth + listInset + slack, height: max(maxCardHeight, discRadius * 2) + slack * 2)
     }
 
     /// The window: right edge on the screen's right edge, centred on the hot zone.
@@ -193,9 +217,14 @@ enum EdgePanelLayout {
         return NSRect(x: screen.maxX - s.width, y: (screen.midY - s.height / 2).rounded(), width: s.width, height: s.height)
     }
 
-    /// The card inside a window frame (screen coordinates): right-aligned with the gap, centred vertically.
-    static func cardFrame(window: NSRect, card: CGSize) -> NSRect {
-        NSRect(x: window.maxX - gap - card.width, y: window.midY - card.height / 2, width: card.width, height: card.height)
+    /// The half-disc inside a window frame (screen coordinates): flush right, centred vertically.
+    static func discFrame(window: NSRect) -> NSRect {
+        NSRect(x: window.maxX - discRadius, y: window.midY - discRadius, width: discRadius, height: discRadius * 2)
+    }
+
+    /// The list card inside a window frame: left of the disc with the gap, centred vertically.
+    static func listFrame(window: NSRect, card: CGSize) -> NSRect {
+        NSRect(x: window.maxX - listInset - card.width, y: window.midY - card.height / 2, width: card.width, height: card.height)
     }
 }
 
@@ -249,7 +278,7 @@ final class EdgePanelModel: ObservableObject {
         guard section != s else { return }
         hoverWork?.cancel()
         // Reduce Motion: the new size lands at once (no movement); the rows still fade in.
-        let animation: Animation? = Motion.still || Motion.reduceMotion ? nil : Motion.edgeGrow
+        let animation: Animation? = Motion.still || Motion.reduceMotion ? nil : Motion.edgeIn
         withAnimation(animation) { section = s }
     }
 
@@ -289,96 +318,127 @@ struct EdgePanelView: View {
     @ObservedObject var model: EdgePanelModel
     var framed = true
 
-    private var rise: Bool { model.section == nil && model.hoveringBox && !Motion.reduceMotion }
     private var radius: CGFloat { Theme.Radius.container }
 
     var body: some View {
-        let size = model.cardSize
-        let card = ZStack(alignment: .top) {
+        let panel = HStack(alignment: .center, spacing: EdgePanelLayout.gap) {
             if let section = model.section {
-                EdgeListView(model: model, section: section)
-                    .transition(.opacity)
-            } else {
-                EdgeChoicesView(model: model)
-                    .transition(.opacity)
+                listCard(section)
+                    .transition(Motion.reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .trailing).combined(with: .opacity))
             }
+            EdgeDiscView(model: model)
         }
-        .frame(width: size.width, height: size.height, alignment: .top)
-        .background(Theme.surface.color)
-        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Theme.hairline.color, lineWidth: 1))
-        // The shadow sits outside the clip, on a second shape behind.
-        .background(
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(Theme.surface.color)
-                .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 6)
-        )
-        .edgeHover { h in
-            guard model.section == nil else { return }
-            withAnimation(Motion.still ? nil : Motion.edgeRise) { model.hoveringBox = h }
-        }
-        .scaleEffect(rise ? 1.02 : 1, anchor: .trailing)
-        .offset(y: rise ? -6 : 0)
         .offset(x: model.shown || Motion.reduceMotion ? 0 : 16)
         .opacity(model.shown ? 1 : 0)
 
         if framed {
             let w = EdgePanelLayout.windowSize
-            card.padding(.trailing, EdgePanelLayout.gap)
-                .frame(width: w.width, height: w.height, alignment: .trailing)
+            panel.frame(width: w.width, height: w.height, alignment: .trailing)
         } else {
-            card
+            panel
         }
+    }
+
+    /// The list card, beside the disc.
+    private func listCard(_ section: EdgePanelModel.Section) -> some View {
+        let size = model.cardSize
+        return EdgeListView(model: model, section: section)
+            .frame(width: size.width, height: size.height, alignment: .top)
+            .background(Theme.surface.color)
+            .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous).strokeBorder(Theme.hairline.color, lineWidth: 1))
+            // The shadow sits outside the clip, on a second shape behind.
+            .background(
+                RoundedRectangle(cornerRadius: radius, style: .continuous)
+                    .fill(Theme.surface.color)
+                    .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 6)
+            )
     }
 }
 
-/// Stage one: the small box with Chats and Notes.
-private struct EdgeChoicesView: View {
+/// A half circle with its flat side on the right. Stroked, it draws the arc only.
+struct EdgeHalfDisc: Shape {
+    var radius: CGFloat?
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.addArc(center: CGPoint(x: rect.maxX, y: rect.midY), radius: radius ?? rect.width,
+                 startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
+        return p
+    }
+}
+
+/// Stage one: the half-disc at the screen edge, with Chats and Notes as round items on an arc.
+private struct EdgeDiscView: View {
     @ObservedObject var model: EdgePanelModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            choice(.chats, "Chats", symbol: "bubble.left.and.bubble.right", count: model.chats.count)
-            choice(.notes, "Notes", symbol: "tablecells", count: model.notes.count)
+        let s = EdgePanelLayout.boxSize
+        ZStack {
+            EdgeHalfDisc().fill(Theme.surface.color)
+                .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 6)
+            EdgeHalfDisc().stroke(Theme.hairline.color, lineWidth: 1)
+            // The guide ring the items sit on.
+            EdgeHalfDisc(radius: EdgePanelLayout.itemRadius).stroke(Theme.hairline.color.opacity(0.6), lineWidth: 1)
+            item(.chats, "Chats", symbol: "bubble.left.and.bubble.right",
+                 mark: EdgeDotState.from(model.chats.map { (phase: $0.phase, isOpen: $0.isOpen) }))
+            item(.notes, "Notes", symbol: "tablecells", mark: .absent)
         }
-        .padding(EdgePanelLayout.pad)
+        .frame(width: s.width, height: s.height)
     }
 
-    private func choice(_ s: EdgePanelModel.Section, _ title: String, symbol: String, count: Int) -> some View {
-        EdgeChoiceButton(title: title, symbol: symbol, count: count) { model.choose(s) }
+    private func item(_ s: EdgePanelModel.Section, _ title: String, symbol: String, mark: EdgeDotState) -> some View {
+        let c = EdgePanelLayout.itemCentre(s)
+        return EdgeArcItem(title: title, symbol: symbol, active: model.section == s, mark: mark) { model.choose(s) }
             .edgeHover { model.hoverChoice(s, $0) }
+            .position(x: c.x, y: c.y)
     }
 }
 
-private struct EdgeChoiceButton: View {
+/// One round item on the arc. It grows a little under the pointer and while its list is open.
+private struct EdgeArcItem: View {
     let title: String
     let symbol: String
-    let count: Int
+    let active: Bool
+    let mark: EdgeDotState
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
+        let lifted = (active || hovering) && !Motion.reduceMotion
         Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: symbol)
-                    .font(.system(size: 13, weight: .regular))
-                    .foregroundStyle(Theme.inkSecondary.color)
-                    .frame(width: 18)
-                Text(title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color)
-                Spacer(minLength: 4)
-                if let n = Theme.count(count) {
-                    Text(n).font(.mNum).foregroundStyle(Theme.inkTertiary.color)
-                }
-            }
-            .padding(.horizontal, 10)
-            .frame(height: EdgePanelLayout.choiceHeight)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                .fill(hovering ? Theme.surfaceRaised.color : .clear))
-            .contentShape(Rectangle())
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(active || hovering ? Theme.ink.color : Theme.inkSecondary.color)
+                .frame(width: EdgePanelLayout.itemSize, height: EdgePanelLayout.itemSize)
+                .background(Circle().fill(active ? Theme.surfaceSelected.color : Theme.surfaceRaised.color))
+                .overlay(Circle().strokeBorder(active ? Theme.accentText.color : Theme.hairline.color, lineWidth: active ? 1.5 : 1))
+                .overlay(alignment: .topTrailing) { markView }
+                .contentShape(Circle())
         }
         .buttonStyle(EdgePressStyle())
-        .edgeHover { h in withAnimation(Motion.still ? nil : Motion.animation(Motion.small)) { hovering = h } }
+        .scaleEffect(lifted ? 1.08 : 1)
+        .animation(Motion.still ? nil : Motion.edgeState, value: lifted)
+        .animation(Motion.still ? nil : Motion.edgeState, value: active)
+        .edgeHover { hovering = $0 }
+        .help(title)
         .accessibilityLabel(title)
+    }
+
+    /// What the chats are doing: a breathing accent dot while one works, a solid dot when an answer waits.
+    @ViewBuilder private var markView: some View {
+        if mark != .absent {
+            Group {
+                if mark == .breathing {
+                    EdgeBreathing { Circle().fill(Theme.accentText.color) }
+                } else {
+                    Circle().fill(Theme.ink.color)
+                }
+            }
+            .frame(width: 7, height: 7)
+            .padding(1.5)
+            .background(Circle().fill(Theme.surface.color))
+            .offset(x: 1, y: -1)
+        }
     }
 }
 
@@ -948,7 +1008,7 @@ final class EdgePanelController {
         let p = NSEvent.mouseLocation
         let screens = NSScreen.screens.map(\.frame)
         let inZone = EdgeGeometry.inZone(p, screens: screens)
-        let over = reveal.visible && cardFrame.insetBy(dx: -6, dy: -6).contains(p)
+        let over = reveal.visible && hoverFrame.insetBy(dx: -6, dy: -6).contains(p)
         let blocked = !reveal.visible && inZone && liveBlocked(at: p, screens: screens)
         let stop = reveal.visible && interrupted
         let now = ProcessInfo.processInfo.systemUptime
@@ -1066,7 +1126,7 @@ final class EdgePanelController {
     private func outside(_ e: NSEvent) {
         if e.type == .keyDown {
             if e.keyCode == 53, reveal.escape() == .hide { dismiss() }
-        } else if !cardFrame.contains(NSEvent.mouseLocation), reveal.clickOutside() == .hide {
+        } else if !hoverFrame.contains(NSEvent.mouseLocation), reveal.clickOutside() == .hide {
             dismiss()
         }
     }
@@ -1078,7 +1138,13 @@ final class EdgePanelController {
 
     /// The card on screen now.
     private var cardFrame: NSRect {
-        EdgePanelLayout.cardFrame(window: EdgePanelLayout.windowFrame(screen: screen), card: model.cardSize)
+        let w = EdgePanelLayout.windowFrame(screen: screen)
+        return model.section == nil ? EdgePanelLayout.discFrame(window: w) : EdgePanelLayout.listFrame(window: w, card: model.cardSize)
+    }
+
+    /// Everything the pointer may rest on: the disc, the list card and the strip between them.
+    private var hoverFrame: NSRect {
+        cardFrame.union(EdgePanelLayout.discFrame(window: EdgePanelLayout.windowFrame(screen: screen)))
     }
 
     // MARK: Rows and the dot
@@ -1120,7 +1186,7 @@ final class EdgePanelController {
     /// What a chat opening from the panel opens beside: the Chats list as it shows (or would show) on the pointer's screen.
     func restingFrame() -> NSRect {
         let s = reveal.visible ? screen : screenUnderPointer()
-        return EdgePanelLayout.cardFrame(window: EdgePanelLayout.windowFrame(screen: s),
+        return EdgePanelLayout.listFrame(window: EdgePanelLayout.windowFrame(screen: s),
                                          card: EdgePanelLayout.listSize(rows: model.chats.count, newNoteRow: false))
     }
 
@@ -1148,7 +1214,9 @@ final class EdgePanelController {
     /// The card as it looks now, over a flat backdrop (the window's own pixels).
     func debugSnapshot(backdrop: NSColor = NSColor(white: 0.30, alpha: 1)) -> NSBitmapImageRep? {
         guard let view = window?.contentView else { return nil }
-        let card = EdgePanelLayout.cardFrame(window: NSRect(origin: .zero, size: EdgePanelLayout.windowSize), card: model.cardSize)
+        let local = NSRect(origin: .zero, size: EdgePanelLayout.windowSize)
+        let disc = EdgePanelLayout.discFrame(window: local)
+        let card = model.section == nil ? disc : EdgePanelLayout.listFrame(window: local, card: model.cardSize).union(disc)
         let crop = card.insetBy(dx: -16, dy: -16)
         guard let rep = view.bitmapImageRepForCachingDisplay(in: crop) else { return nil }
         view.cacheDisplay(in: crop, to: rep)

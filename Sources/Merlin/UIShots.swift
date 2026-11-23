@@ -140,10 +140,7 @@ enum UIShots {
                 edgeRest(.solid, "Answer ready", mode)
                 edgeRest(.absent, "Nothing going on", mode)
             })
-            shot("edge-2-box", margin: 24, HStack(alignment: .center, spacing: 32) {
-                EdgePanelView(model: edgeModel(nil), framed: false)
-                EdgePanelView(model: edgeModel(nil, hovering: true), framed: false)
-            })
+            shot("edge-2-box", margin: 24, EdgePanelView(model: edgeModel(nil), framed: false))
             shot("edge-3-chats", margin: 24, EdgePanelView(model: edgeModel(.chats), framed: false))
             shot("edge-4-notes", margin: 24, HStack(alignment: .top, spacing: 24) {
                 EdgePanelView(model: edgeModel(.notes), framed: false)
