@@ -34,7 +34,13 @@ final class Hotkeys {
     /// Tap Shift twice: add a screenshot of the screen to the open chat.
     var onDoubleShift: (() -> Void)?
 
-    enum Action: String, CaseIterable, Equatable { case snip, chat, talk, history, engine }
+    /// Raw values are the `ShortcutCommand` ids (`command` looks them up by it).
+    enum Action: String, CaseIterable, Equatable { case snip, chat, talk, history, engine, edgePanel }
+    /// The edge panel's shortcut: show chats and notes, pinned.
+    var onEdgePanel: (() -> Void)?
+    /// Every pointer move, on the tap thread (keep it cheap: the edge panel only compares it with a few cached rects).
+    /// Top-left origin, as event taps give them.
+    var onPointerMoved: ((CGPoint) -> Void)?
 
     private static let tabKey: Int64 = 48            // kVK_Tab
     /// Shift, Control, Option, Command (left and right) and Fn.
@@ -128,6 +134,7 @@ final class Hotkeys {
         // Every pointer move comes through here: do nothing at all unless point to ask is under way.
         switch type {
         case .mouseMoved:
+            onPointerMoved?(event.location)
             if pointHold.isBusy { pointerMoved(to: event.location) }
             return pass
         case .scrollWheel:
@@ -209,13 +216,14 @@ final class Hotkeys {
                 if talkChord.holdTab { swallowTab = true }
                 if pointHold.isBusy { pointSawTalk = true }
                 DispatchQueue.main.async { [weak self] in self?.onTalkStart?() }
-            case .snip, .chat, .history, .engine:
+            case .snip, .chat, .history, .engine, .edgePanel:
                 swallowedKey = keyCode
                 DispatchQueue.main.async { [weak self] in
                     switch action {
                     case .snip: self?.onSnip?()
                     case .history: self?.onHistory?()
                     case .engine: self?.onEngine?()
+                    case .edgePanel: self?.onEdgePanel?()
                     default: self?.onChat?()
                     }
                 }

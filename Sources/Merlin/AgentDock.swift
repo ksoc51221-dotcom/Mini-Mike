@@ -1,10 +1,20 @@
 import AppKit
 
-/// Tracks every agent (up to `Settings.maxAgents`): which ones are open, and the sidebar they rest in.
+/// What a row in the edge panel can do to its chat. `AskPanelController` is the real one; the tests use a stand-in, so
+/// the × is checked to reach `closeFromUser` (which honours "Delete chat when I close it"), never a plain `close`.
+protocol EdgeRowTarget: AnyObject {
+    func closeFromUser()
+    func toggleStar()
+}
+
+extension AskPanelController: EdgeRowTarget {}
+
+/// Tracks every agent (up to `Settings.maxAgents`): which ones are open, and the hidden edge panel they rest in.
 ///
 /// Chats stay where you put them. Any number can be open at once (each is its own window), clicking elsewhere doesn't tuck
-/// them away, and nothing closes a chat but you: the × deletes it, the minimize button (or Esc) sends it to the sidebar.
-/// (With "Chats stay open" off in the menu, it works the old way: one chat at a time, put away when you click off it.)
+/// them away, and nothing closes a chat but you: the × deletes it, the minimize button (or Esc) sends it to the edge panel
+/// (point to the middle of the right screen edge to see it). (With "Chats stay open" off in the menu, it works the old
+/// way: one chat at a time, put away when you click off it.)
 final class AgentDock {
     private final class Entry {
         let agent: AskPanelController
@@ -15,7 +25,7 @@ final class AgentDock {
     private var entries: [Entry] = []
     /// The chats on screen, least recently used first; the last one is the one you used most recently.
     private var openIDs: [ObjectIdentifier] = []
-    private let sidebar = AgentSidebar()
+    private let edge: EdgePanelController
     /// Chats hidden while a snip is being taken.
     private var hiddenForSnip: [AskPanelController] = []
 
@@ -27,17 +37,32 @@ final class AgentDock {
     var count: Int { entries.count }
     /// Room for another chat (a chat that's open and still empty makes way for it).
     var hasRoom: Bool { entries.count - openAgents.filter(\.isEmptyChat).count < Settings.shared.maxAgents }
-    var sidebarIsOpen: Bool { sidebar.isOpen }
-
-    init() {
-        sidebar.onSelect = { [weak self] id in self?.select(id) }
-        sidebar.onStar = { [weak self] id in self?.entries.first(where: { $0.id == id })?.agent.toggleStar() }
-        sidebar.onDelete = { [weak self] id in
-            self?.entries.first(where: { $0.id == id })?.agent.closeFromUser()
-        }
+    /// `edge`: the app's panel by default; tests and demos pass their own so they never touch the app's.
+    init(edge: EdgePanelController = .shared) {
+        self.edge = edge
+        edge.onOpenChat = { [weak self] id in self?.select(id) }
+        edge.onStar = { [weak self] id in self?.route(.star, id) }
+        edge.onDelete = { [weak self] id in self?.route(.delete, id) }
     }
 
-    func toggleSidebar() { sidebar.toggle() }
+    enum RowAction { case star, delete }
+
+    /// For the unit run: sees every star and × that reaches the dock from the panel.
+    var debugRouted: ((RowAction, ObjectIdentifier) -> Void)?
+
+    private func route(_ action: RowAction, _ id: ObjectIdentifier) {
+        debugRouted?(action, id)
+        guard let agent = entries.first(where: { $0.id == id })?.agent else { return }
+        Self.route(action, to: agent)
+    }
+
+    /// The row's star and ×. The × is `closeFromUser`: with "Delete chat when I close it" on, the chat goes to the Bin.
+    static func route(_ action: RowAction, to target: EdgeRowTarget) {
+        switch action {
+        case .star: target.toggleStar()
+        case .delete: target.closeFromUser()
+        }
+    }
 
     /// "Add this to microeconomics terms" (R4): the last answer of the chat you used last goes into the sheet that name
     /// means. No Claude call, and never a guess: an unknown name gives the two closest names instead.
@@ -89,7 +114,7 @@ final class AgentDock {
         if stayOpen {
             let mouse = NSEvent.mouseLocation
             if let under = openAgents.last(where: { $0.frame.contains(mouse) }) {
-                if under.isFocused { under.dismissGesture() } else { markOpen(under); syncSidebar(); under.focus() }
+                if under.isFocused { under.dismissGesture() } else { markOpen(under); syncPanel(); under.focus() }
                 return
             }
         } else if let current = front {
@@ -134,7 +159,7 @@ final class AgentDock {
         let target = stayOpen ? (openAgents.last(where: \.isFocused) ?? (selection.isBlank ? front : nil)) : front
         if let current = target, !current.isEmptyChat {
             markOpen(current)
-            syncSidebar()
+            syncPanel()
             current.ask(question, display: question)
             return
         }
@@ -179,7 +204,7 @@ final class AgentDock {
         agent.cascade = cascadeOffset(for: agent)
         entries.append(Entry(agent))
         markOpen(agent)
-        syncSidebar()
+        syncPanel()
         agent.show()
         return agent
     }
@@ -188,7 +213,7 @@ final class AgentDock {
         agent.onMinimizeRequest = { [weak self, weak agent] in
             if let agent { self?.minimize(agent) }
         }
-        agent.onUpdate = { [weak self] in self?.syncSidebar() }
+        agent.onUpdate = { [weak self] in self?.syncPanel() }
         agent.onClosed = { [weak self, weak agent] in
             if let agent { self?.remove(agent) }
         }
@@ -223,13 +248,13 @@ final class AgentDock {
     static let cascadeStep: CGFloat = 32
 
     static var fullMessage: String {
-        "All \(Settings.shared.maxAgents) chats are in use. Hover one in the sidebar and click × to delete it."
+        "All \(Settings.shared.maxAgents) chats are in use. Point to the middle of the right screen edge, then click × on a chat to delete it."
     }
 
-    // MARK: - Sidebar
+    // MARK: - Edge panel
 
-    private func syncSidebar() {
-        sidebar.sync(entries.map { entry in
+    private func syncPanel() {
+        edge.sync(entries.map { entry in
             let agent = entry.agent
             let isOpen = openIDs.contains(entry.id)
             let subtitle: String
@@ -244,8 +269,8 @@ final class AgentDock {
             // The status leads and, once Claude has filed the chat, its sector trails, so a narrow row clips the sector,
             // never the status. The done line has no sector: "Done · click to read · Economics" doesn't fit the row.
             let filed = agent.phase == .done ? "" : (agent.sector.map { " · \($0)" } ?? "")
-            return AgentSidebar.Row(id: entry.id, title: agent.title, subtitle: subtitle + filed, phase: agent.phase, isOpen: isOpen,
-                                     starred: agent.isStarred, canStar: Settings.shared.saveHistory)
+            return EdgePanelModel.ChatRow(id: entry.id, title: agent.title, subtitle: subtitle + filed, phase: agent.phase, isOpen: isOpen,
+                                          starred: agent.isStarred, canStar: Settings.shared.saveHistory)
         })
     }
 
@@ -258,29 +283,29 @@ final class AgentDock {
     // MARK: - Minimize / expand
 
     private func minimize(_ agent: AskPanelController) {
-        guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
-        let id = entries[index].id
+        guard entries.contains(where: { $0.agent === agent }) else { return }
         markClosed(agent)
-        syncSidebar()
-        // The chat flies into its row's circle; the row lights up where it lands.
-        agent.minimize(into: sidebar.discFrame(at: index)) { [weak self] in self?.sidebar.flash(id) }
+        syncPanel()
+        // The chat flies into the middle of its screen's right edge, where the hidden panel (and its dot) live.
+        agent.minimize(into: edge.landingFrame(near: agent.frame)) {}
     }
 
     private func expand(_ agent: AskPanelController) {
         if !stayOpen, let current = front, current !== agent { current.dismissGesture() }
-        guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
-        let from = sidebar.discFrame(at: index)
+        guard entries.contains(where: { $0.agent === agent }) else { return }
+        let beside = edge.restingFrame()
+        let from = NSRect(x: beside.maxX - 14, y: beside.midY - 7, width: 14, height: 14)
         agent.cascade = cascadeOffset(for: agent)
         markOpen(agent)
-        syncSidebar()
-        agent.expand(from: from, beside: sidebar.frame)
+        syncPanel()
+        agent.expand(from: from, beside: beside)
     }
 
     private func remove(_ agent: AskPanelController) {
         guard let index = entries.firstIndex(where: { $0.agent === agent }) else { return }
         entries.remove(at: index)
         markClosed(agent)
-        syncSidebar()
+        syncPanel()
     }
 
     // MARK: - Debug hooks for --demo
@@ -290,7 +315,7 @@ final class AgentDock {
     var debugOpenAgents: [AskPanelController] { openAgents }
     func debugMinimize(_ agent: AskPanelController) { minimize(agent) }
     func debugExpand(_ agent: AskPanelController) { expand(agent) }
-    var debugSidebar: AgentSidebar { sidebar }
+    var debugEdge: EdgePanelController { edge }
 }
 
 /// A short message near the cursor that fades on its own.

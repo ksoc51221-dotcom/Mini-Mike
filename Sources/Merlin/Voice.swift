@@ -9,8 +9,25 @@ enum CommandCenter {
         case calendar
         /// "Summarize this video", "listen along": the video summarizer.
         case video(VideoIntent)
+        /// "Open microeconomics note", "show my physics terms" (a sheet with that exact name): opens the sheet.
+        case openNote(String)
+        /// "Add this to my macro note": the newest answer goes into the sheet.
+        case addToNote(String)
+        /// "Make a new note called macro terms".
+        case newNote(String)
+        /// "Show my chats" / "show my notes": the edge panel, pinned.
+        case openChats
+        case openNotes
         /// Anything else is a question for Claude.
         case ask
+
+        /// One of the commands that act and open no chat (see `NoteCommand`).
+        var isNoteCommand: Bool {
+            switch self {
+            case .openNote, .addToNote, .newNote, .openChats, .openNotes: return true
+            case .calendar, .video, .ask: return false
+            }
+        }
     }
 
     /// Takes the wake-up words off the front ("Hey Merlin, …"). "Margin" still works: it was the app's old name.
@@ -21,10 +38,12 @@ enum CommandCenter {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func route(_ text: String, now: Date = Date()) -> Route {
+    /// `sheets`: the names of the sheets (named notes), so "show my physics terms" can open one. Calendar and video come
+    /// first, exactly as before; a note command is checked last and only with strict rules (`NoteCommand`).
+    static func route(_ text: String, now: Date = Date(), sheets: [String] = []) -> Route {
         if CalendarIntent.looksLikeRequest(text, now: now) { return .calendar }
         if let video = VideoIntent.parse(text) { return .video(video) }
-        return .ask
+        return NoteCommand.parse(text, sheets: sheets) ?? .ask
     }
 }
 
@@ -250,6 +269,12 @@ final class VoiceController: ObservableObject {
         limit?.invalidate()
         phase = .idle
         pill.hide(after: 0)
+    }
+
+    /// One line of result for a command that acted ("Opened Microeconomics terms"). It hides by itself, like any message.
+    func say(_ line: String) {
+        hideWork?.cancel()
+        show(line)
     }
 
     private func show(_ message: String) {

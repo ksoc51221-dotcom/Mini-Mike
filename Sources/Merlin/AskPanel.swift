@@ -40,14 +40,39 @@ struct HeaderPress {
 /// button). Done here, not in SwiftUI, because SwiftUI keeps the mouse for itself.
 final class ChatPanel: FloatingPanel {
     var onMoved: (() -> Void)?
+    /// A drag on an edge changed the size (`ended`: the button came up).
+    var onResized: ((_ ended: Bool) -> Void)?
     private var press = HeaderPress()
     /// The mouse-down being held back until we know whether it's a drag or a click.
     private var heldDown: NSEvent?
     private var originStart = NSPoint.zero
+    /// The click count of the newest header press (2: the second click of a double-click).
+    private(set) var headerClickCount = 0
+    /// An edge drag under way: which edge, and where the window and the pointer started.
+    private var resizing: (zone: PanelResize.Zone, frame: NSRect, pointer: NSPoint)?
+    var isResizing: Bool { resizing != nil }
+    private var resizeChanged = false
+
+    /// The edge cursors sit in their own view on top of the content (it never takes a click).
+    override var contentView: NSView? {
+        didSet {
+            guard let contentView, edges.superview !== contentView else { return }
+            edges.frame = contentView.bounds
+            edges.autoresizingMask = [.width, .height]
+            contentView.addSubview(edges, positioned: .above, relativeTo: nil)
+        }
+    }
+    private let edges = ResizeEdgesView()
 
     /// The padding strip along the top and the whole header row. (The header's controls still get their clicks: see `sendEvent`.)
     func startsDrag(at p: NSPoint) -> Bool {
         frame.height - p.y < 40
+    }
+
+    /// The screen a resize may fill: the visible frame of the screen the chat is on.
+    var visibleArea: NSRect {
+        (screen ?? NSScreen.screens.first { $0.frame.intersects(frame) } ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -55,8 +80,30 @@ final class ChatPanel: FloatingPanel {
         case .leftMouseDown where startsDrag(at: event.locationInWindow):
             press.down(at: convertPoint(toScreen: event.locationInWindow))
             heldDown = event
+            headerClickCount = event.clickCount
             originStart = frame.origin
             if !AskPanelController.demoMode, !isKeyWindow { makeKey() } // clicking the chat still gives it the keyboard
+        case .leftMouseDown:
+            // An edge (the 6 pt band outside the content's padding, so no control is there): a resize. Not passed on.
+            guard let zone = PanelResize.zone(at: event.locationInWindow, in: frame.size) else { return super.sendEvent(event) }
+            resizing = (zone, frame, convertPoint(toScreen: event.locationInWindow))
+            resizeChanged = false
+            ResizeEdgesView.cursor(for: zone).set()
+            if !AskPanelController.demoMode, !isKeyWindow { makeKey() }
+        case .leftMouseDragged where resizing != nil:
+            guard let r = resizing else { return }
+            let p = convertPoint(toScreen: event.locationInWindow)
+            let target = PanelResize.resized(r.frame, zone: r.zone, by: NSPoint(x: p.x - r.pointer.x, y: p.y - r.pointer.y),
+                                             within: visibleArea)
+            if target != frame {
+                setFrame(target, display: true) // live, no animation
+                resizeChanged = true
+                onResized?(false)
+            }
+        case .leftMouseUp where resizing != nil:
+            resizing = nil
+            if resizeChanged { onResized?(true) } // a click on the edge that didn't move it is not a size set by hand
+            resizeChanged = false
         case .leftMouseDragged where press.isHeld:
             if let delta = press.moved(to: convertPoint(toScreen: event.locationInWindow)) {
                 heldDown = nil // it's a drag now: the control under the press never hears of it
@@ -76,12 +123,56 @@ final class ChatPanel: FloatingPanel {
     }
 }
 
+/// Shows a resize cursor over the chat's edges. A tracking area that is always active (the chat is a non-activating panel,
+/// often not the key window, where cursor rects don't update), setting the cursor on each move. Never takes a click.
+final class ResizeEdgesView: NSView {
+    private var showing: PanelResize.Zone?
+
+    static func cursor(for zone: PanelResize.Zone) -> NSCursor {
+        switch zone {
+        case .left: return .frameResize(position: .left, directions: .all)
+        case .right: return .frameResize(position: .right, directions: .all)
+        case .bottom: return .frameResize(position: .bottom, directions: .all)
+        case .bottomLeft: return .frameResize(position: .bottomLeft, directions: .all)
+        case .bottomRight: return .frameResize(position: .bottomRight, directions: .all)
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) { update(event) }
+    override func mouseEntered(with event: NSEvent) { update(event) }
+    override func mouseExited(with event: NSEvent) {
+        guard showing != nil, !((window as? ChatPanel)?.isResizing ?? false) else { return }
+        showing = nil
+        NSCursor.arrow.set()
+    }
+
+    private func update(_ event: NSEvent) {
+        guard let window, !((window as? ChatPanel)?.isResizing ?? false) else { return }
+        let zone = PanelResize.zone(at: event.locationInWindow, in: window.frame.size)
+        if let zone {
+            Self.cursor(for: zone).set()
+        } else if showing != nil {
+            NSCursor.arrow.set() // leaving the edge: back to the arrow (the content sets its own, e.g. over text)
+        }
+        showing = zone
+    }
+}
+
 /// Owns one agent: its popup window, its Claude session, its screenshot and its decay timer.
 /// The AgentDock decides where it goes when minimized.
 final class AskPanelController {
     enum Anchor {
         case selection(NSRect) // the ? icon's frame (or the snip's end point)
-        case dock(NSRect)      // the sidebar's frame; the chat opens to its left
+        case dock(NSRect)      // the edge panel's Chats list; the chat opens to its left
     }
 
     /// Normal width; the "make bigger" toggle multiplies it (see AskModel.width).
@@ -161,6 +252,11 @@ final class AskPanelController {
     /// Where you dragged the chat to (its top-left corner). Once set, the chat stays there: it opens
     /// there, grows from there, and doesn't fade away by itself.
     private var placedTopLeft: NSPoint?
+    /// A size set by hand (or the filled screen). Set: the chat keeps it, through minimize and restore, and stops growing
+    /// with its answer (the answer area scrolls). Nil: the auto size.
+    private var manualSize: CGSize?
+    /// The ⤢ button: fill the screen, and back.
+    private var fill = FillToggle()
     private var contentHeight: CGFloat = 140
     private var monitors: [Any] = []
     private var tick: Timer?
@@ -220,8 +316,13 @@ final class AskPanelController {
             askModel.learnMode = settings.learnMode
             askModel.onLearnChange = { Settings.shared.learnMode = $0 }
         }
+        // A new chat starts at the last size set by hand (test windows never read it: a stale saved size can't move them).
+        let start = Self.demoMode ? nil : ChatStartSize.resolve(saved: settings.chatSize, isVideo: selection.video != nil)
+        manualSize = start
+        askModel.isManualSize = start != nil
         model = askModel
-        panel = ChatPanel(size: NSSize(width: askModel.width, height: 140), canKey: !Self.demoMode) // test windows can never take your typing
+        panel = ChatPanel(size: NSSize(width: start?.width ?? askModel.width, height: start?.height ?? 140),
+                          canKey: !Self.demoMode) // test windows can never take your typing
 
         let effect = NSVisualEffectView.popoverBackdrop(radius: Self.cornerRadius)
         hosting = NSHostingView(rootView: ThemedRoot { AskView(model: askModel) })
@@ -256,7 +357,11 @@ final class AskPanelController {
         model.onDropDocument = { [weak self] in self?.dropDocument() }
         model.onQuizFinished = { [weak self] result in self?.quizFinished(result) }
         panel.onMoved = { [weak self] in self?.userMoved() }
+        panel.onResized = { [weak self] ended in self?.userResized(ended: ended) }
         model.onToggleSize = { [weak self] in self?.toggleSize() }
+        model.onHeaderTap = { [weak self] in
+            if self?.panel.headerClickCount == 2 { self?.toggleSize() } // a double-click on empty header space
+        }
         // A pronunciation plays by itself only while you're looking at the chat.
         model.speech.canAutoPlay = { [weak self] in
             guard let self else { return false }
@@ -264,6 +369,7 @@ final class AskPanelController {
         }
         model.onActivity = { [weak self] in self?.touch() }
         model.onAsk = { [weak self] prompt in self?.send(prompt) }
+        model.onCommand = { [weak self] text in self?.runTypedCommand(text) ?? false }
         model.onAskClaude = { [weak self] in self?.askClaudeInstead() }
         model.onToggleEngine = { [weak self] in self?.engineButtonTapped() }
         refreshEngineButton()
@@ -367,6 +473,20 @@ final class AskPanelController {
     private func userMoved() {
         guard !closed, !isMinimized else { return }
         placedTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        touch()
+    }
+
+    /// An edge was dragged: from now on the chat keeps this size (and spot). At the end of the drag the size is saved as
+    /// the one new chats start at.
+    private func userResized(ended: Bool) {
+        guard !closed, !isMinimized else { return }
+        WindowMotion.cancel(panel) // an auto-grow or a fill still running must not fight the drag
+        fill.forget()
+        model.isFilled = false
+        manualSize = panel.frame.size
+        if !model.isManualSize { model.isManualSize = true }
+        placedTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
+        if ended && !Self.demoMode { Settings.shared.chatSize = panel.frame.size }
         touch()
     }
 
@@ -900,6 +1020,19 @@ final class AskPanelController {
                 self.model.attachments.append(.init(data: data, thumb: NSImage(data: data)))
             }
         }
+    }
+
+    /// Typed and sent in a blank chat (nothing highlighted, no picture, no video or document, no earlier turns): a command
+    /// such as "open microeconomics note" runs here, no Claude session starts, this empty chat closes, and the result line
+    /// shows where the chat was. False for anything else, which is asked as usual.
+    private func runTypedCommand(_ text: String) -> Bool {
+        guard selection.isBlank, model.video == nil, docIndex == nil, model.turns.isEmpty, model.attachments.isEmpty,
+              let runner = CommandRunner.shared, let route = runner.commandRoute(text) else { return false }
+        let spot = panel.frame
+        close() // first, so "add this to …" takes the answer of the chat you used before this blank one
+        guard let line = runner.run(route) else { return true }
+        Toast.show(line, near: NSRect(x: spot.minX + 12, y: spot.maxY - 4, width: 1, height: 1))
+        return true
     }
 
     private func send(_ prompt: String) {
@@ -1513,56 +1646,40 @@ final class AskPanelController {
 
     // MARK: - Layout
 
-    /// The header's ⤢ button: 50% bigger (or back). The old layout stays pinned top-left while the
-    /// box grows, and the new layout fades in over it, so text never visibly reflows or stretches.
+    /// The header's ⤢ button (or a double-click on the header): fill the screen's visible area, and again to go back to
+    /// the exact size and spot it had. 0.25 s ease-out (none with Reduce Motion). While filled the size is fixed.
     private func toggleSize() {
-        guard !closed, !isMinimized, !inFlight, !awaitingFirstLayout else { return }
-        let from = panel.frame
-        let background = snapshotBackground
-        guard let before = snapshot() else {
-            model.isLarge.toggle()
-            Settings.shared.largePopup = model.isLarge
-            return
+        guard !closed, !isMinimized, !inFlight, !awaitingFirstLayout, !panel.isResizing else { return }
+        // An auto-size chat may be mid-grow: go back to where that grow was heading, not a half-grown frame.
+        let current = manualSize == nil ? targetFrame(height: contentHeight) : panel.frame
+        let to = fill.toggle(current: current, manual: manualSize != nil, screen: panel.visibleArea)
+        model.isFilled = fill.isFilled
+        manualSize = to.manual ? to.frame.size : nil
+        if to.manual { model.isManualSize = true }
+        let duration: TimeInterval = Motion.reduceMotion || Motion.still ? 0 : 0.25
+        WindowMotion.animate(panel, to: to.frame, duration: duration) { [weak self] in
+            guard let self else { return }
+            self.panel.invalidateShadow()
+            // Back to the auto size: the chat grows with its answer again (from the height it had).
+            if !to.manual { self.model.isManualSize = false }
         }
-        inFlight = true
-        let area = (NSScreen.screens.first { $0.frame.intersects(from) } ?? NSScreen.main)?.frame
-            ?? from.insetBy(dx: -400, dy: -400)
-        let ghost = Ghost(image: before, frame: from, radius: Self.cornerRadius,
-                          gravity: .topLeft, background: background, area: area)
-        panel.alphaValue = 0
-        model.isLarge.toggle()
-        Settings.shared.largePopup = model.isLarge
-
-        // Give SwiftUI a beat to lay out at the new size, then morph into it.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
-            guard let self, !self.closed else { return ghost.dismiss() }
-            self.hosting.layoutSubtreeIfNeeded()
-            let target = self.targetFrame(height: self.contentHeight)
-            self.panel.setFrame(target, display: true)
-            self.hosting.layoutSubtreeIfNeeded()
-            ghost.animate(to: target, radius: Self.cornerRadius, crossfadeTo: self.snapshot(),
-                          gravity: .topLeft, background: background,
-                          duration: 0.34, timing: Motion.easeOut) { [weak self] remove in
-                guard let self, !self.closed else { return remove() }
-                self.inFlight = false
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.1
-                    self.panel.animator().alphaValue = 1
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: remove)
-                self.resize(toContentHeight: self.contentHeight)
-            }
-        }
+        touch()
     }
+
+    /// The window grows and shrinks with its answer only while no size has been set by hand (and it isn't filling the screen).
+    static func followsContent(manualSize: CGSize?, viewIsManual: Bool) -> Bool { manualSize == nil && !viewIsManual }
 
     private func resize(toContentHeight h: CGFloat) {
         guard h > 0 else { return }
-        let changed = abs(h - contentHeight) > 0.5
-        contentHeight = h
         if awaitingFirstLayout {
+            if manualSize == nil { contentHeight = h }
             DispatchQueue.main.async { [weak self] in self?.appear() }
             return
         }
+        // A size set by hand wins: the window doesn't follow the content (its height then is the window's, not the answer's).
+        guard Self.followsContent(manualSize: manualSize, viewIsManual: model.isManualSize) else { return }
+        let changed = abs(h - contentHeight) > 0.5
+        contentHeight = h
         guard changed, !closed, !isMinimized, !inFlight else { return }
         let target = targetFrame(height: h)
         WindowMotion.animate(panel, to: target, duration: 0.22) { [weak self] in self?.panel.invalidateShadow() }
@@ -1588,7 +1705,8 @@ final class AskPanelController {
         case .selection(let r), .dock(let r): anchorRect = r
         }
         let vf = visibleFrame(around: placedTopLeft.map { NSRect(origin: $0, size: .zero) } ?? anchorRect)
-        let height = min(h, vf.height - 16)
+        let width = manualSize?.width ?? model.width
+        let height = manualSize?.height ?? min(h, vf.height - 16)
         var x: CGFloat
         var y: CGFloat
 
@@ -1601,13 +1719,18 @@ final class AskPanelController {
                 x = icon.minX - 12
                 y = growsDown ? icon.minY - 4 - height : icon.maxY + 4
             case .dock(let sidebar):
-                x = sidebar.minX - 12 - model.width          // to the left of the sidebar
+                x = sidebar.minX - 12 - width                // to the left of the sidebar
                 // A sidebar you've dragged to the left side of the screen has no room there: open on its right instead.
                 if x < vf.minX + 8 { x = sidebar.maxX + 12 }
                 y = sidebar.maxY - height                    // top-aligned with it
             }
             x += cascade.x
             y += cascade.y
+        }
+        if manualSize != nil {
+            // A size set by hand is kept exactly (only a screen smaller than it trims it); a chat you placed keeps its
+            // spot even flush with the screen's edge.
+            return PanelResize.fit(NSRect(x: x, y: y, width: width, height: height), into: vf, margin: placedTopLeft == nil ? 8 : 0)
         }
         x = min(max(x, vf.minX + 8), vf.maxX - model.width - 8)
         y = min(max(y, vf.minY + 8), vf.maxY - 8 - height)
@@ -1664,6 +1787,15 @@ final class AskPanelController {
     var debugIsPlaced: Bool { placedTopLeft != nil }
     var debugIsMinimized: Bool { isMinimized }
     func debugToggleSize() { toggleSize() }
+    var debugVisibleArea: NSRect { panel.visibleArea }
+    var debugIsFilled: Bool { fill.isFilled }
+    var debugIsManualSize: Bool { manualSize != nil }
+    var debugPanel: ChatPanel { panel }
+    /// Drags the chat's right edge with mouse events sent through the window (the path a real resize takes).
+    func debugDragRightEdge(by dx: CGFloat) {
+        panel.debugPlayDrag(from: NSPoint(x: panel.frame.width - 2, y: (panel.frame.height - PanelResize.header) / 2),
+                            by: NSSize(width: dx, height: 0))
+    }
     func debugInject(question: String, answer: String) { model.debugInject(question: question, answer: answer) }
     var debugSpeech: SpeechStore { model.speech }
     var debugFrame: NSRect { panel.frame }

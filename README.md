@@ -40,9 +40,11 @@ An agent opens right there with your snip as its "highlight". It can also see th
 
 The Tab key itself still works normally: Merlin only swallows the **\\** while Tab is held, so nothing gets typed into your document. It uses the US-layout backslash key.
 
-## Make it bigger
+## Chat size
 
-The **⤢** button in the chat header makes the popup 50% bigger: 380 → 570pt wide, and the answer area 360 → 540pt tall. Click **⤡** to go back. Merlin remembers your choice for the next popup.
+Drag a chat's left, right or bottom edge (or a bottom corner) to resize it, from 360 × 260 pt up to the whole screen. The top strip still moves the chat. After you resize a chat, it keeps that size (also when you put it away and bring it back), and a long answer scrolls inside it. A new chat opens at the last size you set; until you set one, a chat grows with its answer.
+
+The **⤢** button in the chat header (or a double-click on the header) fills the screen. Click **⤡** to go back to the size and spot it had.
 
 ## Hear it: pronunciation voice messages
 
@@ -327,8 +329,7 @@ swift build -c release
 | `AskPanel.swift` | One agent: draggable popup window, minimize/expand, phases, picking who answers, screenshot handoff, 20s fade |
 | `AskView.swift` | SwiftUI content: quote, chips, live status, streaming answers, Minimize, Go deeper, Ask Claude |
 | `AgentDock.swift` | Up to 10 chats, which one is open, the "all busy" notice |
-| `AgentSidebar.swift` | The black sidebar: rows, fold/unfold, hover ×, where circles fly to |
-| `AgentBubble.swift` | The row circle with the purple or green glow, and the aura around it |
+| `EdgePanel.swift` | The hidden panel at the middle of the right screen edge: Chats and Notes lists, the status dot, when it shows and hides |
 | `ClaudeSession.swift` | `claude -p` process: stream-json in and out, images, tool activity, per-turn token counts. Also the `AnswerSession` protocol Claude and the local model share |
 | `Router.swift` | Local mode's policy: who answers a question (the local model, a lean Claude call, or full Claude), and when a chat moves up. Pure functions, unit-tested |
 | `Ollama.swift` | The Ollama client (is it running? is the model there? load it ahead of time) and `LocalSession`, which streams an answer from the model on your Mac |

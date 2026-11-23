@@ -20,6 +20,17 @@ enum Motion {
     static let snappy = functional
     static let smooth = functional
     static let quick = small
+    // The edge panel (R3). Values checked against motion.dev's guidance; the spec's own values are kept.
+    /// Slide in from the screen edge: 0.22 s on a strong ease-out (0.23, 1, 0.32, 1).
+    static let edgeIn = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.22)
+    /// Slide out: 0.16 s, faster than the entry.
+    static let edgeOut = Animation.timingCurve(0.23, 1, 0.32, 1, duration: 0.16)
+    /// The box growing into its list: one shape changing size, 0.28 s, no bounce.
+    static let edgeGrow = Animation.spring(duration: 0.28, bounce: 0)
+    /// The rise under the pointer: a spring with no bounce.
+    static let edgeRise = Animation.spring(duration: 0.25, bounce: 0)
+    /// Rows fade in one after another, 30 ms apart, capped so the last starts within 0.12 s (the whole list stays under 0.3 s).
+    static func edgeStagger(_ index: Int) -> Double { Double(min(index, 4)) * 0.03 }
     /// `a`, or a 0.12 s ease-out when Reduce Motion is on (pair with opacity-only changes).
     static func animation(_ a: Animation) -> Animation { reduceMotion ? .easeOut(duration: 0.12) : a }
 
@@ -238,6 +249,13 @@ final class Ghost {
 /// on the target.)
 enum WindowMotion {
     private static var timers: [ObjectIdentifier: Timer] = [:]
+
+    /// Stops a running resize where it is (a hand drag takes over).
+    static func cancel(_ window: NSWindow) {
+        let key = ObjectIdentifier(window)
+        timers[key]?.invalidate()
+        timers[key] = nil
+    }
 
     static func animate(_ window: NSWindow, to target: NSRect, duration: TimeInterval = 0.2, completion: (() -> Void)? = nil) {
         let key = ObjectIdentifier(window)

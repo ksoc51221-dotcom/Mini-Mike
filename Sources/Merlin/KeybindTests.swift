@@ -79,8 +79,10 @@ extension FeatureTests {
               Set(all.map(\.id)).count == all.count && Set(all.map(\.title)).count == all.count
               && Set(all.map { "\($0.defaultChord.keyCode)-\($0.defaultChord.display)" }).count == all.count
               && all.allSatisfy { !$0.title.isEmpty && !$0.detail.isEmpty })
-        check("commands: the five anywhere shortcuts keep the ids and chords they always had",
-              ShortcutCommand.inScope(.global).map(\.id) == ["snip", "chat", "talk", "history", "engine"]
+        check("commands: the five first anywhere shortcuts keep the ids and chords they always had (the edge panel's is sixth)",
+              ShortcutCommand.inScope(.global).map(\.id) == ["snip", "chat", "talk", "history", "engine", "edgePanel"]
+              && d.chord(.edgePanel) == Chord(keyCode: 30, holdTab: true) && d.chord(.edgePanel).display == "Tab + ]"
+              && d.action(keyCode: 30, flags: [], tabHeld: true) == .edgePanel && d.action(keyCode: 30, flags: [], tabHeld: false) == nil
               && d.chord(.snip) == Chord(keyCode: 42, holdTab: true) && d.chord(.chat) == Chord(keyCode: 48, shift: true, option: true)
               && d.chord(.talk) == Chord(keyCode: 12, holdTab: true) && d.chord(.history) == Chord(keyCode: 37, command: true, shift: true)
               && d.chord(.engine) == Chord(keyCode: 37, shift: true, control: true))
@@ -88,7 +90,7 @@ extension FeatureTests {
               d.chord(.libraryNewChat).display == "⌘N" && d.chord(.librarySearch).display == "⌘K" && d.chord(.librarySearchAlt).display == "⌘F"
               && d.chord(.libraryMove).display == "⇧⌘M" && d.chord(.libraryBin).display == "⌘⌫")
         check("commands: globals come first in the list (they win a clash)",
-              all.prefix(5).allSatisfy { $0.scope == .global } && all.dropFirst(5).allSatisfy { $0.scope != .global })
+              all.prefix(6).allSatisfy { $0.scope == .global } && all.dropFirst(6).allSatisfy { $0.scope != .global })
         check("commands: the defaults don't clash with each other or with a fixed chord", d.conflicting.isEmpty)
         check("commands: every default can be used (usable, and a window one maps to a SwiftUI key)",
               all.allSatisfy { Keybinds.problem($0.defaultChord, for: $0) == nil })
@@ -211,7 +213,7 @@ extension FeatureTests {
 
         // ⌘, and ⌘[ are Library commands now (open the settings, back to the Library), not hard-coded keys.
         check("commands: 'Open settings' (⌘,) and 'Back to the Library' (⌘[) are Library commands",
-              d.chord(.libraryOpenSettings).display == "⌘," && d.chord(.libraryBack).display == "⌘[" && all.count == 12
+              d.chord(.libraryOpenSettings).display == "⌘," && d.chord(.libraryBack).display == "⌘[" && all.count == 13
               && ShortcutCommand.libraryOpenSettings.scope == .library && ShortcutCommand.libraryBack.scope == .library
               && d.chord(.libraryOpenSettings).keyboardShortcut != nil && d.chord(.libraryBack).keyboardShortcut != nil)
         check("commands: ⌘, is theirs now, not 'macOS for Settings'", Keybinds.fixedUse(of: d.chord(.libraryOpenSettings)) == nil)

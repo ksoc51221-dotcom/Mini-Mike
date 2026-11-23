@@ -102,17 +102,45 @@ final class Settings {
         set { defaults.set(newValue.rawValue, forKey: "pointToAskKey") }
     }
 
-    /// The popup's "make bigger" toggle (remembered for the next popup).
-    var largePopup: Bool {
-        get { defaults.bool(forKey: "largePopup") }
-        set { defaults.set(newValue, forKey: "largePopup") }
+    /// The last chat size set by hand (a drag on a chat's edge); a new chat starts at it. Nil: the auto size (the chat
+    /// grows with its answer). Replaces the old "make bigger" switch (`largePopup`): on first read, a Mac that had it on
+    /// gets the old big size saved once, and `largePopup` is never read again.
+    var chatSize: CGSize? {
+        get {
+            migrateLargePopup()
+            let w = defaults.double(forKey: Self.chatWidthKey), h = defaults.double(forKey: Self.chatHeightKey)
+            return w > 0 && h > 0 ? CGSize(width: w, height: h) : nil
+        }
+        set {
+            migrateLargePopup() // so an old switch can't come back over a size set (or cleared) later
+            if let s = newValue, s.width > 0, s.height > 0 {
+                defaults.set(Double(s.width), forKey: Self.chatWidthKey)
+                defaults.set(Double(s.height), forKey: Self.chatHeightKey)
+            } else {
+                defaults.removeObject(forKey: Self.chatWidthKey)
+                defaults.removeObject(forKey: Self.chatHeightKey)
+            }
+        }
+    }
+    static let chatWidthKey = "chatWidth", chatHeightKey = "chatHeight"
+    /// The old "make bigger" chat: 570 wide, and a 540 pt answer area plus about 120 pt of header, source line and question box.
+    static let largeChatSize = CGSize(width: 570, height: 660)
+
+    private func migrateLargePopup() {
+        guard !defaults.bool(forKey: "chatSizeMigrated") else { return }
+        defaults.set(true, forKey: "chatSizeMigrated")
+        if defaults.double(forKey: Self.chatWidthKey) <= 0, defaults.bool(forKey: "largePopup") {
+            defaults.set(Double(Self.largeChatSize.width), forKey: Self.chatWidthKey)
+            defaults.set(Double(Self.largeChatSize.height), forKey: Self.chatHeightKey)
+        }
     }
 
-    /// Whether the chat sidebar is unfolded (otherwise it's a slim strip of dots).
-    var sidebarOpen: Bool {
-        get { defaults.object(forKey: "sidebarOpen") as? Bool ?? true }
-        set { defaults.set(newValue, forKey: "sidebarOpen") }
+    /// "Show a dot at the screen edge while Merlin works": the only thing the hidden edge panel shows at rest (on by default).
+    var edgeDot: Bool {
+        get { defaults.object(forKey: Self.edgeDotKey) as? Bool ?? true }
+        set { defaults.set(newValue, forKey: Self.edgeDotKey) }
     }
+    static let edgeDotKey = "edgeDot"
 
     /// Local mode: quick questions and short summaries are answered by a model on this Mac (through Ollama)
     /// instead of Claude. Off unless you turn it on.
@@ -226,22 +254,6 @@ final class Settings {
         set { defaults.set(newValue, forKey: "mirrorNotes") }
     }
 
-    /// Where you dragged the chat sidebar: the screen point of its top-right corner. nil = the default top-right of the laptop screen.
-    var sidebarAnchor: NSPoint? {
-        get {
-            guard let x = defaults.object(forKey: "sidebarAnchorX") as? Double, let y = defaults.object(forKey: "sidebarAnchorY") as? Double else { return nil }
-            return NSPoint(x: x, y: y)
-        }
-        set {
-            if let p = newValue {
-                defaults.set(Double(p.x), forKey: "sidebarAnchorX")
-                defaults.set(Double(p.y), forKey: "sidebarAnchorY")
-            } else {
-                defaults.removeObject(forKey: "sidebarAnchorX")
-                defaults.removeObject(forKey: "sidebarAnchorY")
-            }
-        }
-    }
 
     /// Chats stay on screen, as many as you like at once, until you close or minimize them yourself: clicking elsewhere or
     /// leaving one alone doesn't put it away. Off = the old way (one chat at a time, tidied away when you click off it).

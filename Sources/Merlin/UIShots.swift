@@ -100,6 +100,19 @@ enum UIShots {
                 shot(name, hostedSize: CGSize(width: model.width, height: large ? 700 : 560),
                      panel(mode, radius: AskPanelController.cornerRadius, AskView(model: model).frame(width: model.width, height: large ? 700 : 560)))
             }
+            // R5: the same chat at a size set by hand: wide, and the smallest allowed. The answer area scrolls inside.
+            for (name, size) in [("table-7-chat-hand-wide", CGSize(width: 760, height: 520)), ("table-8-chat-smallest", PanelResize.minSize)] {
+                let model = tableChatModel(large: false)
+                model.isManualSize = true
+                shot(name, hostedSize: size,
+                     panel(mode, radius: AskPanelController.cornerRadius, AskView(model: model).frame(width: size.width, height: size.height)))
+            }
+            do {
+                let model = boardChatModel()
+                model.isManualSize = true
+                shot("board-5-chat-hand-wide", hostedSize: CGSize(width: 760, height: 560),
+                     panel(mode, radius: AskPanelController.cornerRadius, AskView(model: model).frame(width: 760, height: 560)))
+            }
             shot("board-4-chat", hostedSize: CGSize(width: AskPanelController.width, height: 520), panel(mode, radius: AskPanelController.cornerRadius, AskView(model: boardChatModel()).frame(width: AskPanelController.width, height: 520)))
             // The 3D scenes (atom; forces on a block) at the chat's answer width. A live SCNView can't be captured, so
             // with Motion.still the card shows an offscreen SCNRenderer picture of the same scene (orbits at their start).
@@ -120,59 +133,22 @@ enum UIShots {
                 failed.append("trigger-\(mode.name)")
             }
 
-            // The minimized sidebar: three rows (working, done, error), the folded strip.
-            var side: CGImage?
-            var strip: CGImage?
-            mode.appearance.performAsCurrentDrawingAppearance {
-                side = AgentSidebar.shotImage(titles: [
-                    ("Closures capture by reference", "Searching the web…", .working, true),
-                    ("Supply shift effects", "Done · click to read", .done, false),
-                    ("Stress in замок", "Something went wrong", .failed, false),
-                ])
-                strip = AgentSidebar.shotImage(titles: [("a", "", .working, false), ("b", "", .done, false), ("c", "", .failed, false)], open: false)
-            }
-            if let side, let strip {
-                shot("sidebar", margin: 24, HStack(alignment: .top, spacing: 24) {
-                    Image(decorative: side, scale: 2)
-                    Image(decorative: strip, scale: 2)
-                })
-            } else {
-                failed.append("sidebar-\(mode.name)")
-            }
-
-            // The Chats card up close, with the words the app really shows: one row, then every state; and the folded pill
-            // with one chat idle, working, done, plus a mixed stack.
-            var dockOne: CGImage?, dockAll: CGImage?
-            var pills: [CGImage] = []
-            mode.appearance.performAsCurrentDrawingAppearance {
-                dockOne = AgentSidebar.shotImage(titles: [("hi", "Done · click to read", .done, false)])
-                dockAll = AgentSidebar.shotImage(titles: [
-                    ("Closures capture by reference", "Working on it…", .working, true),
-                    ("Why is the sky blue", "Searching the web…", .working, false),
-                    ("Supply shift effects", "Done · click to read", .done, false),
-                    ("New chat", "Waiting for your question", .idle, false),
-                    ("Stress in замок", "Something went wrong", .failed, false),
-                ])
-                for phase in [AgentPhase.idle, .working, .done] {
-                    if let p = AgentSidebar.shotImage(titles: [("a", "", phase, false)], open: false) { pills.append(p) }
-                }
-                if let p = AgentSidebar.shotImage(titles: [("a", "", .working, false), ("b", "", .done, false), ("c", "", .idle, false)], open: false) { pills.append(p) }
-            }
-            if let dockOne, let dockAll {
-                shot("dock-rows", margin: 24, HStack(alignment: .top, spacing: 24) {
-                    Image(decorative: dockOne, scale: 2)
-                    Image(decorative: dockAll, scale: 2)
-                })
-            } else {
-                failed.append("dock-rows-\(mode.name)")
-            }
-            if pills.count == 4 {
-                shot("dock-pill", margin: 24, HStack(alignment: .top, spacing: 28) {
-                    ForEach(pills.indices, id: \.self) { Image(decorative: pills[$0], scale: 2) }
-                })
-            } else {
-                failed.append("dock-pill-\(mode.name)")
-            }
+            // The hidden edge panel (R3), which replaced the Chats sidebar: at rest (only the dot at a screen edge, working
+            // and answer ready), the two-choice box (resting and under the pointer), the Chats list, the Notes list.
+            shot("edge-1-rest", margin: 24, HStack(spacing: 24) {
+                edgeRest(.breathing, "Working", mode)
+                edgeRest(.solid, "Answer ready", mode)
+                edgeRest(.absent, "Nothing going on", mode)
+            })
+            shot("edge-2-box", margin: 24, HStack(alignment: .center, spacing: 32) {
+                EdgePanelView(model: edgeModel(nil), framed: false)
+                EdgePanelView(model: edgeModel(nil, hovering: true), framed: false)
+            })
+            shot("edge-3-chats", margin: 24, EdgePanelView(model: edgeModel(.chats), framed: false))
+            shot("edge-4-notes", margin: 24, HStack(alignment: .top, spacing: 24) {
+                EdgePanelView(model: edgeModel(.notes), framed: false)
+                EdgePanelView(model: edgeModel(.notes, empty: true), framed: false)
+            })
 
             // The Assistant's button up close: in the Library's sidebar (resting, open, working) and in the settings list.
             shot("assistant-button", margin: 20, HStack(alignment: .top, spacing: 20) {
@@ -396,6 +372,46 @@ enum UIShots {
         LinearGradient(colors: mode.dark ? [Color(white: 0.22), Color(white: 0.30)] : [Color(white: 0.74), Color(white: 0.84)],
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
+
+    /// The right part of a screen at rest: only the edge dot shows, at the middle of the right edge (a slim bezel beyond it).
+    private static func edgeRest(_ state: EdgeDotState, _ caption: String, _ mode: Mode) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 0) {
+                ZStack(alignment: .trailing) {
+                    // The desktop: a plain wallpaper tone, a little different from the picture's backdrop.
+                    Rectangle().fill(mode.dark ? Color(white: 0.16) : Color(white: 0.93))
+                    EdgeDotView(state: state).padding(.trailing, EdgeDotWindow.inset)
+                }
+                Rectangle().fill(Color.black).frame(width: 6) // the bezel
+            }
+            .frame(width: 150, height: 180)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            Text(caption).font(.mMeta).foregroundStyle(Theme.inkSecondary.color)
+        }
+    }
+
+    /// The edge panel's model with made-up chats and notes.
+    private static func edgeModel(_ section: EdgePanelModel.Section?, hovering: Bool = false, empty: Bool = false) -> EdgePanelModel {
+        let m = EdgePanelModel()
+        let owners = (0..<3).map { _ in NSObject() }
+        edgeOwners.append(contentsOf: owners)
+        m.chats = [
+            .init(id: ObjectIdentifier(owners[0]), title: "Closures capture by reference", subtitle: "Searching the web…", phase: .working, isOpen: true, canStar: true),
+            .init(id: ObjectIdentifier(owners[1]), title: "Supply shift effects", subtitle: "Done · click to read", phase: .done, isOpen: false, starred: true, canStar: true),
+            .init(id: ObjectIdentifier(owners[2]), title: "Stress in замок", subtitle: "Something went wrong", phase: .failed, isOpen: false, canStar: true),
+        ]
+        m.notes = empty ? [] : [
+            .init(id: UUID(), title: "Microeconomics terms", detail: "Changed 5 min ago"),
+            .init(id: UUID(), title: "Physics: forces", detail: "Changed yesterday"),
+            .init(id: UUID(), title: "Macro essay plan", detail: "Changed 3 days ago"),
+        ]
+        m.section = section
+        m.shown = true
+        m.hoveringBox = hovering
+        return m
+    }
+    /// Keeps the rows' made-up owners alive while the pictures are drawn (their ids must stay unique).
+    private static var edgeOwners: [NSObject] = []
 
     /// A frosted panel photographed without its blur: a flat colour where the material would be, clipped and rimmed like the real one.
     private static func panel<V: View>(_ mode: Mode, radius: CGFloat, _ view: V) -> some View {

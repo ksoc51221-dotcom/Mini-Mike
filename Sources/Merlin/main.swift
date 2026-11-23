@@ -15,6 +15,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingSpoken: String?
     /// A point-to-ask picture is being taken.
     private var pointCapturing = false
+    /// A spoken command came while pointing: the picture that comes next is not asked about (no chat opens).
+    private var dropComingPicture = false
+    /// "Open microeconomics note", "show my chats": commands that act and open no chat (spoken here, typed in a blank chat).
+    private lazy var commands = CommandRunner.live(dock: dock)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ThemeStore.shared.applyMode()
@@ -27,8 +31,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if paused { self?.trigger.hide() }
         }
         statusMenu.agentCount = { [weak self] in self?.dock.count ?? 0 }
-        statusMenu.sidebarIsOpen = { [weak self] in self?.dock.sidebarIsOpen ?? true }
-        statusMenu.onToggleSidebar = { [weak self] in self?.dock.toggleSidebar() }
+        // The hidden edge panel (chats and notes at the middle of the right screen edge). It never shows during point to
+        // ask or while a point-to-ask picture is taken (a snip, a drag and a full-screen app are checked inside).
+        let edge = EdgePanelController.shared
+        edge.isBlocked = { [weak self] in
+            guard let self else { return false }
+            return self.pointAsk.isActive || self.pointCapturing
+        }
+        edge.start()
+        statusMenu.onShowEdgePanel = { edge.show(.chats) }
+        CommandRunner.shared = commands
         statusMenu.onHistory = { notebook in LibraryWindow.shared.show(notebook: notebook) }
         statusMenu.onScreenshots = { LibraryWindow.shared.show(mode: .screenshots) }
         statusMenu.onBin = { LibraryWindow.shared.show(mode: .bin) }
@@ -53,7 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.voice.dismiss()
             self?.pendingPicture = nil
         }
-        hotkeys.onPointStart = { [weak self] from, to in self?.pointAsk.begin(from: from, to: to) }
+        hotkeys.onPointStart = { [weak self] from, to in
+            self?.dropComingPicture = false
+            self?.pointAsk.begin(from: from, to: to)
+        }
         hotkeys.onPointMove = { [weak self] p in self?.pointAsk.move(to: p) }
         hotkeys.onPointCancel = { [weak self] in
             self?.pointAsk.cancel()
@@ -63,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.onHistory = { LibraryWindow.shared.toggle() }
         hotkeys.onSystemShot = { ScreenshotInbox.shared.noteCaptureKey() }
         hotkeys.onEngine = { [dock] in dock.toggleEngineOfOpenChat() }
+        hotkeys.onEdgePanel = { edge.toggleFromShortcut() }
+        hotkeys.onPointerMoved = { p in edge.tapMoved(p) } // on the tap's thread: a few rect checks, nothing more
         hotkeys.onDoubleShift = { [dock] in dock.attachScreenshotToOpenChat() }
         voice.onCommand = { [weak self] text in self?.voiceCommand(text) }
         voice.warmUp() // loads the speech model now, so the first talk is as quick as any other
@@ -121,9 +138,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let text = CommandCenter.cleaned(spoken)
         guard !text.isEmpty else { return }
         trigger.hide()
-        switch CommandCenter.route(text) {
+        let route = CommandCenter.route(text, sheets: Library.shared.sheets.map(\.name))
+        switch route {
         case .video(let intent):
             return summarizeVideo(intent)
+        case .openNote, .addToNote, .newNote, .openChats, .openNotes:
+            // A command acts at once and opens no chat. A point-to-ask picture meant for these words is dropped.
+            pendingPicture = nil
+            pendingSpoken = nil
+            if pointAsk.isActive || pointCapturing { dropComingPicture = true }
+            if let line = commands.run(route) { voice.say(line) }
+            return
         case .calendar, .ask:
             break
         }
@@ -205,7 +230,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             taken = true
             self.pointCapturing = false
-            if let spoken = self.pendingSpoken {
+            if self.dropComingPicture {
+                self.dropComingPicture = false // the words were a command; it already ran, and the picture is dropped
+            } else if let spoken = self.pendingSpoken {
                 self.pendingSpoken = nil
                 self.askAboutSnip(jpeg: jpeg, png: png, mouse: mouse, app: app, asking: spoken, source: .point)
             } else if withTalk && self.voice.isBusy {
@@ -218,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in
             guard let self, !taken, self.pointCapturing else { return }
             self.pointCapturing = false
+            self.dropComingPicture = false
             self.flushSpoken()
         }
     }
@@ -321,6 +349,18 @@ if arguments.contains("--doctest") { FeatureTests.liveDocumentTest() }
 if arguments.contains("--voicecheck") { FeatureTests.voiceCheck() }
 if arguments.contains("--voicelag") { FeatureTests.voiceLag() }
 if arguments.contains("--voicedictation") { FeatureTests.dictationTest() }
+// `--loadcheck <dir>`: loads a COPY of a Library folder and prints what was read against what is on disk. Never point it at the real folder.
+if let i = arguments.firstIndex(of: "--loadcheck"), let dir = argument(after: i) {
+    let url = URL(fileURLWithPath: dir)
+    func files(_ sub: String) -> Int { ((try? FileManager.default.contentsOfDirectory(atPath: url.appendingPathComponent(sub).path)) ?? []).filter { $0.hasSuffix(".json") }.count }
+    let before = (files("chats"), files("notes"), files("screenshots"), files("bin"))
+    let lib = Library(directory: url)
+    print("on disk before: chats=\(before.0) notes=\(before.1) screenshots=\(before.2) bin=\(before.3)")
+    print("loaded:         chats=\(lib.chats.count) notes=\(lib.notes.count) screenshots=\(lib.screenshots.count) bin=\(lib.binned.count) sheets=\(lib.sheets.count)")
+    lib.flush()
+    print("on disk after:  chats=\(files("chats")) notes=\(files("notes")) screenshots=\(files("screenshots")) bin=\(files("bin"))")
+    exit(0)
+}
 if arguments.contains("--trailcheck") { PointToAsk.liveTrailCheck() }
 if arguments.contains("--voicemodelcheck") { Dictation.printModelStatus() }
 if arguments.contains("--namingtest") { FeatureTests.liveNamingTest() }

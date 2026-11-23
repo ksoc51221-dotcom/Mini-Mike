@@ -140,44 +140,33 @@ enum SelfTest {
     /// Merlin --youtubetest [id]: reads a real video's transcript and has Claude summarize it.
     private static var liveSession: ClaudeSession?
 
-    /// Merlin --placetest [dir]: shows the sidebar with all 10 agents (finished) on your real screen and checks each
-    /// circle sits where the dock expects it, each aura is centered on its circle, the sidebar fits on the screen,
-    /// and the painted check is centered inside the circle. With a folder, saves a picture of the sidebar.
+    /// Merlin --placetest [dir]: shows the edge panel's Chats list with all 10 agents on your real screen (pinned, for about
+    /// two seconds) and checks it sits at the middle of the right edge, fits on the screen and lists every chat. (The old
+    /// circle's painted-check test went with the circles.) With a folder, saves a picture of the panel.
     static func placeTest(outputDirectory: String?) -> Never {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
-        let sidebar = AgentSidebar(open: true)
+        let edge = EdgePanelController()
         let owners = (0..<Settings.shared.maxAgents).map { _ in NSObject() }
         let titles = ["What does by reference mean here?", "Explain supply and demand", "Snip from Preview", "Summarize this video"]
-        sidebar.sync(owners.enumerated().map { i, o in
-            AgentSidebar.Row(id: ObjectIdentifier(o), title: titles[i % titles.count], subtitle: "Done. Click to read",
-                             phase: i == 1 ? .working : .done, isOpen: i == 0)
+        edge.sync(owners.enumerated().map { i, o in
+            EdgePanelModel.ChatRow(id: ObjectIdentifier(o), title: titles[i % titles.count], subtitle: "Done · click to read",
+                                   phase: i == 1 ? .working : .done, isOpen: i == 0)
         })
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { // after the check has painted itself in
+        edge.show(.chats, animated: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
             var ok = true
-            let screen = (NSScreen.screens.first { $0.isBuiltIn } ?? NSScreen.main!).visibleFrame
-            let frame = sidebar.debugPanelFrame
+            let frame = edge.debugPanelFrame
+            let screen = (NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(frame) } ?? NSScreen.main!).frame
             let fits = screen.insetBy(dx: -0.5, dy: -0.5).contains(frame)
-            ok = ok && fits
-            print(String(format: "sidebar %.0f×%.0f at (%.0f, %.0f) — %@ the screen's usable area",
-                         frame.width, frame.height, frame.minX, frame.minY, fits ? "inside" : "OUTSIDE"))
-            for (i, row) in sidebar.debugRows.enumerated() {
-                let off = hypot(row.aura.x - row.disc.x, row.aura.y - row.disc.y)
-                let misplaced = hypot(row.disc.x - row.expected.x, row.disc.y - row.expected.y)
-                ok = ok && off < 0.5 && misplaced < 0.5
-                print(String(format: "row %d: circle (%.0f, %.0f)  aura off by %.1f pt  circle off its slot by %.1f pt",
-                             i, row.disc.x, row.disc.y, off, misplaced))
-            }
-            ok = ok && sidebar.debugRows.count == owners.count
-            // The check's ink box, in units of the circle's radius (0 = centered).
-            if let box = BrushCheck.inkBox(side: 200) {
-                let off = hypot(box.midX, box.midY)
-                ok = ok && off < 0.08
-                print(String(format: "check: x %.2f…%.2f, y %.2f…%.2f, off center by %.2f of the radius",
-                             box.minX, box.maxX, box.minY, box.maxY, off))
-            }
-            if let outputDirectory, let rep = sidebar.debugSnapshot() {
-                let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("sidebar.png")
+            let centred = abs(frame.midY - screen.midY) < 1 && abs(frame.maxX - (screen.maxX - EdgePanelLayout.gap)) < 1
+            ok = ok && fits && centred && edge.debugIsVisible
+            print(String(format: "edge panel %.0f×%.0f at (%.0f, %.0f) — %@ the screen, %@ on its right edge",
+                         frame.width, frame.height, frame.minX, frame.minY, fits ? "inside" : "OUTSIDE", centred ? "centred" : "NOT centred"))
+            ok = ok && edge.debugRowCount == owners.count
+            print("rows listed: \(edge.debugRowCount) of \(owners.count)")
+            if let outputDirectory, let rep = edge.debugSnapshot() {
+                let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("edge-panel.png")
                 try? rep.representation(using: .png, properties: [:])?.write(to: url)
                 print("saved \(url.path)")
             }
@@ -267,21 +256,18 @@ enum SelfTest {
         exit(0)
     }
 
-    /// Merlin --sidebartest [dir]: runs the sidebar's rules on your real screen with test chats (no Claude questions
-    /// are asked): clicking away keeps a chat, a row reopens it, dragging places it, only × deletes, the sidebar folds
-    /// and fits 10 chats, chats stay open side by side, the sidebar can be dragged. With a folder, saves a picture of the sidebar.
+    /// Merlin --sidebartest [dir]: runs the chat dock's rules on your real screen with test chats (no Claude questions are
+    /// asked), now with the hidden edge panel in place of the old sidebar: clicking away keeps a chat, a panel row reopens
+    /// it, dragging places it, only × deletes, the panel shows pinned and hides on Esc's path, it fits 10 chats, chats stay
+    /// open side by side. With a folder, saves a picture of the panel.
     static func sidebarTest(outputDirectory: String?) -> Never {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
         AskPanelController.demoMode = true
-        let wasOpen = Settings.shared.sidebarOpen
-        let wasAnchor = Settings.shared.sidebarAnchor
         let wasStay = Settings.shared.chatsStayOpen
-        Settings.shared.sidebarOpen = true
-        Settings.shared.sidebarAnchor = nil
         Settings.shared.chatsStayOpen = true
-        let dock = AgentDock()
-        let sidebar = dock.debugSidebar
+        let dock = AgentDock(edge: EdgePanelController())
+        let sidebar = dock.debugEdge
         var failures = 0
         func check(_ name: String, _ ok: Bool) {
             print((ok ? "ok   " : "FAIL ") + name)
@@ -289,8 +275,6 @@ enum SelfTest {
         }
         func after(_ s: Double, _ f: @escaping () -> Void) { DispatchQueue.main.asyncAfter(deadline: .now() + s, execute: f) }
         func finish() -> Never {
-            Settings.shared.sidebarOpen = wasOpen
-            Settings.shared.sidebarAnchor = wasAnchor
             Settings.shared.chatsStayOpen = wasStay
             print(failures == 0 ? "SIDEBARTEST PASS" : "SIDEBARTEST FAIL (\(failures))")
             exit(failures == 0 ? 0 : 1)
@@ -309,14 +293,18 @@ enum SelfTest {
         first?.debugInject(question: "What does by reference mean here?", answer: "It means the closure sees later changes.")
 
         after(1.0) {
-            check("sidebar appears with the chat's row", sidebar.debugIsVisible && sidebar.debugTitles().count == 1)
+            check("the edge panel lists the chat's row and stays hidden at rest", !sidebar.debugIsVisible && sidebar.debugTitles().count == 1)
             check("the new chat starts open", first?.debugIsMinimized == false)
             first?.dismissGesture() // what clicking anywhere else does
         }
         after(1.9) {
             check("clicking away keeps the chat (it is not deleted)", first != nil && dock.count == 1)
-            check("…it goes to the sidebar", first?.debugIsMinimized == true && sidebar.debugTitles().count == 1)
+            check("…it goes to the edge panel", first?.debugIsMinimized == true && sidebar.debugTitles().count == 1)
+            check("…which still shows nothing at rest", !sidebar.debugIsVisible)
+            sidebar.show(.chats)
+            check("the panel shows when asked (pinned)", sidebar.debugIsVisible)
             sidebar.debugClickRow(0)
+            check("clicking a row hides the panel", !sidebar.isVisible)
         }
         after(2.9) {
             guard let agent = first else { finish() }
@@ -328,24 +316,36 @@ enum SelfTest {
             check("…and is remembered as placed", agent.debugIsPlaced)
             agent.debugToggleSize()
             after(1.0) {
-                check("making it bigger keeps its top-left corner where you put it", sameCorner(agent.debugPanelFrame, moved))
+                check("⤢ fills the screen's visible area", agent.debugPanelFrame.equalTo(agent.debugVisibleArea))
+                agent.debugToggleSize()
+                after(0.6) {
+                check("⤢ again puts it back where you put it, at its width",
+                      sameCorner(agent.debugPanelFrame, moved) && abs(agent.debugPanelFrame.width - moved.width) < 1.5)
+                agent.debugDragRightEdge(by: 80) // a size set by hand
+                let handSized = agent.debugPanelFrame
+                check("a drag on the right edge resizes the chat by hand",
+                      abs(handSized.width - moved.width - 80) < 1.5 && sameCorner(handSized, moved) && agent.debugIsManualSize)
                 dock.debugMinimize(agent)
                 after(1.0) {
-                    check("it minimizes into the sidebar", agent.debugIsMinimized)
+                    check("it minimizes into the edge panel", agent.debugIsMinimized)
                     sidebar.debugClickRow(0)
                     after(1.0) {
                         check("it reopens right where you left it", sameCorner(agent.debugPanelFrame, moved))
+                        check("…at the size you set by hand", agent.debugPanelFrame.size == handSized.size)
                         sidebar.debugClickDelete(0) // the × on its row
                     }
+                }
                 }
             }
         }
         after(7.2) {
             check("× on the row deletes the chat", first == nil && dock.count == 0)
             check("no row is left", sidebar.debugTitles().isEmpty)
+            sidebar.show(.chats)
         }
         after(8.0) {
-            check("an empty sidebar goes away", !sidebar.debugIsVisible)
+            check("an empty Chats list says so and stays until it is closed", sidebar.debugIsVisible && sidebar.debugRowCount == 0)
+            sidebar.hide()
             // A chat with nothing in it has nothing to keep: clicking away just removes it.
             dock.chatShortcut { Selection(text: "", appName: "Safari", context: ContextBox(resolved: nil), pid: 0, mouse: mouse) }
             weak var blank = dock.debugAgents.last
@@ -354,28 +354,26 @@ enum SelfTest {
                 blank?.dismissGesture()
                 after(0.8) {
                     check("clicking away from a blank chat removes it", blank == nil && dock.count == 0)
-                    fold()
+                    check("…and the closed panel left the screen", !sidebar.debugWindowIsOrderedIn)
+                    pinned()
                 }
             }
         }
-        func fold() {
+        /// The panel opened by the shortcut stays while the pointer is away, and a working chat's dot state is right.
+        func pinned() {
             dock.open(selection("one"), iconFrame: icon)
             weak var agent = dock.debugAgents.last
             after(0.8) {
-                let openWidth = sidebar.debugPanelFrame.width
-                sidebar.setOpen(false)
-                after(0.6) {
-                    check("folding shrinks the sidebar to a strip", sidebar.debugPanelFrame.width < 40 && openWidth > 200)
-                    check("the fold is remembered", Settings.shared.sidebarOpen == false)
-                    if let agent { dock.debugMinimize(agent) }
-                    after(0.8) {
-                        check("a chat still minimizes while the sidebar is folded", agent?.debugIsMinimized == true)
-                        sidebar.setOpen(true)
-                        after(0.6) {
-                            check("unfolding brings the rows back", sidebar.debugPanelFrame.width > 200 && Settings.shared.sidebarOpen)
-                            agent?.close()
-                            after(0.5) { four() }
-                        }
+                if let agent { dock.debugMinimize(agent) }
+                sidebar.toggleFromShortcut()
+                after(0.8) {
+                    check("the shortcut opens the panel pinned (it stays with the pointer away)", sidebar.debugIsVisible)
+                    check("a minimized chat waiting for its question puts no dot at the edge", sidebar.debugDotState == .absent)
+                    sidebar.toggleFromShortcut()
+                    after(0.4) {
+                        check("the shortcut again closes it", !sidebar.debugIsVisible)
+                        agent?.close()
+                        after(0.5) { four() }
                     }
                 }
             }
@@ -390,15 +388,11 @@ enum SelfTest {
             }
             after(1.5) {
                 check("ten chats fit", dock.count == 10 && sidebar.debugTitles().count == 10)
+                sidebar.show(.chats, animated: false)
                 let frame = sidebar.debugPanelFrame
-                let visible = (NSScreen.screens.first { $0.isBuiltIn } ?? screen).visibleFrame
-                check("the sidebar fits on screen with ten rows", visible.insetBy(dx: -0.5, dy: -0.5).contains(frame))
-                let rows = sidebar.debugRows
-                check("every circle is in its slot with its aura centered",
-                      rows.count == 10 && rows.allSatisfy {
-                          hypot($0.disc.x - $0.expected.x, $0.disc.y - $0.expected.y) < 0.5
-                              && hypot($0.aura.x - $0.disc.x, $0.aura.y - $0.disc.y) < 0.5
-                      })
+                let edgeScreen = (NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(frame) } ?? screen).frame
+                check("the edge panel fits on screen with ten rows (it scrolls past eight)", edgeScreen.insetBy(dx: -0.5, dy: -0.5).contains(frame))
+                check("…at the middle of the right edge", abs(frame.midY - edgeScreen.midY) < 1 && abs(frame.maxX - (edgeScreen.maxX - EdgePanelLayout.gap)) < 1)
                 let open = dock.debugOpenAgents
                 check("all ten chats are open at once", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 10 && open.count == 10)
                 check("none of them is hidden or faded", dock.debugAgents.allSatisfy { $0.debugPanelAlpha > 0.9 })
@@ -409,10 +403,11 @@ enum SelfTest {
                 check("they don't sit exactly on top of each other", distinct)
                 check("a chat has no timer to fade or tuck itself away", dock.debugAgents.allSatisfy { !$0.debugDecayActive })
                 if let outputDirectory, let rep = sidebar.debugSnapshot() {
-                    let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("sidebar-ten.png")
+                    let url = URL(fileURLWithPath: outputDirectory).appendingPathComponent("edge-panel-ten.png")
                     try? rep.representation(using: .png, properties: [:])?.write(to: url)
                     print("saved \(url.path)")
                 }
+                sidebar.hide()
                 dock.open(selection("an eleventh"), iconFrame: icon)
                 check("an eleventh chat is refused", dock.count == 10)
                 check("…and the open chats are left alone", dock.debugAgents.filter { !$0.debugIsMinimized }.count == 10)
@@ -423,43 +418,9 @@ enum SelfTest {
                 dock.debugAgents.forEach { $0.close() }
                 after(0.8) {
                     check("deleting them all empties the dock", dock.count == 0)
-                    moveSidebar()
-                }
-            }
-        }
-        /// The sidebar moves when its header is dragged, stays where it's put as chats come and go, and goes home on a double-click.
-        func moveSidebar() {
-            dock.open(selection("one"), iconFrame: icon)
-            dock.debugAgents.last?.debugInject(question: "one", answer: "Answer.")
-            after(0.9) {
-                let before = sidebar.debugPanelFrame
-                check("the header is a drag handle", sidebar.debugDragHeader(by: NSSize(width: -240, height: -160)))
-                let moved = sidebar.debugPanelFrame
-                check("the sidebar moves where it's dragged", abs(moved.minX - (before.minX - 240)) < 1.5 && abs(moved.minY - (before.minY - 160)) < 1.5)
-                check("…and the spot is remembered", sidebar.debugHasSavedPosition)
-                dock.open(selection("two"), iconFrame: icon)
-                dock.debugAgents.last?.debugInject(question: "two", answer: "Answer.")
-                after(0.9) {
-                    let grown = sidebar.debugPanelFrame
-                    check("a new chat grows it downward from the same top-right corner", abs(grown.maxX - moved.maxX) < 1.5 && abs(grown.maxY - moved.maxY) < 1.5 && grown.height > moved.height)
-                    check("its circles still line up where it was dropped", sidebar.debugRows.allSatisfy { hypot($0.disc.x - $0.expected.x, $0.disc.y - $0.expected.y) < 0.5 })
-                    sidebar.setOpen(false)
-                    after(0.6) {
-                        let folded = sidebar.debugPanelFrame
-                        check("folding it keeps its right edge and top where they were", abs(folded.maxX - moved.maxX) < 1.5 && abs(folded.maxY - moved.maxY) < 1.5)
-                        sidebar.setOpen(true)
-                        after(0.6) {
-                            check("a double-click on the header sends it home", sidebar.debugDoubleClickHeader())
-                            after(0.6) {
-                                let home = sidebar.debugPanelFrame
-                                let visible = (NSScreen.screens.first { $0.isBuiltIn } ?? screen).visibleFrame
-                                check("…to the top-right corner", !sidebar.debugHasSavedPosition && abs(home.maxX - (visible.maxX - AgentSidebar.margin)) < 1.5
-                                      && abs(home.maxY - (visible.maxY - AgentSidebar.margin)) < 1.5)
-                                dock.debugAgents.forEach { $0.close() }
-                                after(0.8) { oldWay() }
-                            }
-                        }
-                    }
+                    // (The old sidebar's drag-to-move, fold and double-click-home were removed on purpose: the edge
+                    // panel always sits at the middle of the right edge.)
+                    oldWay()
                 }
             }
         }
@@ -637,6 +598,7 @@ enum SelfTest {
     }
 
     static func unitTests() -> Never {
+        setvbuf(stdout, nil, _IOLBF, 0) // line by line, so a run that hangs shows where it stopped
         var failures = 0
         func check(_ name: String, _ ok: Bool) {
             print((ok ? "ok   " : "FAIL ") + name)

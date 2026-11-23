@@ -90,6 +90,16 @@ final class LibraryWindow {
         state.anchor = state.selection
     }
 
+    /// The edge panel's "New note": the Library opens on Notes with its name box open (the panel itself can't take typing).
+    func showNewSheet() {
+        show(mode: .notebook)
+        state.sector = nil
+        state.query = ""
+        state.browsing = true
+        // After the Notes list is on screen, so its + button sees the request.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.state.newSheetRequest += 1 }
+    }
+
     func show(mode: LibraryState.Mode, takeKeyboard: Bool = true) {
         if mode == .all, !isVisible {
             // A plain "open the Library" lands where Settings say. (The menu's Notebook, Screenshots and Bin go where they name.)
@@ -186,6 +196,9 @@ final class LibraryState: ObservableObject {
         /// What Undo puts back.
         var undo: [UUID]
     }
+
+    /// Counts up to open the Notes list's "New note" name box from outside (the edge panel's "New note" row).
+    @Published var newSheetRequest = 0
 
     @Published var mode: Mode = .all {
         didSet {
@@ -1354,7 +1367,7 @@ struct LibraryView: View {
                                 .padding(12).frame(width: 320)
                             }
                             .probe("new-sheet")
-                    }
+                            .onChange(of: state.newSheetRequest) { _, _ in newSheetOpen = true }                    }
                     if state.mode != .bin && !feed.isEmpty {
                         // Always in view, and labelled: this is how you clear many at once.
                         Button { withAnimation(LibMotion.panel) { state.selecting = true; state.multi = [] } } label: {

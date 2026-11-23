@@ -174,7 +174,15 @@ final class LibraryAssistant {
         boolSpec("saveScreenshots", "save your screenshots to the Library automatically", \.saveScreenshots),
         boolSpec("libraryShowPreviews", "show a preview line under each row", \.libraryShowPreviews),
         boolSpec("learnMode", "Learn mode (highlights the key words in answers)", \.learnMode),
-        boolSpec("largePopup", "open the popup bigger", \.largePopup),
+        // Kept under its old key: "on" saves the old big size (570 × 660) as the size new chats open at; "off" clears the
+        // saved size (new chats grow with their answer again). Reads "on" whenever a size is saved.
+        SettingSpec(key: "largePopup", about: "open new chats at a set size (on = 570 × 660; off = they grow with the answer)",
+                    read: { $0.chatSize != nil ? "on" : "off" },
+                    write: { s, v in
+                        guard let b = parseBool(v) else { return false }
+                        s.chatSize = b ? Settings.largeChatSize : nil
+                        return true
+                    }),
         boolSpec("chatsStayOpen", "chats stay open when you click away", \.chatsStayOpen),
         boolSpec("webSearch", "let answers use web search", \.webSearch),
         boolSpec("localMode", "Local mode (quick questions stay on this Mac)", \.localMode),

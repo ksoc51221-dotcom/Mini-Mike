@@ -127,6 +127,7 @@ struct LibrarySettingsView: View {
     @AppStorage("saveHistory") private var saveHistory = true
     @AppStorage("nameChatsOnClose") private var nameOnClose = true
     @AppStorage("deleteChatOnClose") private var deleteOnClose = false
+    @AppStorage(Settings.edgeDotKey) private var edgeDot = true
     @AppStorage("libraryDefaultView") private var defaultView = LibraryDefaultView.desk.rawValue
     @AppStorage("libraryRowDensity") private var density = LibraryRowDensity.comfortable.rawValue
     @AppStorage("libraryShowPreviews") private var previews = false
@@ -298,6 +299,9 @@ struct LibrarySettingsView: View {
                 }
                 LSRow("Delete chat when I close it", "Clicking × on a chat moves it to the Bin, with an Undo for a few seconds. Starred chats stay. You can still bring it back from the Bin.") {
                     LSSwitch(isOn: $deleteOnClose)
+                }
+                LSRow("Show a dot at the screen edge while Merlin works", "A small dot at the middle of the right screen edge: it breathes while a chat works and stays when an answer is ready. Point there to see your chats and notes.") {
+                    LSSwitch(isOn: $edgeDot)
                 }
             }
             LSGroup {

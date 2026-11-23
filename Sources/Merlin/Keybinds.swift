@@ -193,6 +193,10 @@ struct ShortcutCommand: Equatable, Identifiable {
         detail: "Open or close the Library.", defaultChord: Chord(keyCode: 37, command: true, shift: true))
     static let engine = ShortcutCommand(id: "engine", scope: .global, title: "Switch model",
         detail: "Move the open chat between Claude and the model on this Mac.", defaultChord: Chord(keyCode: 37, shift: true, control: true))
+    /// Opens the hidden edge panel pinned (it stays until Esc or a click outside), so the keyboard works without the hover.
+    /// Tab + ] sits beside Merlin's other Tab chord (Tab + \ snips) and clashes with nothing in `Keybinds.fixed`.
+    static let edgePanel = ShortcutCommand(id: "edgePanel", scope: .global, title: "Show chats and notes",
+        detail: "Open the panel at the right screen edge with your chats and notes. Esc or a click outside closes it.", defaultChord: Chord(keyCode: 30, holdTab: true))
 
     // In the Library window.
     static let libraryNewChat = ShortcutCommand(id: "library.newChat", scope: .library, title: "New chat",
@@ -215,7 +219,7 @@ struct ShortcutCommand: Equatable, Identifiable {
 
     /// Every command, in the order they're listed and in the order they win a clash (globals first).
     /// There are no chat-window commands yet: the chat's only keys are Esc and Return, which stay fixed.
-    static let all: [ShortcutCommand] = [snip, chat, talk, history, engine,
+    static let all: [ShortcutCommand] = [snip, chat, talk, history, engine, edgePanel,
                                          libraryNewChat, librarySearch, librarySearchAlt, libraryMove, libraryBin,
                                          libraryOpenSettings, libraryBack]
 

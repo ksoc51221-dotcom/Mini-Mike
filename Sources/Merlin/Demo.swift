@@ -314,7 +314,9 @@ enum Demo {
             print("  saved \(name) \(image.width)x\(image.height)")
         }
         func saveBubble(_ name: String) {
-            guard let rep = dock.debugSidebar.debugSnapshot() else { return print("  (no sidebar)") }
+            // The edge panel is hidden at rest: show its Chats list (pinned) for the picture.
+            if !dock.debugEdge.isVisible { dock.debugEdge.show(.chats, animated: false) }
+            guard let rep = dock.debugEdge.debugSnapshot() else { return print("  (no edge panel)") }
             try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent(name))
             print("  saved \(name) \(rep.pixelsWide)x\(rep.pixelsHigh)")
         }
@@ -341,15 +343,7 @@ enum Demo {
         }
 
         savePNG("0-trigger.png", TriggerIcon.debugRender())
-        // The painted check up close, on the circle's dark color.
-        if let check = BrushCheck.image(side: 200, scale: 2, color: Theme.ink.dark),
-           let rep = NSBitmapImageRep.rgba(pixelsWide: 400, pixelsHigh: 400),
-           let ctx = NSGraphicsContext(bitmapImageRep: rep)?.cgContext {
-            ctx.setFillColor(NSColor(white: 0.09, alpha: 1).cgColor)
-            ctx.fill(CGRect(x: 0, y: 0, width: 400, height: 400))
-            ctx.draw(check, in: CGRect(x: 0, y: 0, width: 400, height: 400))
-            savePNG("0b-brush-check-large.png", rep)
-        }
+        // (The painted check of the old sidebar's circles is gone with them: the edge panel marks a done chat with a dot.)
         print("1 open"); after(0.8) {
             save("1-open.png", agent.debugSnapshot())
             print("2 ask"); agent.debugAsk("What does 'by reference' mean here? Check the web.")
@@ -360,35 +354,28 @@ enum Demo {
                     saveBubble("3-bubble-working.png")
                     var frames: [NSBitmapImageRep] = []
                     func grab(_ n: Int, then next: @escaping () -> Void) {
-                        if let f = dock.debugSidebar.debugSnapshot() { frames.append(f) }
+                        if let f = dock.debugEdge.debugSnapshot() { frames.append(f) }
                         if n > 1 { after(0.8) { grab(n - 1, then: next) } } else { next() }
                     }
                     func waitDone(_ tries: Int) {
                         if agent.phase == .done || agent.phase == .failed || tries == 0 {
                             after(1.0) {
                                 saveBubble("4-bubble-\(agent.phase).png")
-                                // Replay the finish and catch it mid-flight.
-                                var doneFrames: [NSBitmapImageRep] = []
-                                dock.debugSidebar.debugFlashAll()
-                                for (i, t) in [0.08, 0.3, 0.55, 1.2].enumerated() {
-                                    after(t) {
-                                        if let f = dock.debugSidebar.debugSnapshot() { doneFrames.append(f) }
-                                        if i == 3 { savePNG("4b-done-frames.png", strip(doneFrames)) }
-                                    }
-                                }
+                                // (The old sidebar's landing flash is gone: the edge panel is hidden while a chat lands.)
                             }
                             after(2.6) {
+                                dock.debugEdge.hide()
                                 print("5 expand"); dock.debugExpand(agent)
                                 after(1.2) {
                                     save("5-expanded.png", agent.debugSnapshot())
                                     print("frame after expand: \(agent.debugFrame)")
-                                    print("6 make bigger"); agent.debugToggleSize()
+                                    print("6 fill the screen"); agent.debugToggleSize()
                                     after(1.0) {
-                                        save("6-large.png", agent.debugSnapshot())
-                                        print("frame when large: \(agent.debugFrame)")
+                                        save("6-filled.png", agent.debugSnapshot())
+                                        print("frame when filled: \(agent.debugFrame)")
                                         agent.debugToggleSize()
                                         after(1.0) {
-                                            print("frame back to normal: \(agent.debugFrame)")
+                                            print("frame back to its size: \(agent.debugFrame)")
                                             agent.close()
                                             after(0.5) { print("DEMO DONE"); exit(0) }
                                         }

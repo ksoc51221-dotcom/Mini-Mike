@@ -32,6 +32,9 @@ enum FeatureTests {
         boardChecks(check)
         tableChecks(check)
         sheetChecks(check)
+        commandChecks(check)
+        MainActor.assumeIsolated { edgePanelChecks(check) }
+        MainActor.assumeIsolated { resizeChecks(check) }
         sceneChecks(check)
         voiceOrbChecks(check)
         pointToAskChecks(check)
@@ -316,6 +319,23 @@ enum FeatureTests {
             m.draft = "why?"
             m.submit()
             check("learn \(learn ? "on" : "off"): a typed question goes straight out, unchanged", sent() == ["why?"] && m.turns.first?.question == "why?" && m.draft.isEmpty)
+            // A command typed into a blank chat acts and never reaches Claude; in a chat that has a turn it is a question.
+            let (cmdChat, cmdSent) = chat(learn: learn)
+            var offered: [String] = []
+            cmdChat.onCommand = { offered.append($0); return CommandCenter.route(CommandCenter.cleaned($0), sheets: ["Microeconomics terms"]) != .ask }
+            cmdChat.draft = "open microeconomics note"
+            cmdChat.submit()
+            check("typed command, learn \(learn ? "on" : "off"): in a blank chat it acts, nothing goes to Claude, no turn is made",
+                  offered == ["open microeconomics note"] && cmdSent().isEmpty && cmdChat.turns.isEmpty && cmdChat.draft.isEmpty)
+            cmdChat.draft = "what is an open economy"
+            cmdChat.submit()
+            check("typed command, learn \(learn ? "on" : "off"): a question in the same blank chat still goes out",
+                  cmdSent() == ["what is an open economy"] && offered.count == 2)
+            finish(cmdChat)
+            cmdChat.draft = "open microeconomics note"
+            cmdChat.submit()
+            check("typed command, learn \(learn ? "on" : "off"): once the chat has a turn, the same words are a question for Claude",
+                  offered.count == 2 && cmdSent().last == "open microeconomics note" && cmdChat.turns.count == 2)
             finish(m)
             check("learn \(learn ? "on" : "off"): Go deeper is there", m.canGoDeeper)
             let (e, eSent) = chat(learn: learn)

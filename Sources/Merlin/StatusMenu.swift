@@ -7,11 +7,11 @@ final class StatusMenu: NSObject, NSMenuDelegate {
     var agentCount: () -> Int = { 0 }
     var onSnip: (() -> Void)?
     var onChat: (() -> Void)?
-    var onToggleSidebar: (() -> Void)?
+    /// "Show Chats and Notes": the hidden edge panel, pinned open.
+    var onShowEdgePanel: (() -> Void)?
     var onHistory: ((_ notebook: Bool) -> Void)?
     var onScreenshots: (() -> Void)?
     var onBin: (() -> Void)?
-    var sidebarIsOpen: () -> Bool = { true }
     var onSummarizeVideo: ((VideoMenuChoice) -> Void)?
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -62,7 +62,7 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         let chat = action("New Chat", #selector(chatFromMenu))
         Self.showShortcut(binds.chord(.chat), on: chat)
         menu.addItem(chat)
-        menu.addItem(action(sidebarIsOpen() ? "Fold Chat Sidebar" : "Unfold Chat Sidebar", #selector(toggleSidebarFromMenu)))
+        menu.addItem(action("Show Chats and Notes", #selector(showEdgePanelFromMenu)))
         // Voice has no set-up: hold the keys and talk (English).
         let talk = NSMenuItem(title: Self.talkTitle(binds), action: nil, keyEquivalent: "")
         talk.isEnabled = false
@@ -209,7 +209,8 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.onSummarizeVideo?(choice) }
     }
 
-    @objc private func toggleSidebarFromMenu() { onToggleSidebar?() }
+    // After the menu closes, so the click that closes it isn't taken as a click outside the panel.
+    @objc private func showEdgePanelFromMenu() { DispatchQueue.main.async { [weak self] in self?.onShowEdgePanel?() } }
     @objc private func historyFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(false) } }
     @objc private func notebookFromMenu() { DispatchQueue.main.async { [weak self] in self?.onHistory?(true) } }
     @objc private func screenshotsFromMenu() { DispatchQueue.main.async { [weak self] in self?.onScreenshots?() } }
@@ -299,17 +300,17 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         Can't select it (a scanned PDF, an image, a diagram)? Hold Tab and press \\, then drag \
         a box around it. Press Space to pick a whole window, or Esc to cancel.
 
-        Your chats rest in the black sidebar at the top-right of your screen, up to 10 at once. Each \
-        row has a circle that pulses while the chat works and shows a check when the answer is ready. \
-        Click a row to open that chat; click it again to put it back. Hover a row and click × to \
-        close it (it stays in your History). Fold the sidebar with the button in its header (or from this menu) to leave just a \
-        strip of dots.
+        Your chats and notes wait in a hidden panel at the middle of the right edge of your screen, up \
+        to 10 chats at once. Rest the pointer there and a small box slides in: Chats or Notes. Each chat \
+        row shows a dot that breathes while the chat works and turns solid when the answer is ready. \
+        Click a row to open that chat or note. Hover a chat and click × to close it (it stays in your \
+        History). Hold Tab and press ] (or use this menu) to open the panel without the pointer; Esc closes it. \
+        While a chat works, a small dot at that screen edge shows it (you can turn it off in Settings).
 
-        Drag the sidebar's header to move it anywhere (double-click it to send it back to the corner), \
-        and drag the top of a chat to put it anywhere on your screen; it stays there. Chats stay open, \
+        Drag the top of a chat to put it anywhere on your screen; it stays there. Chats stay open, \
         as many as you like at once, until you close them: clicking elsewhere doesn't touch them. Esc, \
-        or the Minimize button puts a chat back in the sidebar, never closes it. The × on the \
-        chat or on its sidebar row closes it, and a saved chat stays in History.
+        or the Minimize button puts a chat back in the edge panel, never closes it. The × on the \
+        chat or on its panel row closes it, and a saved chat stays in History.
 
         Delete something in the dashboard (the trash button on any row, the Delete key, or the buttons on a \
         page) and it moves to the Bin instead of vanishing. The Bin is in the dashboard's sidebar and in this \

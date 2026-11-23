@@ -33,8 +33,12 @@ final class AskModel: ObservableObject {
     @Published var fatal: String?
     /// Bumped to put the cursor back in the question field (e.g. after re-expanding).
     @Published var focusToken = 0
-    /// The header's ⤢ toggle: 50% wider, with a 50% taller answer area.
-    @Published var isLarge = Settings.shared.largePopup
+    /// The large auto size: 50% wider, with a 50% taller answer area (video summaries start like this).
+    @Published var isLarge = false
+    /// The chat has a size set by hand (or fills the screen): it takes the window's size, and only the answer area scrolls.
+    @Published var isManualSize = false
+    /// The chat fills the screen (the ⤢ button's state).
+    @Published var isFilled = false
     /// Video agents: what's being summarized and where it's at.
     /// The chat's name and sector, from Claude's hidden <meta> line (nil until the first answer arrives).
     @Published var autoTitle: String?
@@ -88,6 +92,8 @@ final class AskModel: ObservableObject {
     var onToggleStar: (() -> Void)?
     var onQuizFinished: ((QuizResult) -> Void)?
     var onAsk: ((_ prompt: String) -> Void)?
+    /// Typed text in a blank chat: true when it was a command and has run (see `CommandRunner`).
+    var onCommand: ((_ text: String) -> Bool)?
     /// The Learn toggle was used: remember it for the next chat.
     var onLearnChange: ((Bool) -> Void)?
     /// "Ask Claude" on a local answer: the newest question goes to Claude instead.
@@ -95,6 +101,8 @@ final class AskModel: ObservableObject {
     var onClose: (() -> Void)?
     var onMinimize: (() -> Void)?
     var onToggleSize: (() -> Void)?
+    /// A click on empty header space (the controller fills the screen when it was the second click of a double-click).
+    var onHeaderTap: (() -> Void)?
     var onActivity: (() -> Void)?
     var onHeight: ((CGFloat) -> Void)?
 
@@ -238,6 +246,11 @@ final class AskModel: ObservableObject {
             guard turns.isEmpty else { return }
             ask(display: Prompts.emptySubmit, prompt: Prompts.emptySubmit)
         } else {
+            // A blank chat's first words may be a command ("open microeconomics note"): it acts, and Claude isn't asked.
+            if turns.isEmpty, attachments.isEmpty, onCommand?(q) == true {
+                draft = ""
+                return
+            }
             draft = ""
             ask(display: q, prompt: q)
         }
@@ -393,6 +406,10 @@ struct AskView: View {
     @ObservedObject var model: AskModel
     @FocusState private var fieldFocused: Bool
     @State private var threadHeight: CGFloat = 0
+    /// How tall the answer area shows (a size set by hand gives it all the room left).
+    @State private var threadViewport: CGFloat = 0
+    /// Taller than this, the answer area scrolls (and follows the newest line).
+    private var scrollLimit: CGFloat { model.isManualSize ? threadViewport : model.maxThreadHeight }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -423,8 +440,10 @@ struct AskView: View {
         .padding(.top, 12)
         .padding(.bottom, 10)
         .foregroundStyle(inkColor)
-        .frame(width: model.width, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
+        // Auto size: the chat's own width, and as tall as its content. A size set by hand: the window's size.
+        .frame(width: model.isManualSize ? nil : model.width, alignment: .leading)
+        .frame(maxWidth: model.isManualSize ? .infinity : nil, maxHeight: model.isManualSize ? .infinity : nil, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: !model.isManualSize)
         .background(GeometryReader { g in
             Color.clear.preference(key: PanelHeightKey.self, value: g.size.height)
         })
@@ -493,12 +512,12 @@ struct AskView: View {
                     model.onToggleStar?()
                 }
             }
-            HeaderButton(symbol: model.isLarge ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
-                         help: model.isLarge ? "Make smaller" : "Make bigger (50%)") {
+            HeaderButton(symbol: model.isFilled ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
+                         help: model.isFilled ? "Back to its size" : "Fill the screen") {
                 model.onToggleSize?()
             }
             if model.canMinimize {
-                HeaderButton(symbol: "sidebar.right", help: "Put away in the sidebar (keeps working)") {
+                HeaderButton(symbol: "sidebar.right", help: "Put away at the right screen edge (keeps working)") {
                     model.onMinimize?()
                 }
                 .transition(.opacity.combined(with: .scale(scale: 0.6)))
@@ -512,6 +531,11 @@ struct AskView: View {
                 model.onClose?()
             }
         }
+        // Empty header space: a double-click fills the screen (the controls above it keep their own clicks).
+        // A plain button, not a tap gesture: the window replays a header click to the view (see `ChatPanel.sendEvent`),
+        // and a button answers a replayed click where a tap gesture does not.
+        .background(Button(action: { model.onHeaderTap?() }) { Color.clear.contentShape(Rectangle()) }
+            .buttonStyle(.plain).focusable(false).accessibilityHidden(true))
     }
 
     private var thread: some View {
@@ -570,11 +594,14 @@ struct AskView: View {
                     Color.clear.preference(key: ThreadHeightKey.self, value: g.size.height)
                 })
             }
-            .frame(height: min(max(threadHeight, 24), model.maxThreadHeight))
+            // Auto size: as tall as the answer, up to a cap. A size set by hand: whatever room the window leaves.
+            .frame(height: model.isManualSize ? nil : min(max(threadHeight, 24), model.maxThreadHeight))
+            .frame(minHeight: model.isManualSize ? 24 : nil, maxHeight: model.isManualSize ? .infinity : nil)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { threadViewport = $0 }
             .onPreferenceChange(ThreadHeightKey.self) { threadHeight = $0 }
             .onChange(of: threadHeight) {
                 // Only fires when a new line starts, so this glides instead of jittering per letter.
-                guard threadHeight > model.maxThreadHeight else { return }
+                guard threadHeight > scrollLimit else { return }
                 if let graphTurn = latestGraphTurn {
                     // A graph is the answer's centerpiece: keep the question and the top of the graph in view.
                     withAnimation(Motion.animation(Motion.functional)) { proxy.scrollTo(graphTurn, anchor: .top) }
@@ -583,7 +610,7 @@ struct AskView: View {
                 }
             }
             .onChange(of: model.canGoDeeper) {
-                if model.canGoDeeper && threadHeight > model.maxThreadHeight && latestGraphTurn == nil {
+                if model.canGoDeeper && threadHeight > scrollLimit && latestGraphTurn == nil {
                     scrollToBottom(proxy, after: 0.2)
                 }
             }
@@ -933,7 +960,7 @@ private struct TurnView: View {
                             Label("Minimize", systemImage: "sidebar.right")
                         }
                         .buttonStyle(GhostStyle()) // quiet: the status on the left is the main thing while it thinks
-                        .help("Put this chat away in the sidebar. It keeps working and turns green when done.")
+                        .help("Put this chat away in the panel at the right screen edge. It keeps working, and a dot there shows when it's done.")
                     }
                 }
                 .transition(.opacity)

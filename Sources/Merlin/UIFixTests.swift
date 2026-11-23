@@ -17,31 +17,21 @@ extension FeatureTests {
         return png
     }
 
-    /// The sidebar's place, the chat limit, the screenshot inbox (finding, keeping and labeling), and the dashboard's store.
+    /// The edge panel's place (it replaced the sidebar), the chat limit, the screenshot inbox (finding, keeping and labeling),
+    /// and the dashboard's store.
     static func uiFixChecks(_ check: (String, Bool) -> Void) {
-        // The sidebar's frame: where you drag it stays put, and it always stays on a screen.
+        // The edge panel's frame: at the middle of the right edge of its screen, and always on that screen.
         let laptop = NSRect(x: 0, y: 0, width: 1440, height: 875)
         let external = NSRect(x: 1440, y: 0, width: 1920, height: 1055)
-        let small = NSSize(width: AgentSidebar.width, height: 150)
-        let tall = NSSize(width: AgentSidebar.width, height: 400)
-        let home = AgentSidebar.frame(size: small, anchor: nil, screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: home is the top-right corner of the laptop screen",
-              abs(home.maxX - (laptop.maxX - AgentSidebar.margin)) < 0.01 && abs(home.maxY - (laptop.maxY - AgentSidebar.margin)) < 0.01)
-        let dropped = AgentSidebar.frame(size: small, anchor: NSPoint(x: 700, y: 600), screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: it opens where it was dropped", dropped.maxX == 700 && dropped.maxY == 600 && dropped.size == small)
-        let grown = AgentSidebar.frame(size: tall, anchor: NSPoint(x: 700, y: 600), screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: more rows grow it downward, keeping the top-right corner", grown.maxX == 700 && grown.maxY == 600 && grown.minY == 200)
-        let folded = AgentSidebar.frame(size: NSSize(width: AgentSidebar.stripWidth, height: 150), anchor: NSPoint(x: 700, y: 600),
-                                        screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: folding keeps the right edge", folded.maxX == 700 && folded.maxY == 600)
-        let low = AgentSidebar.frame(size: tall, anchor: NSPoint(x: 700, y: 250), screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: it can't grow off the bottom of the screen", low.minY >= laptop.minY && low.height == 400)
-        let off = AgentSidebar.frame(size: small, anchor: NSPoint(x: 5000, y: 5000), screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: a corner far off every screen comes back onto the laptop", laptop.contains(off))
-        let second = AgentSidebar.frame(size: small, anchor: NSPoint(x: 3000, y: 800), screens: [laptop, external], dockScreen: laptop)
-        check("sidebar: dropped on the second screen, it stays there", external.contains(second) && second.maxX == 3000)
-        let gone = AgentSidebar.frame(size: small, anchor: NSPoint(x: 3000, y: 800), screens: [laptop], dockScreen: laptop)
-        check("sidebar: if that screen is unplugged it comes back to the laptop", laptop.contains(gone))
+        for (name, screen) in [("laptop", laptop), ("second screen", external)] {
+            let window = EdgePanelLayout.windowFrame(screen: screen)
+            let list = EdgePanelLayout.cardFrame(window: window, card: EdgePanelLayout.listSize(rows: EdgePanelLayout.maxRows, newNoteRow: true))
+            let box = EdgePanelLayout.cardFrame(window: window, card: EdgePanelLayout.boxSize)
+            check("edge panel (\(name)): its window ends at the screen's right edge", window.maxX == screen.maxX)
+            check("edge panel (\(name)): the card sits 8 pt from the edge, centred on the screen", abs(list.maxX - (screen.maxX - 8)) < 0.01
+                  && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1 && box.maxX == list.maxX)
+            check("edge panel (\(name)): the tallest list fits on the screen", screen.contains(list))
+        }
         check("chats: room for ten", Settings.shared.maxAgents == 10)
 
         // Labels: from the window's title, then the heading in the picture, then the app.
