@@ -521,7 +521,7 @@ extension FeatureTests {
             check("web prompt: Haiku gets the search rule, no 'can't search'\(label)",
                   on.contains(Prompts.quickWebRule) && on.contains(Prompts.noNarrateRule) && on.contains(Prompts.sourcesRule) && !on.contains("can't search"))
             check("web prompt: with the setting off the prompt is exactly as before\(label)",
-                  off == (seeing ? Prompts.localSystemSeeing : Prompts.localSystem) && off.contains("can't search") && !off.contains("Sources:"))
+                  off == (seeing ? Prompts.localSystemSeeing : Prompts.localSystem) + "\n- " + Prompts.dictationRule && off.contains("can't search") && !off.contains("Sources:"))
             check("web prompt: Ollama never gets the rule\(label)",
                   Prompts.quickSystem(seeing: seeing, model: "qwen3:8b", features: [], web: true) == (seeing ? Prompts.localSystemSeeing : Prompts.localSystem))
         }

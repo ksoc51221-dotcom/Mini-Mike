@@ -84,11 +84,28 @@ extension FeatureTests {
         let clip = VoiceClip(samples: [Float](repeating: 0.1, count: 16_000), sampleRate: 16_000) // 1 s
         let keys = MemoryGroqKeyStore(key: "gsk_test")
         func run(_ fake: FakeGroq, apple: String = "add lunch to my calendar", clip: VoiceClip? = clip, choice: VoiceEngine = .groq,
-                 keys: GroqKeyStore = keys, timeout: TimeInterval? = nil) -> VoiceDecision.Result {
+                 keys: GroqKeyStore = keys, timeout: TimeInterval? = nil, prompt: String? = nil) -> VoiceDecision.Result {
             let transport = fake.transport
             let wait: ((TimeInterval) -> TimeInterval)? = timeout.map { t in { _ in t } }
-            return waitFor { await VoiceDecision.resolve(appleText: apple, clip: clip, choice: choice, keys: keys, transport: transport, timeout: wait) }
+            return waitFor { await VoiceDecision.resolve(appleText: apple, clip: clip, choice: choice, keys: keys, transport: transport,
+                                                         timeout: wait, prompt: prompt) }
         }
+
+        // The Whisper prompt (names and what Groq heard lately) rides along, and an echo of it is not trusted.
+        let prompted = FakeGroq(status: 200, body: #"{"text": "Add lunch with Anna to my calendar."}"#)
+        _ = run(prompted, prompt: "Merlin. Open my physics terms.")
+        check("groq: resolve sends the prompt field", prompted.last?.httpBody.map { String(decoding: $0, as: UTF8.self) }?
+            .contains("name=\"prompt\"\r\n\r\nMerlin. Open my physics terms.\r\n") == true)
+        let echo = FakeGroq(status: 200, body: #"{"text": " Open my physics terms. "}"#)
+        check("groq: Whisper echoing its prompt falls back to Apple's text",
+              run(echo, prompt: "Merlin. Open my physics terms.") == .deliver("add lunch to my calendar", .onDevice, badKey: false))
+        check("groq: an echo with no Apple text is dropped", run(echo, apple: "", prompt: "Merlin. Open my physics terms.") == .discard)
+        let repeated = FakeGroq(status: 200, body: #"{"text": "What are Giffen goods?"}"#)
+        check("groq: saying the same thing again is not an echo when Apple heard it too",
+              run(repeated, apple: "what are giving goods", prompt: "Merlin. What are Giffen goods?")
+                == .deliver("What are Giffen goods?", .groq, badKey: false))
+        check("groq: new words are not an echo", !SpeechContext.isEcho("Add lunch to my calendar", of: "Merlin. Open my physics terms.")
+              && !SpeechContext.isEcho("anything", of: nil) && !SpeechContext.isEcho("  ...  ", of: "Merlin."))
 
         let ok = FakeGroq(status: 200, body: #"{"text": " Add lunch with Anna to my calendar. ", "x_groq": {"id": "r"}}"#)
         check("groq: Groq's text replaces Apple's", run(ok) == .deliver("Add lunch with Anna to my calendar.", .groq, badKey: false) && ok.calls == 1)

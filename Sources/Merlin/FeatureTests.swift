@@ -29,6 +29,7 @@ enum FeatureTests {
         keybindChecks(check)
         talkKeyChecks(check)
         groqChecks(check)
+        speechContextChecks(check)
         boardChecks(check)
         tableChecks(check)
         sheetChecks(check)
@@ -63,7 +64,7 @@ enum FeatureTests {
             check("quick maths: Haiku gets the LaTeX rule for a maths question\(label)",
                   Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: maths).contains(Prompts.mathsRule))
             check("quick maths: Haiku's prompt is unchanged for a non-maths question\(label)",
-                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: plain) == base)
+                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: plain) == base + "\n- " + Prompts.dictationRule)
             check("quick maths: a model on this Mac never gets the LaTeX rule\(label)",
                   Prompts.quickSystem(seeing: seeing, model: "qwen3:8b", features: maths) == base)
         }
@@ -254,13 +255,14 @@ enum FeatureTests {
               && !Prompts.system(webSearch: true, sectors: ["Math"]).contains(Prompts.learnRule))
         for seeing in [false, true] {
             let base = seeing ? Prompts.localSystemSeeing : Prompts.localSystem
+            let haiku = base + "\n- " + Prompts.dictationRule // every Claude quick prompt has the dictation rule
             check("learn quick (sees \(seeing)): Haiku, no maths: the rule alone is added",
-                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: [.learn]) == base + "\n- " + Prompts.learnRule)
+                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: [.learn]) == haiku + "\n- " + Prompts.learnRule)
             check("learn quick (sees \(seeing)): Haiku with maths: both rules, once",
-                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: maths.union(.learn)) == base + "\n- " + Prompts.mathsRule + "\n- " + Prompts.learnRule)
+                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: maths.union(.learn)) == haiku + "\n- " + Prompts.mathsRule + "\n- " + Prompts.learnRule)
             check("learn quick (sees \(seeing)): Learn off, Haiku's prompt is what it was",
-                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: []) == base
-                    && Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: maths) == base + "\n- " + Prompts.mathsRule)
+                  Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: []) == haiku
+                    && Prompts.quickSystem(seeing: seeing, model: Settings.haikuID, features: maths) == haiku + "\n- " + Prompts.mathsRule)
             check("learn quick (sees \(seeing)): a model on this Mac never gets it",
                   Prompts.quickSystem(seeing: seeing, model: "qwen3:8b", features: maths.union(.learn)) == base)
         }

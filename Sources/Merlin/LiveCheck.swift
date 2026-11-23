@@ -370,6 +370,8 @@ enum LiveCheck {
         Task { @MainActor in await bypass(cleanEnvironment: false); await bypass(cleanEnvironment: true); laneDone() }
         lanesLeft += 1
         Task { @MainActor in await webCheck(); laneDone() }
+        lanesLeft += 1
+        Task { @MainActor in await heard("H-heard-quick", engine: nil); await heard("H-heard-claude", engine: .claude); laneDone() }
 
         app.run()
         exit(0)
@@ -609,6 +611,23 @@ enum LiveCheck {
         check("\(name): the Rule changed the answer (ends with DONE)", endsWithDone(a.shown))
         render(name, question: "What's my cat's name, and roughly how many hours a day will she sleep?", answer: a.shown,
                footer: "Rules + Context set · \(job.chat.debugEngine) · cli model \(job.initModel ?? "?")")
+        job.chat.debugSession?.stop()
+    }
+
+    // H. A misheard spoken question (opt-in: only=H-heard-quick,H-heard-claude). The real prompts, routing and streaming;
+    // the chat must show the fixed question and an answer with no <heard> tag in it.
+    private static func heard(_ name: String, engine: Router.Plan.Engine?) async {
+        guard only?.contains(name) == true else { return }
+        let job = newChat(name, text: "Normally demand falls as price rises, but some inferior staples break this law of demand.", engine: engine)
+        let spoken = "what are giving goods and how do they link to this"
+        ask(job) { job.chat.ask(spoken, display: spoken, spoken: true) }
+        write("\(name).system.txt", job.systemPrompt)
+        guard let a = await answer(job, turns: 1) else { return }
+        let question = job.chat.debugTurns.last?.question ?? ""
+        note("[\(name)] engine=\(job.chat.debugEngine) question shown: \(question)")
+        check("\(name): the rule is in the system prompt", job.systemPrompt.contains(Prompts.dictationRule))
+        check("\(name): the shown answer has no <heard> tag", !a.shown.lowercased().contains("<heard"))
+        check("\(name): the shown question is fixed to Giffen", question.lowercased().contains("giffen"))
         job.chat.debugSession?.stop()
     }
 

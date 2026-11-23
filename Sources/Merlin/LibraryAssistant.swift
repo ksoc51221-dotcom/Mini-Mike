@@ -174,9 +174,9 @@ final class LibraryAssistant {
         boolSpec("saveScreenshots", "save your screenshots to the Library automatically", \.saveScreenshots),
         boolSpec("libraryShowPreviews", "show a preview line under each row", \.libraryShowPreviews),
         boolSpec("learnMode", "Learn mode (highlights the key words in answers)", \.learnMode),
-        // Kept under its old key: "on" saves the old big size (570 × 660) as the size new chats open at; "off" clears the
-        // saved size (new chats grow with their answer again). Reads "on" whenever a size is saved.
-        SettingSpec(key: "largePopup", about: "open new chats at a set size (on = 570 × 660; off = they grow with the answer)",
+        // Kept under its old key: "on" saves the old big size (570 × 660); only its width carries over to new chats (the height
+        // is always automatic). "off" clears the saved size. Reads "on" whenever a size is saved.
+        SettingSpec(key: "largePopup", about: "open new chats wide (on = 570 points wide; off = the normal width). The height always grows with the answer",
                     read: { $0.chatSize != nil ? "on" : "off" },
                     write: { s, v in
                         guard let b = parseBool(v) else { return false }

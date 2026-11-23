@@ -257,6 +257,8 @@ final class AskPanelController {
     private var manualSize: CGSize?
     /// The ⤢ button: fill the screen, and back.
     private var fill = FillToggle()
+    /// The running hand resize started on a filled chat (so its end is not saved for new chats).
+    private var dragStartedFilled = false
     private var contentHeight: CGFloat = 140
     private var monitors: [Any] = []
     private var tick: Timer?
@@ -316,12 +318,17 @@ final class AskPanelController {
             askModel.learnMode = settings.learnMode
             askModel.onLearnChange = { Settings.shared.learnMode = $0 }
         }
-        // A new chat starts at the last size set by hand (test windows never read it: a stale saved size can't move them).
-        let start = Self.demoMode ? nil : ChatStartSize.resolve(saved: settings.chatSize, isVideo: selection.video != nil)
-        manualSize = start
-        askModel.isManualSize = start != nil
+        // A new chat starts at the auto size: its height fits its content. Only a sane width from the last hand resize
+        // carries over (test windows never read it: a stale saved size can't move them).
+        let center = NSPoint(x: iconFrame.midX, y: iconFrame.midY)
+        let screenArea = (NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) } ?? NSScreen.main)?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        askModel.startWidth = Self.demoMode ? nil
+            : ChatStartSize.resolve(saved: settings.chatSize, isVideo: selection.video != nil, screen: screenArea)
+        manualSize = nil
+        askModel.isManualSize = false
         model = askModel
-        panel = ChatPanel(size: NSSize(width: start?.width ?? askModel.width, height: start?.height ?? 140),
+        panel = ChatPanel(size: NSSize(width: askModel.width, height: 140),
                           canKey: !Self.demoMode) // test windows can never take your typing
 
         let effect = NSVisualEffectView.popoverBackdrop(radius: Self.cornerRadius)
@@ -481,12 +488,19 @@ final class AskPanelController {
     private func userResized(ended: Bool) {
         guard !closed, !isMinimized else { return }
         WindowMotion.cancel(panel) // an auto-grow or a fill still running must not fight the drag
+        if fill.isFilled { dragStartedFilled = true } // a drag that starts on a filled chat is never saved
         fill.forget()
         model.isFilled = false
         manualSize = panel.frame.size
         if !model.isManualSize { model.isManualSize = true }
         placedTopLeft = NSPoint(x: panel.frame.minX, y: panel.frame.maxY)
-        if ended && !Self.demoMode { Settings.shared.chatSize = panel.frame.size }
+        if ended {
+            if !Self.demoMode, ChatStartSize.shouldSave(size: panel.frame.size, startedFilled: dragStartedFilled,
+                                                                 screen: panel.visibleArea) {
+                Settings.shared.chatSize = panel.frame.size
+            }
+            dragStartedFilled = false
+        }
         touch()
     }
 
@@ -1740,7 +1754,8 @@ final class AskPanelController {
     // MARK: - Debug hooks for --demo
 
     /// Asks a question for the user (shown as `display`).
-    func ask(_ prompt: String, display: String) { model.ask(display: display, prompt: prompt) }
+    /// `spoken`: the question was dictated, so Claude's <heard> fix may replace it on screen (see `AskModel.Turn.spoken`).
+    func ask(_ prompt: String, display: String, spoken: Bool = false) { model.ask(display: display, prompt: prompt, spoken: spoken) }
 
     func debugAsk(_ question: String) { model.ask(display: question, prompt: question) }
     /// For --livecheck: the chat's real question path (routing, prompts, sessions) with nothing put on screen, no screenshot

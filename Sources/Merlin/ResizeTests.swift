@@ -83,14 +83,48 @@ extension FeatureTests {
               && !AskPanelController.followsContent(manualSize: nil, viewIsManual: true))
 
         // The start size.
-        check("start size: nothing saved is the auto size", ChatStartSize.resolve(saved: nil, isVideo: false) == nil)
-        check("start size: a new chat starts from the saved size",
-              ChatStartSize.resolve(saved: CGSize(width: 760, height: 520), isVideo: false) == CGSize(width: 760, height: 520))
-        check("start size: a video keeps its large start unless the saved size is wider",
-              ChatStartSize.resolve(saved: CGSize(width: 500, height: 900), isVideo: true) == nil
-              && ChatStartSize.resolve(saved: CGSize(width: 800, height: 600), isVideo: true) == CGSize(width: 800, height: 600))
-        check("start size: a saved size under the minimum opens at the minimum",
-              ChatStartSize.resolve(saved: CGSize(width: 100, height: 100), isVideo: false) == R.minSize)
+        typealias S = ChatStartSize
+        check("start size: nothing saved is the default width", S.resolve(saved: nil, isVideo: false, screen: screen) == nil)
+        check("start size: a sane saved width carries over (the height never does: it fits the content)",
+              S.resolve(saved: CGSize(width: 500, height: 900), isVideo: false, screen: screen) == 500
+              && AskPanelController.width == S.defaultWidth)
+        check("start size: a video always starts at its large auto size",
+              S.resolve(saved: CGSize(width: 500, height: 900), isVideo: true, screen: screen) == nil
+              && S.resolve(saved: CGSize(width: 800, height: 600), isVideo: true, screen: screen) == nil)
+        check("start size: a saved width under the minimum opens at the minimum",
+              S.resolve(saved: CGSize(width: 100, height: 100), isVideo: false, screen: screen) == R.minSize.width)
+        check("start size: an oversize saved value (a filled screen) opens at the default width",
+              S.resolve(saved: CGSize(width: 1440, height: 875), isVideo: false, screen: screen) == nil
+              && S.resolve(saved: CGSize(width: 611, height: 260), isVideo: false, screen: screen) == nil
+              && S.resolve(saved: CGSize(width: 2000, height: 300), isVideo: false, screen: screen) == nil)
+        check("start size: the limit is 1.5 x the default and 60% of the screen",
+              S.resolve(saved: CGSize(width: 570, height: 660), isVideo: false, screen: screen) == 570
+              && S.resolve(saved: CGSize(width: 500, height: 400), isVideo: false, screen: CGRect(x: 0, y: 0, width: 800, height: 600)) == nil)
+        check("start size: an invalid saved width is rejected",
+              S.resolve(saved: CGSize(width: CGFloat.nan, height: 400), isVideo: false, screen: screen) == nil
+              && S.resolve(saved: CGSize(width: CGFloat.infinity, height: 400), isVideo: false, screen: screen) == nil)
+        do {
+            // After an oversize value opens a chat at the default width, a hand resize still works and is saved.
+            let opened = CGRect(x: 400, y: 300, width: S.defaultWidth, height: 200)
+            let dragged = R.resized(opened, zone: .bottomRight, by: CGPoint(x: 120, y: -150), within: screen)
+            check("start size: a hand resize still works after an oversize value was rejected",
+                  dragged.size == CGSize(width: S.defaultWidth + 120, height: 350)
+                  && S.shouldSave(size: dragged.size, startedFilled: false, screen: screen)
+                  && !S.shouldSave(size: CGSize(width: 900, height: 400), startedFilled: false, screen: screen)
+                  && S.resolve(saved: dragged.size, isVideo: false, screen: screen) == S.defaultWidth + 120)
+        }
+        do {
+            // Fill, then drag an edge: the chat keeps its new size, but new chats don't start from it.
+            var f = FillToggle()
+            let filledTo = f.toggle(current: CGRect(x: 400, y: 300, width: 380, height: 200), manual: false, screen: screen)
+            let startedFilled = f.isFilled
+            f.forget()
+            let dragged = R.resized(filledTo.frame, zone: .right, by: CGPoint(x: -40, y: 0), within: screen)
+            check("fill: a drag that starts on a filled chat is not saved for the next chat",
+                  startedFilled && !S.shouldSave(size: CGSize(width: 400, height: 300), startedFilled: startedFilled, screen: screen))
+            check("fill: a filled size saved by an old build still opens the next chat at the default width",
+                  S.resolve(saved: dragged.size, isVideo: false, screen: screen) == nil)
+        }
 
         // Saved size and the one-time migration from `largePopup`.
         func store(_ body: (UserDefaults) -> Void) -> (Settings, UserDefaults, String) {
@@ -123,9 +157,12 @@ extension FeatureTests {
             let (s, d, suite) = store { _ in }
             defer { d.removePersistentDomain(forName: suite) }
             s.chatSize = CGSize(width: 640, height: 480)
-            check("saved size: a second reader of the same store sees it (the next chat starts from it)",
+            check("saved size: a second reader of the same store sees it (640 is too wide, so the next chat ignores it)",
                   Settings(defaults: d).chatSize == CGSize(width: 640, height: 480)
-                  && ChatStartSize.resolve(saved: Settings(defaults: d).chatSize, isVideo: false) == CGSize(width: 640, height: 480))
+                  && ChatStartSize.resolve(saved: Settings(defaults: d).chatSize, isVideo: false, screen: screen) == nil) // 640 > 570
+            s.chatSize = CGSize(width: 500, height: 480)
+            check("saved size: a sane saved width is what the next chat starts at",
+                  ChatStartSize.resolve(saved: Settings(defaults: d).chatSize, isVideo: false, screen: screen) == 500)
             let spec = LibraryAssistant.settingSpecs.first { $0.key == "largePopup" }
             check("assistant setting: largePopup reads on while a size is saved", spec?.read(s) == "on")
             check("assistant setting: off clears the saved size", spec?.write(s, "off") == true && s.chatSize == nil && spec?.read(s) == "off")

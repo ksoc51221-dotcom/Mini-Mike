@@ -55,10 +55,24 @@ enum Answer {
         }
     }
 
-    /// The answer without its <meta> tag (and the blank space it leaves).
+    /// Claude's <heard>…</heard>: the spoken question as it was meant (see `Prompts.dictationRule`). Never shown.
+    private static let heardTag = try! NSRegularExpression(pattern: #"<heard\b[^>]*>(.*?)</heard\s*>"#,
+                                                           options: [.dotMatchesLineSeparators, .caseInsensitive])
+
+    /// The corrected question inside the first <heard> tag, if Claude wrote one.
+    static func heard(in answer: String) -> String? {
+        let ns = answer as NSString
+        guard let m = heardTag.firstMatch(in: answer, range: NSRange(location: 0, length: ns.length)) else { return nil }
+        let body = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return body.isEmpty ? nil : body
+    }
+
+    /// The answer without its hidden tags, <meta> and <heard> (and the blank space they leave).
     static func withoutMeta(_ answer: String) -> String {
         let buffer = NSMutableString(string: answer)
-        for m in ownMetaTags(in: answer).reversed() { buffer.replaceCharacters(in: m.range, with: "") }
+        let ns = answer as NSString
+        let hidden = ownMetaTags(in: answer) + heardTag.matches(in: answer, range: NSRange(location: 0, length: ns.length))
+        for m in hidden.sorted(by: { $0.range.location < $1.range.location }).reversed() { buffer.replaceCharacters(in: m.range, with: "") }
         let cleaned = buffer as String
         return cleaned == answer ? answer : cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -109,7 +123,7 @@ enum Answer {
         if hidePartial {
             // Any opening tag left in the tail is unfinished.
             let opens: [(Range<String.Index>, Piece?)] = [
-                ("<say", nil), ("<graph", .drawing), ("<quiz", .writingQuiz), ("<meta", nil), ("<board", .drawingBoard), ("<scene", .buildingScene),
+                ("<say", nil), ("<graph", .drawing), ("<quiz", .writingQuiz), ("<meta", nil), ("<heard", nil), ("<board", .drawingBoard), ("<scene", .buildingScene),
             ].compactMap { name, piece in
                 tail.range(of: name, options: [.backwards, .caseInsensitive]).map { ($0, piece) }
             }
@@ -118,7 +132,7 @@ enum Answer {
                 tail = String(tail[..<open.0.lowerBound])
             }
             for prefix in ["<grap", "<gra", "<gr", "<g", "<sa", "<s", "<quiz", "<qui", "<qu", "<q", "<meta", "<met", "<me", "<m",
-                           "<boar", "<boa", "<bo", "<b", "<scen", "<sce", "<sc", "<"]
+                           "<boar", "<boa", "<bo", "<b", "<scen", "<sce", "<sc", "<hear", "<hea", "<he", "<h", "<"]
             where tail.hasSuffix(prefix) {
                 tail.removeLast(prefix.count)
                 break

@@ -105,7 +105,7 @@ final class AgentDock {
                                   context: ContextBox(resolved: nil),
                                   pid: app?.processIdentifier ?? 0, mouse: mouse, regionImage: jpeg)
         let agent = open(selection, iconFrame: NSRect(x: mouse.x + 6, y: mouse.y - 32, width: 26, height: 26))
-        if let question { agent?.ask(question, display: question) }
+        if let question { agent?.ask(question, display: question, spoken: true) } // only ever spoken words
     }
 
     /// Option+Shift+Tab. With the mouse over an open chat: that chat takes the keyboard (or, if you're already typing in
@@ -160,11 +160,11 @@ final class AgentDock {
         if let current = target, !current.isEmptyChat {
             markOpen(current)
             syncPanel()
-            current.ask(question, display: question)
+            current.ask(question, display: question, spoken: true)
             return
         }
         let m = selection.mouse
-        open(selection, iconFrame: NSRect(x: m.x + 6, y: m.y - 32, width: 26, height: 26))?.ask(question, display: question)
+        open(selection, iconFrame: NSRect(x: m.x + 6, y: m.y - 32, width: 26, height: 26))?.ask(question, display: question, spoken: true)
     }
 
     /// A chat about some saved text that starts by asking `prompt` (the History window's "Quiz me on this").

@@ -3,7 +3,12 @@ import SwiftUI
 final class AskModel: ObservableObject {
     struct Turn: Identifiable {
         let id = UUID()
-        let question: String
+        var question: String
+        /// The words as the speech engine wrote them, for a dictated question (nil when typed). Claude's <heard> fix can
+        /// then replace `question`, once `DictationFix` agrees it is only a small fix.
+        var spoken: String?
+        /// Claude's <heard> line, kept here when a tool starts and wipes the text written so far.
+        var heard: String?
         var answer = ""
         var done = false
         var isError = false
@@ -126,7 +131,9 @@ final class AskModel: ObservableObject {
     var canMinimize: Bool { fatal == nil }
 
     static let largeScale: CGFloat = 1.5
-    var width: CGFloat { AskPanelController.width * (isLarge ? Self.largeScale : 1) }
+    /// The width carried over from the last hand resize (`ChatStartSize`). Nil: the default width.
+    var startWidth: CGFloat?
+    var width: CGFloat { startWidth ?? AskPanelController.width * (isLarge ? Self.largeScale : 1) }
     var maxThreadHeight: CGFloat { 360 * (isLarge ? Self.largeScale : 1) }
 
     var canGoDeeper: Bool {
@@ -156,6 +163,7 @@ final class AskModel: ObservableObject {
     }
 
     static let deeperLabel = "Go deeper"
+    static let screenshotSuffix = " · with screenshot"
 
     /// The newest answer is finished and has something worth keeping.
     var canKeep: Bool {
@@ -256,11 +264,11 @@ final class AskModel: ObservableObject {
         }
     }
 
-    func ask(display: String, prompt: String) {
+    func ask(display: String, prompt: String, spoken: Bool = false) {
         guard canSubmit else { return }
-        let shown = attachments.isEmpty ? display : display + " · with screenshot"
+        let shown = attachments.isEmpty ? display : display + Self.screenshotSuffix
         withAnimation(Motion.animation(Motion.functional)) {
-            turns.append(Turn(question: shown))
+            turns.append(Turn(question: shown, spoken: spoken ? display : nil))
             isStreaming = true
             status = nil
         }
@@ -291,6 +299,9 @@ final class AskModel: ObservableObject {
 
     /// A tool started: anything written so far was narration ("Let me look that up…").
     func toolActivity(_ label: String) {
+        if let i = turns.indices.last, !turns[i].done, let heard = Answer.heard(in: turns[i].answer + pending) {
+            turns[i].heard = heard // the <heard> line came before the search: keep it
+        }
         pending = ""
         withAnimation(Motion.animation(Motion.functional)) {
             if let i = turns.indices.last, !turns[i].done { turns[i].answer = "" }
@@ -372,10 +383,14 @@ final class AskModel: ObservableObject {
     private func completeTurn() {
         finishWhenDrained = false
         guard let i = turns.indices.last else { return }
-        // The hidden <meta> line names and files the chat; take it off the answer.
+        // The hidden <meta> line names and files the chat; a <heard> line fixes a misheard spoken question. Both come off.
         let meta = Answer.meta(in: turns[i].answer)
+        let fixed = turns[i].spoken.flatMap { DictationFix.accept(original: $0, corrected: Answer.heard(in: turns[i].answer) ?? turns[i].heard) }
         withAnimation(Motion.animation(Motion.functional)) {
-            if meta != nil { turns[i].answer = Answer.withoutMeta(turns[i].answer) }
+            turns[i].answer = Answer.withoutMeta(turns[i].answer)
+            if let fixed {
+                turns[i].question = turns[i].question.hasSuffix(Self.screenshotSuffix) ? fixed + Self.screenshotSuffix : fixed
+            }
             if let answerFilter { turns[i].answer = answerFilter(turns[i].answer) }
             turns[i].done = true
             isStreaming = false

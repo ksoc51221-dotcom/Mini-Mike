@@ -26,6 +26,11 @@ enum Prompts {
 
     /// Shared by the full chat and the quick model's web rule.
     static let noNarrateRule = "Don't narrate what you're doing (no \"Let me search…\"). Just give the answer."
+    /// Questions are often dictated, and speech-to-text mishears words ("elastic city" for "elasticity"). Claude reads the
+    /// intended word from the sentence, the highlighted text and the chat, and answers that, without remarking on it.
+    /// When Claude is sure, it starts the reply with <heard>…</heard>: Merlin shows that as the question instead (see
+    /// `Answer.heard` and `DictationFix`) and never shows the tag.
+    static let dictationRule = "Questions are often dictated by voice, so a word may be misheard (a sound-alike or a split word). Read the intended word from the sentence, the highlighted text and the chat so far, and answer that. Only when you are sure a word was misheard, start your reply with <heard>their question as they meant it</heard>, changing only the misheard words. Otherwise never write that tag, and never mention the mistake."
     static let sourcesRule = "When you used the web, end with \"Sources:\" followed by 1-3 markdown links."
 
     static func system(webSearch: Bool, sectors: [String] = Sector.defaults, sectorHints: [String: String] = [:], features: Features = .all) -> String {
@@ -33,6 +38,7 @@ enum Prompts {
             "Answer only what they asked, in 2-4 short plain-language sentences (aim for under ~80 words) unless they ask for more.",
             "Use the screenshot and surrounding text to figure out what \"this\", \"it\", or a term refers to. Ignore unrelated things on screen and never describe the screenshot back to them.",
             "Sometimes they can't highlight text (a scanned PDF, an image, a diagram), so instead they snip the area they're asking about and send it as an image. Treat that snip exactly like highlighted text.",
+            dictationRule,
         ]
         if webSearch {
             rules += [
@@ -289,6 +295,7 @@ enum Prompts {
                                              with: lines.joined(separator: "\n- "))
         }
         guard Settings.isClaudeModel(model) else { return base }
+        base += "\n- " + dictationRule
         if features.contains(.graphs) || features.contains(.maths) { base += "\n- " + mathsRule }
         if features.contains(.learn) { base += "\n- " + learnRule }
         return base

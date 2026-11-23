@@ -89,14 +89,30 @@ struct FillToggle {
     mutating func forget() { before = nil }
 }
 
-/// The size a new chat starts at. Nil: today's auto size (grows with its content).
+/// The width a new chat starts at. A new chat always starts at the auto size (its height fits its content, it grows
+/// with its answer); only the width of the last size set by hand carries over, and only a sane one.
+/// Nil: the default width.
 enum ChatStartSize {
-    /// The old "make bigger" width and its answer area's cap.
+    /// The default width (`AskPanelController.width`) and the old "make bigger" width (1.5 x).
+    static let defaultWidth: CGFloat = 380
     static let largeWidth: CGFloat = 570
-    static func resolve(saved: CGSize?, isVideo: Bool) -> CGSize? {
-        guard let saved else { return nil }
-        // A video summary starts at the large auto size, unless the hand-set size is wider.
-        if isVideo && saved.width <= largeWidth { return nil }
-        return CGSize(width: max(PanelResize.minSize.width, saved.width), height: max(PanelResize.minSize.height, saved.height))
+
+    /// The widest saved width a new chat may take on `screen` (a visible frame): 1.5 x the default, and 60% of the screen.
+    static func maxWidth(screen: CGRect) -> CGFloat { min(largeWidth, screen.width * 0.6) }
+
+    /// A saved width that is invalid or wider than `maxWidth` (a filled screen saved by an old build, say) is rejected:
+    /// the chat opens at the default width. The saved value itself is left alone.
+    static func resolve(saved: CGSize?, isVideo: Bool, screen: CGRect) -> CGFloat? {
+        guard let saved, !isVideo else { return nil } // a video summary starts at the large auto size
+        let w = saved.width
+        guard w.isFinite, w > 0, w <= maxWidth(screen: screen) else { return nil }
+        return max(PanelResize.minSize.width, w)
+    }
+
+    /// Whether a hand resize that ended at `size` is saved for new chats. A drag that started on a filled chat is not
+    /// (a fill must never become the next chat's size), and neither is a width beyond `maxWidth` (the earlier sane
+    /// saved width is kept). The chat itself keeps its size either way.
+    static func shouldSave(size: CGSize, startedFilled: Bool, screen: CGRect) -> Bool {
+        !startedFilled && size.width.isFinite && size.width > 0 && size.height > 0 && size.width <= maxWidth(screen: screen)
     }
 }

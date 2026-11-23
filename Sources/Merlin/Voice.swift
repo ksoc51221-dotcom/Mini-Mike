@@ -52,7 +52,8 @@ enum CommandCenter {
 /// - "On this Mac" (the default): Apple's speech model. The sound never leaves this Mac.
 /// - "Groq Whisper" (only with a saved Groq key): when you let go, the sound of that one press is made into a WAV in
 ///   memory and sent once to Groq (api.groq.com) to be turned into text. Apple's live words still show while you talk,
-///   and are used instead if Groq fails, is slow, or refuses the key.
+///   and are used instead if Groq fails, is slow, or refuses the key. With the sound goes a short `prompt`: Merlin's name
+///   and the text of your last few presses that Groq itself made (see `SpeechContext`), so Groq gets nothing new.
 /// Either way the sound is held in memory only, is never saved to disk, and is dropped once the text is ready.
 /// The resulting text goes on, and only to Claude if it's a question for Claude.
 ///
@@ -85,6 +86,8 @@ final class VoiceController: ObservableObject {
     var keys: GroqKeyStore = GroqKeys.shared
     var transport: GroqTransport = GroqTranscriber.liveTransport
     var settings: Settings = .shared
+    /// What Groq heard lately, sent back to it as a hint (memory only: see `SpeechContext`).
+    private(set) var speechContext = SpeechContext()
     /// The "Groq refused the key" line has been shown this run.
     private var toldBadKey = false
     /// Bumped by every press and by dismiss: a slow Groq answer for an older press is then thrown away.
@@ -214,7 +217,8 @@ final class VoiceController: ObservableObject {
         guard mine == session else { return } // a new press, or dismissed, while this one finished
         level = 0
         if !spoken.isEmpty { text = spoken }
-        let result = await VoiceDecision.resolve(appleText: spoken, clip: clip, choice: choice, keys: keys, transport: transport)
+        let result = await VoiceDecision.resolve(appleText: spoken, clip: clip, choice: choice, keys: keys, transport: transport,
+                                                 prompt: speechContext.whisperPrompt)
         guard mine == session else { return } // a slow Groq answer for an older press
         switch result {
         case .discard:
@@ -224,6 +228,7 @@ final class VoiceController: ObservableObject {
         case let .deliver(final, used, badKey):
             text = final
             engine = used
+            speechContext.remember(final, sentToGroq: used == .groq)
             if VoiceDecision.shouldTellBadKey(badKey, alreadyTold: toldBadKey) {
                 toldBadKey = true
                 show(Self.badKeyMessage)

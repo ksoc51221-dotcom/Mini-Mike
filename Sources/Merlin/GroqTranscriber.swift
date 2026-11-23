@@ -185,7 +185,7 @@ enum GroqTranscriber {
 
     // MARK: The request
 
-    static func multipartBody(wav: Data, boundary: String) -> Data {
+    static func multipartBody(wav: Data, boundary: String, prompt: String? = nil) -> Data {
         var body = Data()
         func field(_ name: String, _ value: String) {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
@@ -197,17 +197,19 @@ enum GroqTranscriber {
         field("language", "en")
         field("response_format", "json")
         field("temperature", "0")
+        if let prompt, !prompt.isEmpty { field("prompt", prompt) } // names and recent words: see `SpeechContext`
         body.append(Data("--\(boundary)--\r\n".utf8))
         return body
     }
 
-    static func request(wav: Data, key: String, timeout: TimeInterval, boundary: String = "merlin-\(UUID().uuidString)") -> URLRequest {
+    static func request(wav: Data, key: String, timeout: TimeInterval, boundary: String = "merlin-\(UUID().uuidString)",
+                        prompt: String? = nil) -> URLRequest {
         var r = URLRequest(url: endpoint)
         r.httpMethod = "POST"
         r.timeoutInterval = timeout
         r.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         r.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        r.httpBody = multipartBody(wav: wav, boundary: boundary)
+        r.httpBody = multipartBody(wav: wav, boundary: boundary, prompt: prompt)
         return r
     }
 
@@ -218,8 +220,9 @@ enum GroqTranscriber {
     }
 
     /// One transcription. Never throws, never waits longer than `timeout`.
-    static func transcribe(_ clip: VoiceClip, key: String, transport: @escaping GroqTransport, timeout: TimeInterval) async -> Outcome {
-        let request = request(wav: wav(samples: clip.samples, sampleRate: clip.sampleRate), key: key, timeout: timeout)
+    static func transcribe(_ clip: VoiceClip, key: String, transport: @escaping GroqTransport, timeout: TimeInterval,
+                           prompt: String? = nil) async -> Outcome {
+        let request = request(wav: wav(samples: clip.samples, sampleRate: clip.sampleRate), key: key, timeout: timeout, prompt: prompt)
         guard let (data, response) = await race(timeout, { try await transport(request) }) else { return .failed }
         if response.statusCode == 401 { return .badKey }
         guard (200..<300).contains(response.statusCode), let text = text(fromJSON: data), !text.isEmpty else { return .failed }
@@ -310,7 +313,8 @@ enum VoiceDecision {
     static func usesGroq(choice: VoiceEngine, keys: GroqKeyStore) -> Bool { choice == .groq && keys.hasKey }
 
     static func resolve(appleText: String, clip: VoiceClip?, choice: VoiceEngine, keys: GroqKeyStore,
-                        transport: @escaping GroqTransport, timeout: ((TimeInterval) -> TimeInterval)? = nil) async -> Result {
+                        transport: @escaping GroqTransport, timeout: ((TimeInterval) -> TimeInterval)? = nil,
+                        prompt: String? = nil) async -> Result {
         let spoken = appleText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let clip, clip.duration >= shortestClip else {
             // No sound held (a very old path) still delivers the words Apple heard.
@@ -322,8 +326,11 @@ enum VoiceDecision {
         // Apple gave no words (its model may not be on this Mac): Groq alone decides, but only for a clip with real sound in it.
         if spoken.isEmpty, !hasSpeech(clip) { return .discard }
         let wait = timeout?(clip.duration) ?? GroqTranscriber.timeout(forClip: clip.duration)
-        switch await GroqTranscriber.transcribe(clip, key: key, transport: transport, timeout: wait) {
-        case .text(let text): return .deliver(text, .groq, badKey: false)
+        switch await GroqTranscriber.transcribe(clip, key: key, transport: transport, timeout: wait, prompt: prompt) {
+        case .text(let text):
+            // Whisper gave back its prompt (an old press) instead of this one: use Apple's words, or drop the press.
+            if SpeechContext.isEcho(text, of: prompt, apple: spoken) { return spoken.isEmpty ? .discard : .deliver(spoken, .onDevice, badKey: false) }
+            return .deliver(text, .groq, badKey: false)
         case .badKey: return spoken.isEmpty ? .noAnswer(badKey: true) : .deliver(spoken, .onDevice, badKey: true)
         case .failed: return spoken.isEmpty ? .noAnswer(badKey: false) : .deliver(spoken, .onDevice, badKey: false)
         }
