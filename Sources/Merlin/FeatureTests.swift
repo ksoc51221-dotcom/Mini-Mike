@@ -31,6 +31,7 @@ enum FeatureTests {
         groqChecks(check)
         boardChecks(check)
         tableChecks(check)
+        sheetChecks(check)
         sceneChecks(check)
         voiceOrbChecks(check)
         pointToAskChecks(check)

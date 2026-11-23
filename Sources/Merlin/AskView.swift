@@ -548,6 +548,9 @@ struct AskView: View {
                                 .buttonStyle(GhostStyle())
                                 .disabled(model.newestIsKept)
                                 .help("Save this answer to your library")
+                                if let answer = model.turns.last?.answer {
+                                    SaveToNoteButton(answer: answer)
+                                }
                             }
                             if model.canAskClaude {
                                 Button { model.askClaudeInstead() } label: {
@@ -1352,6 +1355,95 @@ private struct GhostStyle: ButtonStyle {
                 .contentShape(Rectangle())
                 .pressAndHover(configuration.isPressed, $hovering)
         }
+    }
+}
+
+/// "Save to note" under an answer: a small menu of your named notes (most recently changed first) and "New note…". The
+/// answer's own Markdown is added (tables stay tables; see `Answer.noteMarkup` for Merlin's tags). No Claude call.
+struct SaveToNoteButton: View {
+    let answer: String
+    var library: Library = .shared
+    @State private var open = false
+    @State private var saved: String?
+
+    var body: some View {
+        Button { open = true } label: {
+            Label(saved.map { "Saved to \($0)" } ?? "Save to note", systemImage: saved == nil ? "note.text.badge.plus" : "checkmark")
+                .lineLimit(1)
+        }
+        .buttonStyle(GhostStyle())
+        .help("Add this answer, tables and all, to a named note")
+        .accessibilityLabel("Save to note")
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            SaveToNoteMenu(sheets: library.sheets.map { (id: $0.id, name: $0.name) },
+                           onPick: { id in finish(SheetActions.saveAnswer(answer, toSheet: id, library: library)) },
+                           onNew: { name in finish(SheetActions.saveAnswer(answer, toNewSheet: name, library: library)) })
+        }
+    }
+
+    private func finish(_ sheet: Note?) {
+        open = false
+        guard let sheet else { return }
+        withAnimation(Motion.animation(Motion.small)) { saved = sheet.name }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            withAnimation(Motion.animation(Motion.small)) { saved = nil }
+        }
+    }
+}
+
+/// The menu itself (its own view, so pictures can draw it without a popover).
+struct SaveToNoteMenu: View {
+    let sheets: [(id: UUID, name: String)]
+    let onPick: (UUID) -> Void
+    let onNew: (String) -> Void
+    @State var naming = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Save to note").mLabelStyle().padding(.horizontal, 8).padding(.bottom, 4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(sheets, id: \.id) { s in
+                        SaveToNoteRow(symbol: "note.text", title: s.name) { onPick(s.id) }
+                    }
+                }
+            }
+            .frame(maxHeight: 240)
+            .fixedSize(horizontal: false, vertical: true)
+            if !sheets.isEmpty { Rectangle().fill(Theme.hairline.color).frame(height: 1).padding(.vertical, 4) }
+            if naming {
+                NewSheetField(onCreate: onNew).padding(.horizontal, 4).padding(.vertical, 2)
+            } else {
+                SaveToNoteRow(symbol: "plus", title: "New note…") {
+                    withAnimation(Motion.animation(Motion.small)) { naming = true }
+                }
+            }
+        }
+        .padding(8)
+        .frame(width: 280)
+    }
+}
+
+private struct SaveToNoteRow: View {
+    let symbol: String
+    let title: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: symbol).font(.system(size: 11, weight: .medium)).foregroundStyle(inkSecondary).frame(width: 16)
+                Text(title).font(.geist(13)).foregroundStyle(inkColor).lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8).frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
+                .fill(hovering ? Theme.surfaceSelected.color : .clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressStyle())
+        .onHover { h in withAnimation(Motion.still ? nil : Motion.animation(Motion.small)) { hovering = h } }
     }
 }
 

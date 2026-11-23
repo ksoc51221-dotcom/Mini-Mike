@@ -324,6 +324,33 @@ enum UIShots {
             none.query = "zzqx"
             shot("library-search-empty", margin: 16, hostedSize: size, window(none))
 
+            // Sheets (R2): a named note with the economics table (rows added later, and a dated part under a divider), drawn
+            // and in Edit mode; then the "Save to note" menu under an answer, and its "New note…" name box. The sheet is
+            // removed for good afterwards, so the other pictures (and the dark pass) stay as they were.
+            let sheetDate = ISO8601DateFormatter().date(from: "2026-11-23T12:00:00Z")!
+            if let econ = Library.shared.createSheet(named: "Microeconomics terms", markup: MarkdownTable.economicsSample) {
+                Library.shared.appendToSheet(econ.id, "| Term | Definition | Formula |\n|---|---|---|\n| Average cost | Total cost ==per unit== made. | $AC = \\frac{TC}{Q}$ |\n\nCheck these before the mock on 3 Dec.", date: sheetDate)
+                let sheetState = LibraryState()
+                sheetState.mode = .notebook
+                sheetState.browsing = true
+                sheetState.selection = ItemRef(kind: .note, id: econ.id)
+                shot("sheet-1-library", margin: 16, hostedSize: size, window(sheetState))
+                SheetDetail.debugStartEditing = true
+                let editState = LibraryState()
+                editState.mode = .notebook
+                editState.browsing = true
+                editState.selection = ItemRef(kind: .note, id: econ.id)
+                shot("sheet-2-edit", margin: 16, hostedSize: size, window(editState))
+                SheetDetail.debugStartEditing = false
+                let menuSheets = [(id: econ.id, name: "Microeconomics terms"), (id: UUID(), name: "Physics formulas"), (id: UUID(), name: "Russian words")]
+                shot("sheet-3-save-menu", hostedSize: CGSize(width: 296, height: 190),
+                     panel(mode, radius: Theme.Radius.container, SaveToNoteMenu(sheets: menuSheets, onPick: { _ in }, onNew: { _ in })))
+                shot("sheet-4-new-name", hostedSize: CGSize(width: 296, height: 190),
+                     panel(mode, radius: Theme.Radius.container, SaveToNoteMenu(sheets: menuSheets, onPick: { _ in }, onNew: { _ in }, naming: true)))
+                Library.shared.deleteSheet(econ.id)
+                Library.shared.deleteForever(econ.id)
+            }
+
             // The settings page inside the Library window (in the Library's place), with its "‹ Library" button and the window's
             // three buttons drawn where macOS puts them; at the usual size and at the window's smallest. Throwaway stores only.
             let settingsSectors = SectorStore(directory: tmp.appendingPathComponent("settings-sectors"), library: Library.shared)

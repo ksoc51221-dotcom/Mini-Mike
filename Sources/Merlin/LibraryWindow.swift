@@ -79,6 +79,17 @@ final class LibraryWindow {
 
     func show(notebook: Bool = false) { show(mode: notebook ? .notebook : .all) }
 
+    /// Opens the Library on one sheet (a named note): Notes, with that sheet picked. For the edge panel and "open … note".
+    func show(sheet id: UUID) {
+        guard Library.shared.sheet(id) != nil else { return }
+        show(mode: .notebook)
+        state.sector = nil
+        state.query = ""
+        state.browsing = true
+        state.selection = ItemRef(kind: .note, id: id)
+        state.anchor = state.selection
+    }
+
     func show(mode: LibraryState.Mode, takeKeyboard: Bool = true) {
         if mode == .all, !isVisible {
             // A plain "open the Library" lands where Settings say. (The menu's Notebook, Screenshots and Bin go where they name.)
@@ -240,7 +251,8 @@ final class LibraryState: ObservableObject {
     var settingsDataSource: () -> LibrarySettingsData = { .live() }
 
     /// Whether the Library's own keys (⌘K, ⌘N, ⌘⌫, ⌘⇧M, Esc to the Desk…) may act: never while the settings page covers it.
-    var acceptsLibraryShortcuts: Bool { page == .library }
+    /// (Not while a sheet's text is being edited: ⌘⌫ there deletes text, it must not bin the sheet.)
+    var acceptsLibraryShortcuts: Bool { page == .library && !SheetDetail.editingNow }
 
     /// Shows the settings page, at `section`. Already open: just switches section. Nothing about the Library changes.
     func openSettings(section: LibrarySettingsView.Section = .general) {
@@ -978,6 +990,7 @@ struct LibraryView: View {
     var onAskImage: (_ jpeg: Data, _ appName: String) -> Void = { _, _ in }
     var onNewChat: () -> Void = {}
     @State private var confirmEmpty = false
+    @State private var newSheetOpen = false
     @State private var assistantOpen = LibraryView.debugAssistantOpen
     /// Pictures open the Assistant's card this way.
     nonisolated(unsafe) static var debugAssistantOpen = false
@@ -1327,6 +1340,21 @@ struct LibraryView: View {
                         }
                     }
                     Spacer(minLength: 4)
+                    if state.mode == .notebook {
+                        BarIconButton(symbol: "plus", help: "New note (a named note you can add to)") { newSheetOpen = true }
+                            .popover(isPresented: $newSheetOpen, arrowEdge: .bottom) {
+                                NewSheetField { name in
+                                    newSheetOpen = false
+                                    guard let s = library.createSheet(named: name) else { return }
+                                    withAnimation(LibMotion.panel) {
+                                        state.sector = nil; state.query = ""; state.browsing = true
+                                        state.selection = ItemRef(kind: .note, id: s.id); state.anchor = state.selection
+                                    }
+                                }
+                                .padding(12).frame(width: 320)
+                            }
+                            .probe("new-sheet")
+                    }
                     if state.mode != .bin && !feed.isEmpty {
                         // Always in view, and labelled: this is how you clear many at once.
                         Button { withAnimation(LibMotion.panel) { state.selecting = true; state.multi = [] } } label: {
@@ -1604,6 +1632,8 @@ struct LibraryView: View {
         let move: (String) -> Void = { moveItems([ref], to: $0) }
         if ref.kind == .chat, let chat = library.chat(ref.id) {
             ChatDetail(chat: chat, moveRequest: state.moveRequest, onMove: move, onAsk: onAsk, onClear: { state.clear(ref, next: next) })
+        } else if ref.kind == .note, let sheet = library.sheet(ref.id) {
+            SheetDetail(sheet: sheet, initialEditing: SheetDetail.debugStartEditing, onClear: { state.clear(ref, next: next) }).id(sheet.id)
         } else if ref.kind == .note, let note = library.notes.first(where: { $0.id == ref.id }) {
             NoteDetail(note: note, moveRequest: state.moveRequest, onAsk: onAsk, onClear: { state.clear(ref, next: next) })
         } else if ref.kind == .screenshot, let shot = library.screenshot(ref.id) {

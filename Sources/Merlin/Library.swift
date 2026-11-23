@@ -184,7 +184,8 @@ extension ScreenshotRecord {
 
 /// A saved answer in the notebook ("Keep it"), or a quiz question you missed.
 struct Note: Codable, Identifiable, Equatable {
-    enum Kind: String, Codable { case answer, missed }
+    /// `sheet`: a named note you keep adding to ("Microeconomics terms"). It holds Markdown (tables too) in `markup`.
+    enum Kind: String, Codable { case answer, missed, sheet }
 
     var id = UUID()
     var created = Date()
@@ -194,9 +195,54 @@ struct Note: Codable, Identifiable, Equatable {
     var app: String
     var quote: String
     var question: String
-    /// The answer as plain text (voice clips become their words).
+    /// The answer as plain text (voice clips become their words). For a sheet: the plain words of `markup` (for the
+    /// Bin, the list's snippet and search), written only by `Library.writeSheet`.
     var body: String
     var chatID: UUID?
+    /// A sheet's name ("Microeconomics terms"). Empty for other notes.
+    var name: String = ""
+    /// A sheet's Markdown, exactly as you or Merlin wrote it. Empty for other notes.
+    var markup: String = ""
+    /// When a sheet last changed (nil in files written before sheets existed: `created` stands in).
+    var updated: Date?
+
+    var isSheet: Bool { kind == .sheet }
+    /// When it last changed, for "most recently changed first".
+    var lastChanged: Date { updated ?? created }
+
+    enum CodingKeys: String, CodingKey {
+        case id, created, kind, title, sector, app, quote, question, body, chatID, name, markup, updated
+    }
+}
+
+/// Reading a note never fails because a field is missing: files written before a field existed (no `name`, `markup` or
+/// `updated`) load with that field's default. (In an extension, so the memberwise init stays.)
+extension Note {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        created = try c.decodeIfPresent(Date.self, forKey: .created) ?? Date()
+        kind = try c.decodeIfPresent(Kind.self, forKey: .kind) ?? .answer
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        sector = try c.decodeIfPresent(String.self, forKey: .sector) ?? Sector.other
+        app = try c.decodeIfPresent(String.self, forKey: .app) ?? ""
+        quote = try c.decodeIfPresent(String.self, forKey: .quote) ?? ""
+        question = try c.decodeIfPresent(String.self, forKey: .question) ?? ""
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+        chatID = try c.decodeIfPresent(UUID.self, forKey: .chatID)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        markup = try c.decodeIfPresent(String.self, forKey: .markup) ?? ""
+        updated = try c.decodeIfPresent(Date.self, forKey: .updated)
+    }
+}
+
+/// A kind written by a newer Merlin (one this version does not know) reads as an ordinary kept answer, so the note
+/// still loads. (If this version then re-saves that note, the unknown kind is not kept.)
+extension Note.Kind {
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = Note.Kind(rawValue: raw) ?? .answer
+    }
 }
 
 /// A screenshot kept in the dashboard: the picture (a JPEG in the library's folder), where it was taken, what's written in
@@ -580,6 +626,20 @@ final class Library {
         keepInBin(BinItem(note: n))
         notes.removeAll { $0.id == id }
         remove(notesDirectory.appendingPathComponent("\(id.uuidString).json"))
+        announce()
+    }
+
+    /// Writes a sheet (new or changed): the one place a sheet's stored copies (`title`, `question`, `body`) are set from
+    /// its `name` and `markup`, and its `updated` time moves. See Sheets.swift for the sheet API.
+    func writeSheet(_ sheet: Note) {
+        var s = sheet
+        s.kind = .sheet
+        s.title = s.name
+        s.question = s.name
+        s.body = Answer.plainText(s.markup)
+        s.updated = Date()
+        if let i = notes.firstIndex(where: { $0.id == s.id }) { notes[i] = s } else { notes.insert(s, at: 0) }
+        write(s, to: notesDirectory.appendingPathComponent("\(s.id.uuidString).json"))
         announce()
     }
 

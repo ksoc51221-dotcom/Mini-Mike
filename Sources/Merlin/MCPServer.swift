@@ -74,12 +74,12 @@ final class MCPServer {
         tool("list_chats", "List the user's Merlin mini chats (highlight-to-ask conversations), newest first. Returns id, title, sector, app, date, turns.",
              ["sector": ["type": "string", "description": "Only this sector"], "query": ["type": "string", "description": "Words that must appear in the title/quote/Q&A"],
               "limit": ["type": "integer", "description": "Default 20"]]),
-        tool("search_library", "Search chat titles, quotes, questions, answers and saved notes. Returns short snippets with ids.",
+        tool("search_library", "Search chat titles, quotes, questions, answers and saved notes (named notes are found by their name and their text). Returns short snippets with ids.",
              ["query": ["type": "string"], "limit": ["type": "integer", "description": "Default 10"]], required: ["query"]),
         tool("get_chat", "Get one full chat as Markdown (title, sector, date, source app, quote, every Q/A turn).",
              ["id": ["type": "string"]], required: ["id"]),
         tool("list_sectors", "List sector names with chat counts."),
-        tool("get_note", "Get one saved note by id.", ["id": ["type": "string"]], required: ["id"]),
+        tool("get_note", "Get one saved note by id. A named note comes back as its Markdown, tables included.", ["id": ["type": "string"]], required: ["id"]),
     ]
 
     // MARK: Data (read-only)
@@ -166,6 +166,11 @@ final class MCPServer {
         case "get_note":
             guard let id = (a["id"] as? String).flatMap({ UUID(uuidString: $0) }), let n = notes().first(where: { $0.id == id }) else {
                 return ("No note with that id.", true)
+            }
+            if n.isSheet {
+                // A named note: its own Markdown, exactly as kept (tables stay tables).
+                let md = "# \(n.name)\n\n- Last changed: \(date(n.lastChanged))\n\n\(n.markup)\n"
+                return (String(md.prefix(20_000)), false)
             }
             var md = "# \(n.title)\n\n- Sector: \(n.sector)\n- Date: \(date(n.created))\n- Source app: \(n.app)\n"
             if !n.quote.isEmpty { md += "\n> " + n.quote.replacingOccurrences(of: "\n", with: "\n> ") + "\n" }

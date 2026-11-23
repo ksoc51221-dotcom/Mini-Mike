@@ -354,6 +354,9 @@ final class AskPanelController {
         model.turns.isEmpty && model.draft.isEmpty && selection.isBlank && model.video == nil
     }
 
+    /// The newest finished answer, as written (for "add this to … note"). Nil while it's still coming or if it failed.
+    var lastAnswer: String? { model.canKeep ? model.turns.last?.answer : nil }
+
     /// Click-away / Esc / the shortcut: the chat goes back to the sidebar, still there to reopen.
     /// Only the × buttons delete a chat (a completely empty one has nothing to keep, so it just goes away).
     func dismissGesture() {

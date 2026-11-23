@@ -39,6 +39,12 @@ final class AgentDock {
 
     func toggleSidebar() { sidebar.toggle() }
 
+    /// "Add this to microeconomics terms" (R4): the last answer of the chat you used last goes into the sheet that name
+    /// means. No Claude call, and never a guess: an unknown name gives the two closest names instead.
+    func appendFrontAnswer(toSheetNamed name: String, library: Library = .shared) -> SheetActions.AppendResult {
+        SheetActions.append(answer: front?.lastAnswer, toSheetNamed: name, library: library)
+    }
+
     private func markOpen(_ agent: AskPanelController) {
         let id = ObjectIdentifier(agent)
         openIDs.removeAll { $0 == id }

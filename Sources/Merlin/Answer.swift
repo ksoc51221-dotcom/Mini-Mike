@@ -154,6 +154,40 @@ enum Answer {
         }.filter { !$0.isEmpty }.joined(separator: " ")
     }
 
+    /// The answer as Markdown to keep in a note (a sheet): the text stays exactly as written (tables, **bold**, ==marks==,
+    /// maths). Only Merlin's own tags change, in place: a voice clip (<say>) keeps its words; a board or 3D scene keeps
+    /// its captions and labels as a line of text; a graph, quiz or calendar event is dropped (it can't be shown as text);
+    /// the <meta> naming tag goes. Replacing in place keeps a <say> inside a table cell in its row.
+    static func noteMarkup(_ answer: String) -> String {
+        let dropped = "\u{E000}" // marks where a dropped tag was, until its fence (if any) is removed
+        let answer = withoutMeta(answer)
+        let ns = answer as NSString
+        let out = NSMutableString(string: answer)
+        for match in tag.matches(in: answer, range: NSRange(location: 0, length: ns.length)).reversed() {
+            let kind = ns.substring(with: match.range(at: 1)).lowercased()
+            let body = ns.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let replacement: String
+            switch kind {
+            case "say": replacement = body
+            case "board": replacement = BoardSpec.parse(body)?.plainText ?? BoardSpec.fallbackText(body)
+            case "scene": replacement = SceneSpec.parse(body)?.plainText ?? SceneSpec.fallbackText(body)
+            default: replacement = dropped
+            }
+            out.replaceCharacters(in: match.range, with: replacement)
+        }
+        var text = out as String
+        // A ``` fence wrapped around a dropped graph goes with it; other code blocks are left exactly as written.
+        text = text.replacingOccurrences(of: "```[A-Za-z]*[ \\t]*\\n?\\s*\(dropped)\\s*```", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: dropped, with: "")
+        // A board or scene that never closed (a stopped answer): its JSON is not kept.
+        if let open = ["<board", "<scene"].compactMap({ text.range(of: $0, options: [.backwards, .caseInsensitive]) })
+            .min(by: { $0.lowerBound < $1.lowerBound }) {
+            text = String(text[..<open.lowerBound])
+        }
+        text = text.replacingOccurrences(of: #"\n{3,}"#, with: "\n\n", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private static func appendText(_ s: String, to pieces: inout [Piece]) {
         if !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pieces.append(.text(s)) }
     }
