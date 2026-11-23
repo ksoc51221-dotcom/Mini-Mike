@@ -24,6 +24,7 @@ enum FeatureTests {
         closeDeleteChecks(check)
         starChecks(check)
         mathChecks(check)
+        dockAppsChecks(check)
         migrationChecks(check)
         assistantChecks(check)
         keybindChecks(check)
@@ -35,6 +36,7 @@ enum FeatureTests {
         sheetChecks(check)
         commandChecks(check)
         MainActor.assumeIsolated { edgePanelChecks(check) }
+        MainActor.assumeIsolated { spotifyDockChecks(check) }
         MainActor.assumeIsolated { resizeChecks(check) }
         sceneChecks(check)
         voiceOrbChecks(check)

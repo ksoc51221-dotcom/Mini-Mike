@@ -27,11 +27,12 @@ extension FeatureTests {
             let window = EdgePanelLayout.windowFrame(screen: screen)
             let list = EdgePanelLayout.listFrame(window: window, card: EdgePanelLayout.listSize(rows: EdgePanelLayout.maxRows, newNoteRow: true))
             let box = EdgePanelLayout.discFrame(window: window)
+            let dock = EdgePanelLayout.dockFrame(window: window)
             check("edge panel (\(name)): its window ends at the screen's right edge", window.maxX == screen.maxX)
-            check("edge panel (\(name)): the disc is flush with the edge and the list sits 8 pt left of it, both centred on the screen",
-                  box.maxX == screen.maxX && abs(list.maxX - (box.minX - 8)) < 0.01
-                  && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1)
-            check("edge panel (\(name)): the disc fits on the screen", screen.contains(box))
+            check("edge panel (\(name)): the disc and the dock are flush with the edge and the list sits 8 pt left of the ring's items, all centred on the screen",
+                  box.maxX == screen.maxX && dock.maxX == screen.maxX && abs(list.maxX - (dock.minX - 8)) < 0.01
+                  && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1 && abs(dock.midY - screen.midY) < 1)
+            check("edge panel (\(name)): the disc and the whole dock fit on the screen", screen.contains(box) && screen.contains(dock))
             check("edge panel (\(name)): the tallest list fits on the screen", screen.contains(list))
         }
         check("chats: room for ten", Settings.shared.maxAgents == 10)

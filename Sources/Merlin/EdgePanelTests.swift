@@ -137,8 +137,15 @@ extension FeatureTests {
               && EdgeDotState.from([]) == .absent)
         check("edge dot: the setting is on by default", Settings(defaults: UserDefaults(suiteName: "merlin.edge.\(UUID().uuidString)")!).edgeDot)
 
+        // The dock's system parts are fakes in every check below: no live Spotify, no real defaults, nothing launched.
+        let (fixtureDefaults, fixtureName) = EdgeDockFixtures.defaults()
+        defer { EdgeDockFixtures.forget(fixtureName) }
+        let workspace = FixtureDockWorkspace()
+        let store = EdgeDockFixtures.appStore(workspace, defaults: fixtureDefaults)
+        let quiet = SpotifyService(backend: FixtureSpotifyBackend(.notRunning), loader: FixtureImageLoader(image: nil))
+
         // The rows' wiring: panel → dock → chat. No window, no real chat.
-        let edge = EdgePanelController()
+        let edge = EdgePanelController(apps: store, spotify: quiet)
         let dock = AgentDock(edge: edge)
         var routed: [(AgentDock.RowAction, ObjectIdentifier)] = []
         dock.debugRouted = { routed.append(($0, $1)) }
@@ -160,9 +167,10 @@ extension FeatureTests {
         check("edge: a new panel puts nothing on screen", !edge.debugWindowIsOrderedIn && edge.debugWindow == nil)
         withExtendedLifetime(token) {}
 
-        // Sizes: the box grows into the list (one shape, a new size).
-        let m = EdgePanelModel()
-        check("edge sizes: stage one is the half-disc with two items", m.cardSize == EdgePanelLayout.boxSize)
+        // Sizes: the dock, then a card beside it.
+        let m = EdgePanelModel(apps: store, spotify: quiet)
+        check("edge sizes: stage one is the dock (disc, ring and items)", m.cardSize == EdgePanelLayout.boxSize
+              && EdgePanelLayout.boxSize == EdgePanelLayout.dockSize)
         m.chats = (0..<3).map { _ in .init(id: ObjectIdentifier(token), title: "t", subtitle: "s", phase: .idle, isOpen: false) }
         m.choose(.chats)
         check("edge sizes: choosing Chats opens the list card", m.section == .chats && m.cardSize.width > EdgePanelLayout.boxSize.width
@@ -197,7 +205,202 @@ extension FeatureTests {
         edge.model.tapNewNote()
         check("edge notes: a sheet row opens that sheet; New note asks for a new one", opened == [rows[0].id] && made == 1)
 
+        dockChecks(check, store: store, workspace: workspace)
         windowedEdgePanelChecks(check)
+    }
+
+    /// The dock (version 1): the ring's geometry, the cards' sizes, the app items, the Spotify card and the add/remove cap.
+    /// Headless, on fakes only.
+    @MainActor
+    private static func dockChecks(_ check: (String, Bool) -> Void, store: DockAppStore, workspace: FixtureDockWorkspace) {
+        typealias L = EdgePanelLayout
+        // Geometry: the numbers.
+        check("edge dock: a 110 pt disc, a 160 pt ring, 44 pt items 20° apart", L.discRadius == 110 && L.ringRadius == 160
+              && L.itemSize == 44 && L.itemStep == 20 && L.maxItems == 8)
+        check("edge dock: the card sits beside the ring's items (ring + half an item + 8 pt)", L.listInset == 160 + 22 + 8)
+        check("edge dock: the dock is the ring and its items, flush right", L.dockSize == CGSize(width: 182, height: 346))
+        check("edge dock: the window holds the card and the dock", L.windowSize == CGSize(width: 284 + 190 + 56, height: 481 + 112))
+        // The card's shadow (radius 22, 16 pt down: about 60 pt below, 44 pt to the sides) stays inside the window.
+        check("edge dock: the slack holds the card's shadow", L.slack == 56 && L.slack >= 16 + 22 * 1.8 && L.slack >= 22 * 2)
+
+        // Item centres for 2 and 8 items: no overlap, inside the window, Chats first and on top, centred on the axis.
+        let local = NSRect(origin: .zero, size: L.windowSize)
+        for n in [2, 8] {
+            let c = L.itemCentres(count: n)
+            let r = L.itemSize / 2
+            var apart = true
+            for i in 0..<n { for j in (i + 1)..<n where hypot(c[i].x - c[j].x, c[i].y - c[j].y) < L.itemSize * 1.08 + 2 { apart = false } }
+            check("edge dock (\(n) items): no two items overlap, even lifted to 1.08", apart)
+            let inDock = c.allSatisfy { $0.x - r >= 0 && $0.x + r <= L.dockSize.width && $0.y - r >= 0 && $0.y + r <= L.dockSize.height }
+            let inWindow = (0..<n).allSatisfy { i in
+                let p = L.itemCentre(i, of: n, window: local)
+                return local.contains(NSRect(x: p.x - r * 1.08, y: p.y - r * 1.08, width: r * 2.16, height: r * 2.16))
+            }
+            check("edge dock (\(n) items): every item is inside the dock and the window", inDock && inWindow)
+            let ys = c.map(\.y)
+            check("edge dock (\(n) items): Chats is first and on top; the items go down in order", ys == ys.sorted() && ys[0] < L.dockSize.height / 2)
+            check("edge dock (\(n) items): spread evenly around the horizontal axis on the ring",
+                  abs((ys.first! + ys.last!) / 2 - L.dockSize.height / 2) < 0.01
+                  && c.allSatisfy { abs(hypot(L.dockSize.width - $0.x, L.dockSize.height / 2 - $0.y) - L.ringRadius) < 0.01 })
+            check("edge dock (\(n) items): every item is outside the disc",
+                  c.allSatisfy { hypot(L.dockSize.width - $0.x, L.dockSize.height / 2 - $0.y) - r > L.discRadius })
+        }
+        let chats = L.itemCentre(.chats, window: local), notes = L.itemCentre(.notes, window: local)
+        check("edge dock: in window coordinates (y up) Chats is above Notes", chats.y > notes.y && abs(chats.x - notes.x) < 0.01)
+        let cover = L.coverCentre, mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
+        // The disc's three buttons ("+", search, collapse): one column, equal gaps, centred on the disc's middle.
+        let buttons = [L.plusCentre, L.searchCentre, L.collapseCentre]
+        let waves = EdgeDockArt.orbRadius * 0.84 + 2
+        let inDisc = buttons.allSatisfy { b in hypot(b.x - mid.x, b.y - mid.y) + L.plusSize / 2 <= L.discRadius - 8 }
+        let clearOfWaves = buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > waves }
+        check("edge dock: \"+\", search and collapse are inside the disc (8 pt margin), clear of the record and its waves",
+              inDisc && clearOfWaves && EdgeDockArt.orbRadius * 0.64 > L.coverSize / 2)
+        let sameX = buttons.allSatisfy { abs($0.x - buttons[0].x) < 0.001 }
+        let gap1 = buttons[1].y - buttons[0].y, gap2 = buttons[2].y - buttons[1].y
+        check("edge dock: the three buttons share one x, are equally spaced top to bottom and centred on the disc",
+              sameX && gap1 > L.plusSize && abs(gap1 - gap2) < 0.001 && abs(buttons[1].y - mid.y) < 0.001)
+        let field = L.searchFieldFrame
+        let fieldCorners = [CGPoint(x: field.minX, y: field.minY), CGPoint(x: field.minX, y: field.maxY)]
+        check("edge dock: the search field sits in the search button's row, inside the disc",
+              abs(field.midY - L.searchCentre.y) < 0.001 && field.maxX < L.dockSize.width
+              && fieldCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius - 4 })
+
+        // The ring: the same distance between every two neighbours, for 2 to 9 items (the cap is 8; 9 checks the rule).
+        for n in 2...9 {
+            let c = L.itemCentres(count: n)
+            let d = (1..<n).map { hypot(c[$0].x - c[$0 - 1].x, c[$0].y - c[$0 - 1].y) }
+            check("edge dock (\(n) items): every two neighbours are the same distance apart",
+                  d.allSatisfy { abs($0 - d[0]) < 0.001 } && abs((c.first!.y + c.last!.y) / 2 - L.dockSize.height / 2) < 0.001)
+        }
+        let middle = L.itemCentre(0, of: 1)
+        check("edge dock: one item sits at the ring's middle-left point",
+              abs(middle.x - (L.dockSize.width - L.ringRadius)) < 0.001 && abs(middle.y - L.dockSize.height / 2) < 0.001)
+        let screen = NSRect(x: 0, y: 0, width: 1440, height: 875)
+        let w = L.windowFrame(screen: screen)
+        let dock = L.dockFrame(window: w)
+        check("edge dock: the dock frame holds the disc and the outermost item",
+              dock.contains(L.discFrame(window: w)) && dock.minX == w.maxX - L.ringRadius - L.itemSize / 2)
+
+        // Cards: the same slot for every section.
+        let (d, name) = EdgeDockFixtures.defaults()
+        defer { EdgeDockFixtures.forget(name) }
+        let ws = FixtureDockWorkspace()
+        let apps = EdgeDockFixtures.appStore(ws, defaults: d, extra: [FixtureDockWorkspace.sample[2]])
+        let backend = FixtureSpotifyBackend(.track(EdgeDockFixtures.track))
+        let music = EdgeDockFixtures.spotify(backend, cover: EdgeDockFixtures.coverImage())
+        let m = EdgePanelModel(apps: apps, spotify: music)
+        check("edge dock: the ring holds Chats, Notes, then the pinned apps",
+              m.items == [.chats, .notes, .app(FixtureDockWorkspace.sample[0]), .app(FixtureDockWorkspace.sample[2])])
+        m.tapSpotify()
+        check("edge cards: the cover opens the Spotify card (song: 284 × 132)", m.section == .spotify && m.cardSize == CGSize(width: 284, height: 132))
+        m.tapSpotify()
+        check("edge cards: ...and a second click closes it", m.section == nil)
+        m.tapManageApps()
+        check("edge cards: \"+\" opens the add/remove card (284 × 362)", m.section == .apps && m.cardSize == CGSize(width: 284, height: 44 + 6 + 7 * 44 + 6))
+        check("edge cards: every card fits the window's card slot",
+              [L.spotifySize(track: true), L.spotifySize(track: false), L.appsSize].allSatisfy { $0.width <= L.listWidth && $0.height <= L.maxCardHeight })
+        check("edge cards: the Spotify card without a song is one line (284 × 76)", L.spotifySize(track: false) == CGSize(width: 284, height: 76))
+
+        // The Spotify card's buttons reach the (fake) backend.
+        m.tapSpotifyCommand(.previous)
+        m.tapSpotifyCommand(.playPause)
+        m.tapSpotifyCommand(.next)
+        EdgeDockFixtures.waitUntil { backend.sent.count == 3 }
+        check("edge spotify: previous, play-pause and next reach Spotify in order", backend.sent == [.previous, .playPause, .next])
+        check("edge spotify: a playing song with a cover takes the cover's colours", music.palette != .emerald)
+        let denied = EdgePanelModel(apps: apps, spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.denied)))
+        denied.tapSpotify()
+        check("edge spotify: without permission the glyph opens the one-line Spotify card (284 × 76)",
+              denied.section == .spotify && denied.track == nil && denied.cardSize == CGSize(width: 284, height: 76))
+        check("edge spotify: the service starts in emerald", SpotifyService(backend: FixtureSpotifyBackend(.notRunning)).palette == .emerald)
+
+        // The add/remove card: installed apps load, pinned first, and the cap holds.
+        EdgeDockFixtures.waitUntil { !apps.installed.isEmpty }
+        check("edge apps: the card lists the pinned apps first, then the rest",
+              Array(m.manageRows.prefix(2)) == apps.pinned && m.manageRows.count == FixtureDockWorkspace.sample.count)
+        for app in FixtureDockWorkspace.sample where !apps.isPinned(app.bundleID) { m.tapPin(app) }
+        check("edge apps: Add stops at 6", apps.pinned.count == DockAppStore.maxPinned && !apps.canPin && m.items.count == L.maxItems)
+        m.tapUnpin(apps.pinned[1])
+        check("edge apps: Remove frees a place", apps.pinned.count == DockAppStore.maxPinned - 1 && apps.canPin)
+
+        // An app on the ring opens through the workspace and the panel hides (no window, nothing launched).
+        let edge = EdgePanelController(apps: store, spotify: SpotifyService(backend: FixtureSpotifyBackend(.notRunning)))
+        edge.debugRevealWithoutWindow()
+        check("edge apps: (the panel counts as shown before the click)", edge.isVisible)
+        let claude = store.pinned.first
+        if let claude { edge.model.tapApp(claude) }
+        check("edge apps: a click on an app opens it through the workspace",
+              claude != nil && workspace.opened == [URL(fileURLWithPath: "/fixture/\(DockAppStore.claudeBundleID).app")])
+        check("edge apps: ...and the panel hides", !edge.isVisible && edge.debugWindow == nil)
+        edge.model.section = .apps
+        let w0 = L.windowFrame(screen: .zero) // the screen the panel was last on (none yet)
+        let hover = edge.debugHoverFrame
+        check("edge: the hover and click-outside area covers the whole dock, the card and the strip between",
+              hover.contains(L.dockFrame(window: w0)) && hover.contains(L.listFrame(window: w0, card: L.appsSize))
+              && hover.contains(NSRect(x: L.listFrame(window: w0, card: L.appsSize).maxX, y: w0.midY, width: L.gap, height: 1)))
+        edge.model.section = nil
+        searchChecks(check)
+    }
+
+    /// The disc's search: the match rule, the ring while a query is typed, Return, the closes, and the key window.
+    /// The query is set on the model (a real click on a text field would hang a windowed run).
+    @MainActor
+    private static func searchChecks(_ check: (String, Bool) -> Void) {
+        typealias M = EdgePanelModel
+        let mail = DockApp(bundleID: "t.mail", name: "Mail"), gmail = DockApp(bundleID: "t.gmail", name: "Gmail")
+        let maps = DockApp(bundleID: "t.maps", name: "Maps"), music = DockApp(bundleID: "t.music", name: "Music")
+        let ring = [gmail, mail, maps, music]
+        check("edge search: a name that starts with the query beats one that only contains it",
+              M.match("mail", in: ring) == mail && M.match("ma", in: ring) == mail)
+        check("edge search: case does not matter", M.match("MuS", in: ring) == music && M.match("GMAIL", in: ring) == gmail)
+        check("edge search: ties go to ring order", M.match("m", in: ring) == mail && M.match("m", in: [maps, mail]) == maps
+              && M.match("ai", in: ring) == gmail)
+        check("edge search: an empty query or no match names no app",
+              M.match("", in: ring) == nil && M.match("  ", in: ring) == nil && M.match("zz", in: ring) == nil)
+
+        let (d, name) = EdgeDockFixtures.defaults()
+        defer { EdgeDockFixtures.forget(name) }
+        let ws = FixtureDockWorkspace()
+        let figma = FixtureDockWorkspace.sample[2], claude = FixtureDockWorkspace.sample[0]
+        let store = EdgeDockFixtures.appStore(ws, defaults: d, extra: [figma])
+        let edge = EdgePanelController(apps: store, spotify: SpotifyService(backend: FixtureSpotifyBackend(.notRunning)))
+        let m = edge.model
+        edge.debugRevealWithoutWindow()
+        m.openSearch()
+        check("edge search: the button opens the field; an empty query leaves the ring as it was",
+              m.searchOpen && m.query.isEmpty && m.ringItems == m.items)
+        m.query = "fig"
+        check("edge search: a query shows only its match (Chats and Notes hide)", m.ringItems == [.app(figma)])
+        m.query = "LA"
+        check("edge search: ...a contained match counts too", m.ringItems == [.app(claude)])
+        m.query = "nothing"
+        check("edge search: no match shows no item (and the \"No app\" line)", m.ringItems.isEmpty && m.isFiltering && m.searchMatch == nil)
+        m.submitSearch()
+        check("edge search: Return with no match opens nothing and keeps search open", ws.opened.isEmpty && m.searchOpen)
+        m.query = "fi"
+        m.submitSearch()
+        check("edge search: Return opens the match through the workspace (as a click would)",
+              ws.opened == [URL(fileURLWithPath: "/fixture/\(figma.bundleID).app")])
+        check("edge search: ...closes search, clears the query and hides the panel", !m.searchOpen && m.query.isEmpty && !edge.isVisible)
+        edge.debugRevealWithoutWindow()
+        m.openSearch()
+        m.query = "cl"
+        m.closeSearch()
+        check("edge search: Esc (or a click outside, or loss of the keyboard) closes search and clears the query",
+              !m.searchOpen && m.query.isEmpty && m.ringItems == m.items)
+        m.openSearch()
+        m.query = "cl"
+        edge.hide(leaveZoneFirst: true)
+        check("edge search: the dock hiding closes search too", !edge.isVisible && !m.searchOpen && m.query.isEmpty)
+
+        // The window: never key unless search is open (the front app stays active otherwise). Made, never shown.
+        let panel = EdgePanelWindow()
+        let closed = !panel.canBecomeKey
+        panel.searchOpen = true
+        let open = panel.canBecomeKey
+        panel.searchOpen = false
+        check("edge search: the panel is never key unless search is open, and stays non-activating",
+              closed && open && !panel.canBecomeKey && !panel.canBecomeMain && panel.styleMask.contains(.nonactivatingPanel))
     }
 
     /// Real events into the real panel: a click on Chats grows the list, a click on a row opens it.
@@ -205,7 +408,10 @@ extension FeatureTests {
     private static func windowedEdgePanelChecks(_ check: (String, Bool) -> Void) {
         guard ProcessInfo.processInfo.environment["MERLIN_HEADLESS_TESTS"] == nil else { return }
         guard let screen = NSScreen.main?.frame else { return }
-        let edge = EdgePanelController()
+        let (fixtureDefaults, fixtureName) = EdgeDockFixtures.defaults()
+        defer { EdgeDockFixtures.forget(fixtureName) }
+        let edge = EdgePanelController(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: fixtureDefaults),
+                                       spotify: SpotifyService(backend: FixtureSpotifyBackend(.notRunning)))
         var opened: [ObjectIdentifier] = []
         edge.onOpenChat = { opened.append($0) }
         let owners = (0..<3).map { _ in NSObject() }
@@ -225,7 +431,7 @@ extension FeatureTests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.05))
         }
         let local = NSRect(origin: .zero, size: EdgePanelLayout.windowSize)
-        click(EdgePanelLayout.itemCentre(.chats, window: local))
+        click(EdgePanelLayout.itemCentre(.chats, count: edge.model.items.count, window: local))
         RunLoop.current.run(until: Date().addingTimeInterval(0.5)) // the grow and the rows' fade
         check("edge (real events): a click on Chats grows the box into the Chats list", edge.model.section == .chats)
         let list = EdgePanelLayout.listFrame(window: local, card: EdgePanelLayout.listSize(rows: 3, newNoteRow: false))

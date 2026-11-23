@@ -140,12 +140,24 @@ enum UIShots {
                 edgeRest(.solid, "Answer ready", mode)
                 edgeRest(.absent, "Nothing going on", mode)
             })
-            shot("edge-2-box", margin: 24, EdgePanelView(model: edgeModel(nil), framed: false))
-            shot("edge-3-chats", margin: 24, EdgePanelView(model: edgeModel(.chats), framed: false))
-            shot("edge-4-notes", margin: 24, HStack(alignment: .top, spacing: 24) {
+            // The dock (version 1): emerald with two fixture apps and no music; the Chats and Notes cards; a song playing
+            // (the dock takes the cover's colours) with the Spotify card; the add/remove card.
+            // Each on a wallpaper-like backdrop, so the glass's contrast over a desktop shows.
+            shot("edge-2-box", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(nil), framed: false)))
+            shot("edge-3-chats", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.chats), framed: false)))
+            shot("edge-4-notes", margin: 0, edgeWall(mode, HStack(alignment: .top, spacing: 24) {
                 EdgePanelView(model: edgeModel(.notes), framed: false)
                 EdgePanelView(model: edgeModel(.notes, empty: true), framed: false)
-            })
+            }))
+            shot("edge-5-spotify", margin: 0, edgeWall(mode, VStack(alignment: .trailing, spacing: 24) {
+                EdgePanelView(model: edgeModel(.spotify, music: true), framed: false)
+                EdgePanelView(model: edgeModel(.spotify, spotify: .denied), framed: false)
+            }))
+            shot("edge-6-apps", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.apps), framed: false)))
+            // The whole window as on screen (clipped to it): six apps (eight ring items) and a song playing.
+            shot("edge-7-full", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(nil, music: true, apps: 6)).clipped(), pad: 0))
+            // Search open with "ca" typed: only Calendar shows, at the ring's middle-left point.
+            shot("edge-8-search", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSearchModel("ca")).clipped(), pad: 0))
 
             // The Assistant's button up close: in the Library's sidebar (resting, open, working) and in the settings list.
             shot("assistant-button", margin: 20, HStack(alignment: .top, spacing: 20) {
@@ -370,6 +382,26 @@ enum UIShots {
                        startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
+    /// A wallpaper-like desktop behind the edge pictures: a dark blue-grey diagonal with a soft lighter band (dark mode),
+    /// a bright light gradient (light mode).
+    private static func edgeWall<V: View>(_ mode: Mode, _ view: V, pad: CGFloat = 56) -> some View {
+        view
+            .padding(pad)
+            .background(
+                ZStack {
+                    LinearGradient(colors: mode.dark
+                                   ? [Color(red: 0.10, green: 0.12, blue: 0.17), Color(red: 0.20, green: 0.24, blue: 0.31), Color(red: 0.08, green: 0.09, blue: 0.13)]
+                                   : [Color(red: 0.93, green: 0.95, blue: 0.98), Color(red: 0.99, green: 0.97, blue: 0.93), Color(red: 0.86, green: 0.91, blue: 0.97)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    LinearGradient(stops: [
+                        .init(color: .white.opacity(0), location: 0.35),
+                        .init(color: .white.opacity(mode.dark ? 0.10 : 0.35), location: 0.5),
+                        .init(color: .white.opacity(0), location: 0.65),
+                    ], startPoint: .topLeading, endPoint: .bottomTrailing)
+                }
+            )
+    }
+
     /// The right part of a screen at rest: only the edge dot shows, at the middle of the right edge (a slim bezel beyond it).
     private static func edgeRest(_ state: EdgeDotState, _ caption: String, _ mode: Mode) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -387,9 +419,24 @@ enum UIShots {
         }
     }
 
-    /// The edge panel's model with made-up chats and notes.
-    private static func edgeModel(_ section: EdgePanelModel.Section?, hovering: Bool = false, empty: Bool = false) -> EdgePanelModel {
-        let m = EdgePanelModel()
+    /// The edge panel's model with made-up chats and notes, two fixture apps (Claude and Figma) and, with `music`, a song
+    /// playing with a generated cover. Fakes only: nothing launched, no live Spotify, throwaway defaults.
+    private static func edgeModel(_ section: EdgePanelModel.Section?, hovering: Bool = false, empty: Bool = false,
+                                  music: Bool = false, spotify state: SpotifyState? = nil, apps count: Int = 2) -> EdgePanelModel {
+        let (defaults, name) = EdgeDockFixtures.defaults()
+        // The first `count` of the shot apps pinned (a fixed list, so the picture is the same on every Mac).
+        if let data = try? JSONEncoder().encode(Array(ShotDockWorkspace.apps.prefix(count))) {
+            defaults.set(data, forKey: DockAppStore.defaultsKey)
+        }
+        let apps = DockAppStore(defaults: defaults, workspace: ShotDockWorkspace())
+        EdgeDockFixtures.forget(name)
+        let backend = FixtureSpotifyBackend(state ?? (music ? .track(EdgeDockFixtures.track) : .notRunning))
+        let spotify = EdgeDockFixtures.spotify(backend, cover: music ? EdgeDockFixtures.coverImage() : nil)
+        if section == .apps {
+            apps.loadInstalled()
+            EdgeDockFixtures.waitUntil { !apps.installed.isEmpty }
+        }
+        let m = EdgePanelModel(apps: apps, spotify: spotify)
         let owners = (0..<3).map { _ in NSObject() }
         edgeOwners.append(contentsOf: owners)
         m.chats = [
@@ -409,6 +456,14 @@ enum UIShots {
     }
     /// Keeps the rows' made-up owners alive while the pictures are drawn (their ids must stay unique).
     private static var edgeOwners: [NSObject] = []
+
+    /// The full dock with the search field open and `query` typed (set on the model, as the tests do).
+    private static func edgeSearchModel(_ query: String) -> EdgePanelModel {
+        let m = edgeModel(nil, music: true, apps: 6)
+        m.openSearch()
+        m.query = query
+        return m
+    }
 
     /// A frosted panel photographed without its blur: a flat colour where the material would be, clipped and rimmed like the real one.
     private static func panel<V: View>(_ mode: Mode, radius: CGFloat, _ view: V) -> some View {
@@ -560,5 +615,32 @@ enum UIShots {
             let chat = ChatRecord(title: b.0, sector: b.1, app: "Safari", quote: b.0, turns: [.init(question: "Explain", answer: "A short explanation of \(b.0.lowercased()).")])
             library.keepInBin(BinItem(chat: chat, deleted: Date().addingTimeInterval(-b.2 * day)))
         }
+    }
+}
+
+/// The edge pictures' apps: real system apps, so the ring shows real macOS icons. Read-only: the icon is looked up by
+/// bundle ID (`urlForApplication` + `icon(forFile:)`), nothing is opened or launched. An app this Mac lacks gets the
+/// fixture's generated icon.
+private struct ShotDockWorkspace: DockWorkspace {
+    static let apps: [DockApp] = [
+        DockApp(bundleID: "com.apple.iCal", name: "Calendar"),
+        DockApp(bundleID: "com.apple.mail", name: "Mail"),
+        DockApp(bundleID: "com.apple.Notes", name: "Notes"),
+        DockApp(bundleID: "com.apple.Music", name: "Music"),
+        DockApp(bundleID: "com.apple.Safari", name: "Safari"),
+        DockApp(bundleID: "com.apple.Preview", name: "Preview"),
+        DockApp(bundleID: "com.apple.Maps", name: "Maps"),
+        DockApp(bundleID: "com.apple.Photos", name: "Photos"),
+    ]
+
+    func url(forBundleID id: String) -> URL? { URL(fileURLWithPath: "/fixture/\(id).app") }
+    func open(_ url: URL) {}
+    func installedApps() -> [DockApp] { Self.apps }
+    func icon(for url: URL) -> NSImage {
+        let id = url.deletingPathExtension().lastPathComponent
+        guard let real = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else {
+            return FixtureDockWorkspace().icon(for: url)
+        }
+        return NSWorkspace.shared.icon(forFile: real.path)
     }
 }
