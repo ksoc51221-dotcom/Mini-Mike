@@ -102,9 +102,9 @@ extension FeatureTests {
         let e = DockPalette.emerald
         check("spotify: emerald contrast", DockPalette.contrast(e.ink, e.base) >= 7 && DockPalette.contrast(e.accent, e.base) >= 3)
 
-        // Guards: every kind of cover keeps the ink at 4.5:1 on the tinted dock glass over white and black, the accent at 3:1
-        // on the base, and two accents that differ (hue gap or tone gap).
-        let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1), black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+        // Guards: every kind of cover keeps the ink at 4.5:1 on the flat path's solid base, the accent at 3:1 on the base,
+        // the text on an accent fill at 4.5:1, and two accents that differ (hue gap or tone gap). Text on the glass is not
+        // here: the system picks it (hierarchical styles), checked only on a real screen.
         let covers: [(String, NSImage)] = [
             ("bright pastel", EdgeDockFixtures.coverBright()), ("bright yellow", solid(NSColor(srgbRed: 1, green: 1, blue: 0.2, alpha: 1))),
             ("white", solid(.white)), ("dark", EdgeDockFixtures.coverDark()), ("black", solid(.black)),
@@ -115,13 +115,30 @@ extension FeatureTests {
         var worstInk = CGFloat.infinity, worstAccent = CGFloat.infinity, failed: [String] = []
         for (name, image) in covers {
             let p = DockPalette.from(image: image)
-            let ink = [white, black].map { DockPalette.contrast(p.ink, EdgeGlass.surface(base: p.base, dim: EdgeGlass.dockDim, over: $0)) }.min()!
+            let ink = DockPalette.contrast(p.ink, p.base)
             let acc = min(DockPalette.contrast(p.accent, p.base), DockPalette.contrast(p.accent2, p.base))
             worstInk = min(worstInk, ink); worstAccent = min(worstAccent, acc)
             if ink < DockPalette.minInkContrast || acc < 3 || !DockPalette.accentsDiffer(p.accent, p.accent2) { failed.append(name) }
         }
-        check("spotify: every cover kind keeps ink 4.5:1 (worst \(String(format: "%.2f", worstInk))), accents 3:1 (worst \(String(format: "%.2f", worstAccent))) and two different accents (failed: \(failed))",
+        check("spotify: every cover kind keeps flat ink 4.5:1 (worst \(String(format: "%.2f", worstInk))), accents 3:1 (worst \(String(format: "%.2f", worstAccent))) and two different accents (failed: \(failed))",
               failed.isEmpty)
+        // Text on an accent fill (play-pause, Done, Add): emerald, every cover kind above, and solid covers at 12 hues x
+        // 3 saturations x 3 brightnesses plus greys.
+        var fills: [(String, DockPalette)] = [("emerald", .emerald)] + covers.map { ($0.0, DockPalette.from(image: $0.1)) }
+        for h in 0..<12 { for s in [0.3, 0.65, 1.0] { for b in [0.35, 0.7, 1.0] {
+            fills.append(("h\(h) s\(s) b\(b)", DockPalette.from(image: solid(NSColor(hue: CGFloat(h) / 12, saturation: CGFloat(s),
+                                                                                     brightness: CGFloat(b), alpha: 1)))))
+        } } }
+        for g in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            fills.append(("grey \(g)", DockPalette.from(image: solid(NSColor(srgbRed: g, green: g, blue: g, alpha: 1)))))
+        }
+        let onAccent = fills.map { ($0.0, DockPalette.contrast($0.1.onAccent, $0.1.accent)) }
+        let worstFill = onAccent.min { $0.1 < $1.1 }!
+        check("spotify: text on the accent fill keeps 4.5:1 for \(fills.count) palettes (worst \(String(format: "%.2f", worstFill.1)) at \(worstFill.0))",
+              worstFill.1 >= DockPalette.minInkContrast)
+        check("spotify: text on a fill is black on a light fill, white on a dark one",
+              DockPalette.onFill(.white) == NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+              && DockPalette.onFill(NSColor(srgbRed: 0.05, green: 0.1, blue: 0.6, alpha: 1)) == NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1))
         let greyP = DockPalette.from(image: EdgeDockFixtures.coverGrey())
         let blueP = DockPalette.from(image: EdgeDockFixtures.coverBlue())
         check("spotify: the grey cover gets a tone gap of \(String(format: "%.2f", DockPalette.contrast(greyP.accent, greyP.accent2))) between its accents",

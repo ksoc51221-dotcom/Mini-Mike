@@ -293,8 +293,9 @@ extension FeatureTests {
               abs(field.midY - L.searchCentre.y) < 0.001 && field.maxX < L.dockSize.width
               && fieldCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius - 4 })
 
-        // Glass contrast, worst case: the dim and the 0.35 tint over a white and a black window, for every base
-        // `DockPalette` can make (emerald, the grey cover's, every hue at saturation 0.4 to 0.6 and brightness 0.16).
+        // Text on the glass is the system's job now (hierarchical styles on clear `Glass.regular`): no model can measure it,
+        // only `--edgeglasscheck` on a real screen. What stays pure: the flat path's ink on its solid base, and the record
+        // title on its band, for every base `DockPalette` makes (emerald, the grey cover's, every hue at 0.4 to 0.6).
         let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1), black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
         var palettes: [(base: NSColor, ink: NSColor)] = [(DockPalette.emerald.base, DockPalette.emerald.ink),
             (NSColor(hue: 0, saturation: 0, brightness: 0.15, alpha: 1), NSColor(hue: 0, saturation: 0, brightness: 0.97, alpha: 1))]
@@ -303,37 +304,29 @@ extension FeatureTests {
             palettes.append((NSColor(hue: hue, saturation: CGFloat(s), brightness: 0.16, alpha: 1),
                              NSColor(hue: hue, saturation: 0.04, brightness: 0.98, alpha: 1)))
         } }
-        let dockWorst = palettes.flatMap { p in [white, black].map {
-            DockPalette.contrast(p.ink, EdgeGlass.surface(base: p.base, dim: EdgeGlass.dockDim, over: $0)) } }.min()!
-        let secondary = NSColor(srgbRed: 0xA3 / 255.0, green: 0xA3 / 255.0, blue: 0xA8 / 255.0, alpha: 1)
-        let cardWorst = palettes.flatMap { p in [white, black].map {
-            DockPalette.contrast(secondary, EdgeGlass.surface(base: p.base, dim: EdgeGlass.cardDim, over: $0)) } }.min()!
-        // Chats' and Notes' glyphs (ink on the glass path) over their tinted well; white as the well's tint bounds every palette.
-        let iconWorst = palettes.flatMap { p in [white, black].map {
-            DockPalette.contrast(p.ink, EdgeGlass.over(white, EdgeGlass.wellTint,
-                                                       EdgeGlass.surface(base: p.base, dim: EdgeGlass.dockDim, over: $0))) } }.min()!
-        check("edge glass: Chats' and Notes' glyphs keep 3:1 over white and black (worst \(String(format: "%.2f", iconWorst)))",
-              iconWorst >= 3)
-        check("edge glass: the tint is 0.35", EdgeGlass.tint == 0.35)
-        // What `--edgeglasscheck` should measure over its white backdrop (emerald; the fills inside the glass, white under).
-        let em = DockPalette.emerald
-        let emDock = EdgeGlass.surface(base: em.base, dim: EdgeGlass.dockDim, over: white)
-        let emCard = EdgeGlass.surface(base: em.base, dim: EdgeGlass.cardDim, over: white)
-        let emInk = Theme.ink.dark, emSecondary = Theme.inkSecondary.dark
-        check(String(format: "edge glass: emerald over white, expected dock ink %.2f, card ink %.2f, card secondary %.2f",
-                     DockPalette.contrast(em.ink, emDock), DockPalette.contrast(emInk, emCard), DockPalette.contrast(emSecondary, emCard)),
-              DockPalette.contrast(em.ink, emDock) >= 4.5 && DockPalette.contrast(emInk, emCard) >= 4.5
-              && DockPalette.contrast(emSecondary, emCard) >= 4.5)
+        // The flat path: the palette ink and the cards' light secondary ink on the solid base (dock) and its dark (cards).
+        let flatWorst = palettes.map { DockPalette.contrast($0.ink, $0.base) }.min()!
+        // `.secondary` on the flat path is the dark appearance's secondary label colour (white at part alpha) over the card.
+        var secondary = NSColor.white, secondaryAlpha: CGFloat = 1
+        NSAppearance(named: .darkAqua)?.performAsCurrentDrawingAppearance {
+            let c = NSColor.secondaryLabelColor.usingColorSpace(.sRGB) ?? .white
+            secondary = NSColor(srgbRed: c.redComponent, green: c.greenComponent, blue: c.blueComponent, alpha: 1)
+            secondaryAlpha = c.alphaComponent
+        }
+        let flatCardWorst = palettes.map { p in
+            let card = (p.base.usingColorSpace(.sRGB) ?? p.base).blended(withFraction: 0.55, of: .black) ?? p.base
+            return DockPalette.contrast(EdgeGlass.over(secondary, secondaryAlpha, card), card) }.min()!
+        check("edge glass: only a light tint, no dim (the glass is clear)", EdgeGlass.tint <= 0.2)
         // The mini player's record title (ink at 0.9) on its dark band over the brightest cover (white).
         let bandWorst = palettes.map { p in
             DockPalette.contrast(EdgeGlass.over(p.ink, 0.9, EdgeGlass.over(black, EdgeDockArt.titleBand, white)),
                                  EdgeGlass.over(black, EdgeDockArt.titleBand, white)) }.min()!
         check("edge spotify: the record title keeps 4.5:1 on its band over a white cover (worst \(String(format: "%.2f", bandWorst)))",
               bandWorst >= 4.5)
-        check("edge glass: the palette ink keeps 4.5:1 on the dock glass over white and black (worst \(String(format: "%.2f", dockWorst)))",
-              dockWorst >= 4.5)
-        check("edge glass: the cards' secondary ink keeps 4.5:1 over white and black (worst \(String(format: "%.2f", cardWorst)))",
-              cardWorst >= 4.5)
+        check("edge flat: the palette ink keeps 4.5:1 on the solid base (worst \(String(format: "%.2f", flatWorst)))",
+              flatWorst >= DockPalette.minInkContrast)
+        check("edge flat: the cards' .secondary text keeps 4.5:1 on the dark base (worst \(String(format: "%.2f", flatCardWorst)))",
+              flatCardWorst >= DockPalette.minInkContrast)
 
         // The ring: the same distance between every two neighbours, for 2 to 9 items (the cap is 8; 9 checks the rule).
         for n in 2...9 {
@@ -911,7 +904,32 @@ extension FeatureTests {
 
         // The same states over the tool's own plain backdrop window (white, then mid grey), right behind the panel.
         let local = NSRect(origin: .zero, size: EdgePanelLayout.windowSize)
-        let cardInk = Theme.ink.dark, secondary = Theme.inkSecondary.dark
+        /// The text sample, in window coordinates (AppKit, bottom-left origin), from the `EdgePanelLayout` constants:
+        /// the song title (Spotify), the first row's title (Chats, the songs list), the "App Customization" title (apps),
+        /// and the "+" glyph on the ring picture (the disc has no text).
+        func textSpot() -> (NSRect, String) {
+            let L = EdgePanelLayout.self
+            if let section = model.section {
+                let card = L.listFrame(window: local, card: model.cardSize)
+                switch section {
+                case .apps:
+                    return (NSRect(x: card.midX - 55, y: card.maxY - 26, width: 110, height: 12), "apps title")
+                case .spotify where model.songsListShown:
+                    // Row 0 of the list (pad, field, spacing): its name, right of the 28 pt cover well.
+                    let top = L.spotifyPad + L.spotifySearchHeight + L.spotifySpacing
+                    return (NSRect(x: card.minX + L.spotifyPad + 42, y: card.maxY - top - 18, width: 74, height: 10), "row 1 title")
+                case .spotify:
+                    let top = L.spotifyPad + L.spotifySearchHeight + L.spotifySpacing + L.spotifyOrbRadius * 2 + L.spotifySpacing
+                    return (NSRect(x: card.midX - 40, y: card.maxY - top - 19, width: 80, height: 11), "song title")
+                case .chats, .notes:
+                    // Row 0: under the header and the pad, right of the 20 pt mark; the title is the row's upper line.
+                    let top = L.headerHeight + L.pad
+                    return (NSRect(x: card.minX + L.pad + 38, y: card.maxY - top - 22, width: 36, height: 10), "row 1 title")
+                }
+            }
+            let dock = L.dockFrame(window: local), c = L.plusCentre
+            return (NSRect(x: dock.minX + c.x - 5, y: dock.maxY - c.y - 5, width: 10, height: 10), "\"+\" glyph")
+        }
         /// A glass spot with no content, in window coordinates (AppKit, bottom-left origin).
         func emptySpot() -> NSRect {
             if let section = model.section {
@@ -929,30 +947,48 @@ extension FeatureTests {
             let r = EdgePanelLayout.discRadius * 0.945, a = CGFloat.pi * 3 / 4
             return NSRect(x: local.maxX + r * cos(a) - 2, y: local.midY + r * sin(a) - 2, width: 4, height: 4)
         }
-        /// Prints the WCAG contrast of the inks against the mean colour of `emptySpot()` in the saved picture.
+        /// The sRGB pixels of `spot` (window points) in a saved picture.
+        func pixels(_ rep: NSBitmapImageRep, _ spot: NSRect) -> [NSColor] {
+            let scale = CGFloat(rep.pixelsWide) / local.width
+            var out: [NSColor] = []
+            for py in Int(((local.height - spot.maxY) * scale).rounded())..<Int(((local.height - spot.minY) * scale).rounded()) {
+                for px in Int((spot.minX * scale).rounded())..<Int((spot.maxX * scale).rounded()) {
+                    guard px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
+                          let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB) else { continue }
+                    out.append(c)
+                }
+            }
+            return out
+        }
+        func mean(_ cs: [NSColor]) -> NSColor {
+            let n = CGFloat(max(cs.count, 1))
+            return NSColor(srgbRed: cs.reduce(0) { $0 + $1.redComponent } / n, green: cs.reduce(0) { $0 + $1.greenComponent } / n,
+                           blue: cs.reduce(0) { $0 + $1.blueComponent } / n, alpha: 1)
+        }
+        func hex(_ c: NSColor) -> String {
+            String(format: "#%02X%02X%02X", Int(c.redComponent * 255), Int(c.greenComponent * 255), Int(c.blueComponent * 255))
+        }
+        /// Text on the glass is the system's colour now, so nothing is assumed about the ink: prints the mean glass colour
+        /// at `emptySpot()`, the mean colour of the text sample (`textSpot()`) and the WCAG ratio of the two (diluted by the
+        /// glass between the letters), and the glyph core: the mean of the 15% of sample pixels furthest in luminance
+        /// from the glass, with its ratio to the glass (the number to judge legibility by).
         func measure(_ name: String) {
             let path = out.appendingPathComponent(name).path
             guard let data = FileManager.default.contents(atPath: path), let rep = NSBitmapImageRep(data: data) else {
                 return print("CONTRAST \(name) no picture")
             }
-            let spot = emptySpot()
-            let scale = CGFloat(rep.pixelsWide) / local.width
-            var sum = (r: CGFloat(0), g: CGFloat(0), b: CGFloat(0)), n: CGFloat = 0
-            for py in Int(((local.height - spot.maxY) * scale).rounded())..<Int(((local.height - spot.minY) * scale).rounded()) {
-                for px in Int((spot.minX * scale).rounded())..<Int((spot.maxX * scale).rounded()) {
-                    guard px >= 0, py >= 0, px < rep.pixelsWide, py < rep.pixelsHigh,
-                          let c = rep.colorAt(x: px, y: py)?.usingColorSpace(.sRGB) else { continue }
-                    sum.r += c.redComponent; sum.g += c.greenComponent; sum.b += c.blueComponent; n += 1
-                }
-            }
-            guard n > 0 else { return print("CONTRAST \(name) empty spot outside the picture") }
-            let mean = NSColor(srgbRed: sum.r / n, green: sum.g / n, blue: sum.b / n, alpha: 1)
-            let ink = model.section == nil ? model.palette.ink : cardInk
-            print(String(format: "CONTRAST %@ ink=%.2f secondary=%.2f (glass #%02X%02X%02X at %@ %.0f,%.0f pt)", name,
-                         DockPalette.contrast(ink, mean), DockPalette.contrast(secondary, mean),
-                         Int(mean.redComponent * 255), Int(mean.greenComponent * 255), Int(mean.blueComponent * 255),
+            let spot = emptySpot(), (text, what) = textSpot()
+            let glassPixels = pixels(rep, spot), textPixels = pixels(rep, text)
+            guard !glassPixels.isEmpty, !textPixels.isEmpty else { return print("CONTRAST \(name) a sample lies outside the picture") }
+            let glass = mean(glassPixels), sample = mean(textPixels)
+            func lum(_ c: NSColor) -> CGFloat { 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent }
+            let g = lum(glass)
+            let core = mean(Array(textPixels.sorted { abs(lum($0) - g) > abs(lum($1) - g) }.prefix(max(1, textPixels.count * 15 / 100))))
+            print(String(format: "CONTRAST %@ glass %@ (%@ %.0f,%.0f pt) text %@ %@ (%@ %.0f,%.0f pt) ratio=%.2f core %@ ratio=%.2f",
+                         name, hex(glass),
                          model.section == nil ? "disc 135°" : model.section == .apps ? "apps title bar" : "card right side",
-                         spot.midX, spot.midY))
+                         spot.midX, spot.midY, what, hex(sample), "mean", text.midX, text.midY,
+                         DockPalette.contrast(sample, glass), hex(core), DockPalette.contrast(core, glass)))
         }
         let backdrop = NSWindow(contentRect: edge.debugWindow?.frame ?? .zero, styleMask: .borderless, backing: .buffered, defer: false)
         backdrop.isReleasedWhenClosed = false

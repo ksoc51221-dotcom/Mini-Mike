@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Combine
 
 /// The only track id Merlin keeps or puts into a script: `spotify:track:` and exactly 22 ASCII letters or digits.
@@ -16,6 +16,45 @@ enum SpotifyTrackURI {
         return bytes.dropFirst(head.count).allSatisfy { b in
             (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
         }
+    }
+}
+
+/// Spotify's own search for a text, as a `spotify:search:` URL (no web API). The text is trimmed, cut to `maxLength`
+/// characters, and every UTF-8 byte outside the unreserved set (ASCII letters, digits, `-._~`) is percent-encoded, so no
+/// `:`, `/`, `?`, `#`, `&` or quote from the text can change the URL's shape. An empty text gives nil.
+enum SpotifySearch {
+    static let prefix = "spotify:search:"
+    static let maxLength = 100
+
+    static func url(for query: String) -> URL? {
+        let text = String(query.trimmingCharacters(in: .whitespacesAndNewlines).prefix(maxLength))
+        guard !text.isEmpty else { return nil }
+        return URL(string: prefix + encode(text))
+    }
+
+    static func encode(_ text: String) -> String {
+        var out = ""
+        for b in text.utf8 {
+            let unreserved = (b >= 0x30 && b <= 0x39) || (b >= 0x41 && b <= 0x5A) || (b >= 0x61 && b <= 0x7A)
+                || b == 0x2D || b == 0x2E || b == 0x5F || b == 0x7E
+            out += unreserved ? String(UnicodeScalar(b)) : String(format: "%%%02X", b)
+        }
+        return out
+    }
+}
+
+/// Opens a URL in its own app (Spotify's search). Tests use a fake.
+protocol URLOpening {
+    func open(_ url: URL)
+}
+
+struct LiveURLOpener: URLOpening {
+    /// The test and picture runs never open a URL, even through a model built with the live opener.
+    static let blocked = CommandLine.arguments.contains { ["--unittest", "--uishots", "--edgeglasscheck", "--sidebartest"].contains($0) }
+
+    func open(_ url: URL) {
+        guard !Self.blocked else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 

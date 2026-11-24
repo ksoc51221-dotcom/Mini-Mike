@@ -1,5 +1,11 @@
 import AppKit
 
+/// Records the URLs the songs card would open (never opens one).
+private final class FakeURLOpener: URLOpening {
+    private(set) var opened: [URL] = []
+    func open(_ url: URL) { opened.append(url) }
+}
+
 /// "My songs" (B2): the store in a temp folder only, the track URI rule against hostile values, the `play track` script
 /// through the fixture backend, the card's model (heart, rows, star filter) and the songs field's keyboard path.
 /// No real Apple Event, network, app launch, file or defaults of the user.
@@ -16,6 +22,29 @@ extension FeatureTests {
         func track(_ n: Int, _ name: String = "Song", _ artist: String = "Artist", playing: Bool = true) -> SpotifyTrack {
             SpotifyTrack(title: name, artist: artist, artworkURL: nil, isPlaying: playing, uri: uri(n))
         }
+
+        // MARK: Spotify's own search URL (no web API; nothing is opened here)
+        func search(_ q: String) -> String? { SpotifySearch.url(for: q)?.absoluteString }
+        check("search url: plain text", search("Midnight") == "spotify:search:Midnight")
+        check("search url: spaces (trimmed at the ends, %20 inside)", search("  Art House ") == "spotify:search:Art%20House")
+        check("search url: quotes", search("\"Hey\" 'you'") == "spotify:search:%22Hey%22%20%27you%27")
+        check("search url: & # / : ? are encoded", search("a&b#c/d:e?f") == "spotify:search:a%26b%23c%2Fd%3Ae%3Ff")
+        check("search url: unreserved - . _ ~ stay", search("a-b.c_d~e") == "spotify:search:a-b.c_d~e")
+        check("search url: non-ASCII as UTF-8 bytes", search("Sigur Rós замок") == "spotify:search:Sigur%20R%C3%B3s%20%D0%B7%D0%B0%D0%BC%D0%BE%D0%BA")
+        let long = search(String(repeating: "ab", count: 150))
+        check("search url: a 300-character query is cut to 100", long == "spotify:search:" + String(repeating: "ab", count: 50))
+        check("search url: an empty or blank query gives none", search("") == nil && search("   \n") == nil)
+        check("search url: only unreserved characters and %XX after the prefix",
+              search("x <>%\\{}|^`[]@!$()*+,;=") .map { s in
+                  s.dropFirst(SpotifySearch.prefix.count).allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-._~%".contains($0)) }
+              } == true)
+        check("search url: the test run never opens a URL through the live opener", LiveURLOpener.blocked)
+        // A paused poll still is a song: title, artist, cover and URI stay (only the waves and the spin stop).
+        let paused = LiveSpotifyBackend.parse(["paused", "Art House", "Malcolm Todd", "https://i.scdn.co/image/ab67",
+                                               "spotify:track:5YBxGJYKJ7Se2Uq7S0pVOL"].joined(separator: LiveSpotifyBackend.delimiter))
+        check("spotify poll: a paused song keeps its title, artist, cover and URI",
+              paused == .track(SpotifyTrack(title: "Art House", artist: "Malcolm Todd", artworkURL: URL(string: "https://i.scdn.co/image/ab67"),
+                                            isPlaying: false, uri: "spotify:track:5YBxGJYKJ7Se2Uq7S0pVOL")))
 
         // MARK: Store
         let store = SpotifySongs(folder: folder)
@@ -140,6 +169,8 @@ extension FeatureTests {
         let backend = FixtureSpotifyBackend(.track(EdgeDockFixtures.track))
         let music = EdgeDockFixtures.spotify(backend)
         let m = EdgePanelModel(apps: apps, spotify: music, songs: SpotifySongs(folder: nil))
+        let opener = FakeURLOpener()
+        m.urlOpener = opener
         let current = EdgeDockFixtures.track.uri!
         check("songs card: the song playing is recorded", m.songs.songs.map(\.uri) == [current])
         let firstDate = m.songs.songs.first?.lastPlayed
@@ -173,18 +204,32 @@ extension FeatureTests {
         m.submitSongsSearch()
         EdgeDockFixtures.waitUntil { backend.sent.count == 2 }
         check("songs card: Return plays the first result", backend.sent.last == .playTrack(current))
+        check("songs card: Return with a match opens no search", opener.opened.isEmpty)
+        check("songs card: a query ends the list with the Spotify search row", m.songsSearchRowShown)
         m.songsQuery = "zzz"
         m.submitSongsSearch()
         EdgeDockFixtures.waitUntil(0.2) { backend.sent.count > 2 }
-        check("songs card: no match: Return plays nothing", m.songsVisible.isEmpty && backend.sent.count == 2)
+        check("songs card: no match: Return plays nothing and opens Spotify's search exactly once",
+              m.songsVisible.isEmpty && backend.sent.count == 2 && opener.opened.map(\.absoluteString) == ["spotify:search:zzz"])
+        m.songsQuery = "  Art House  "
+        m.searchSpotify()
+        check("songs card: the search row opens Spotify's search for the trimmed query exactly once",
+              opener.opened.map(\.absoluteString) == ["spotify:search:zzz", "spotify:search:Art%20House"] && backend.sent.count == 2)
+        m.songsQuery = "   "
+        m.submitSongsSearch(); m.searchSpotify()
+        check("songs card: a blank query shows no search row and opens nothing", !m.songsSearchRowShown && opener.opened.count == 2)
         m.songsQuery = ""
         m.tapSongsStarFilter()
         check("songs card: the star filter shows starred songs only (none yet)", m.songsListShown && m.songsVisible.isEmpty)
+        m.submitSongsSearch()
+        check("songs card: the star filter with no query: no search row, Return opens nothing",
+              !m.songsSearchRowShown && opener.opened.count == 2)
         m.tapSongsStarFilter()
         check("songs card: the filter toggles off", !m.songsStarredOnly && !m.songsListShown)
 
         let closedBackend = FixtureSpotifyBackend(.notRunning)
         let closed = EdgePanelModel(apps: apps, spotify: EdgeDockFixtures.spotify(closedBackend), songs: EdgeDockFixtures.songs())
+        closed.urlOpener = FakeURLOpener()
         closed.songsQuery = "m"
         closed.tapSong(closed.songsVisible[0])
         closed.submitSongsSearch()

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-// The edge panel's dock: a dark glass half-disc at the screen edge, a thin halo ring outside it with the round items on it
+// The edge panel's dock: a clear glass half-disc at the screen edge, a thin halo ring outside it with the round items on it
 // (Chats, Notes, the pinned apps), the Spotify cover inside the disc and a small "+". Its colours come from
 // `SpotifyService.palette` (emerald, or the playing song's cover). The cards beside it keep the normal Merlin look.
 
@@ -14,6 +14,8 @@ extension DockPalette {
     var baseLightColor: Color { Color(nsColor: baseLight) }
     var baseDarkColor: Color { Color(nsColor: baseDark) }
     var rimTintColor: Color { Color(nsColor: rimTint) }
+    /// Text on an accent fill (play-pause, Done, Add).
+    var onAccentColor: Color { Color(nsColor: onAccent) }
 
     // The neutral white lines and fills of the glass, as the palette's own light (the rim tint), so no surface keeps a fixed colour.
     /// Dividers and quiet hairlines.
@@ -60,24 +62,19 @@ enum EdgeDockArt {
 
 // MARK: - Glass parts
 
-/// The glass recipe, pure so the tests read the same numbers the views draw: macOS 26 Liquid Glass, a neutral dim on it,
-/// then the palette's base at `tint`. The dim is the least that keeps the ink at 4.5:1 over a white window for every
-/// palette `DockPalette` makes (the glass's own frosting comes on top of that and no test can measure it).
+/// The glass recipe: clear, see-through macOS 26 Liquid Glass (`Glass.regular`, which per Apple's guidance switches its
+/// content between light and dark with what is behind it; `Glass.clear` is meant for media and wants a dim layer. Not
+/// yet confirmed on a real screen; the variant is one line in `glass(_:)`), with only a hint
+/// of the palette's colour through `Glass.tint`. No dim and no drawn base: text and glyphs on the glass use the
+/// hierarchical styles (`.primary`, `.secondary`, `.tertiary`), so the system picks their colour. Their contrast is the
+/// system's job and can only be checked on a real screen (`--edgeglasscheck`). Only the flat path draws a solid surface.
 enum EdgeGlass {
-    /// The palette tint on every glass surface.
-    static let tint: CGFloat = 0.35
-    /// The dock (disc, Chats and Notes): its text is the palette ink (cover about 0.61).
-    static let dockDim: CGFloat = 0.4
-    /// The cards: their rows use `Theme.inkSecondary`, which needs more (cover about 0.84).
-    static let cardDim: CGFloat = 0.75
+    /// The palette hint on every glass surface (the saturated rim colour at this opacity, never a panel).
+    static let tint: CGFloat = 0.14
 
-    /// The colour a glass surface shows over a solid backdrop: backdrop, then the dim, then the tint — the two fills
-    /// `edgeGlass` draws inside the glass view, over the material. The material itself can only make the backdrop darker
-    /// or greyer than a white window, so a white backdrop is the worst case for the light ink. Mixed in sRGB components,
-    /// as the layers composite on screen. The real numbers on a real screen come only from `--edgeglasscheck`.
-    static func surface(base: NSColor, dim: CGFloat, over backdrop: NSColor) -> NSColor {
-        let black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-        return over(base, tint, over(black, dim, backdrop))
+    /// The glass of every surface: the disc, Chats and Notes, and the cards.
+    static func glass(_ palette: DockPalette) -> Glass {
+        .regular.tint(palette.rimColor.opacity(tint))
     }
 
     /// `top` at `alpha` over `back`, in sRGB components.
@@ -93,27 +90,43 @@ enum EdgeGlass {
 }
 
 extension View {
-    /// The glass under this view's OWN content: Liquid Glass (`glassEffect`, the dim and tint folded into `Glass.tint`; pass
-    /// built-in shapes only, see `EdgeDockDisc`), or the flat colour in the pictures, under `Motion.still` and Reduce
+    /// The glass under this view's OWN content: clear Liquid Glass (`glassEffect(EdgeGlass.glass(_:))`; pass built-in
+    /// shapes only, see `EdgeDockDisc`), or the flat colour in the pictures, under `Motion.still` and Reduce
     /// Transparency. Everything drawn on a glass surface must be inside the view this modifies: the glass draws its
     /// material behind that content, while a glass view placed as a sibling or a `.background` is lifted above
     /// non-glass content and hides it (the dark-blob fault the real-screen pictures showed).
-    @ViewBuilder func edgeGlass<S: Shape>(_ shape: S, palette: DockPalette, dim: CGFloat, flat: Color) -> some View {
+    @ViewBuilder func edgeGlass<S: Shape>(_ shape: S, palette: DockPalette, flat: Color) -> some View {
         if EdgeDockArt.flat {
             background(shape.fill(flat).allowsHitTesting(false))
         } else {
-            // The dim and the tint are drawn fills, the lowest children INSIDE the glass view: above the material, below
-            // all content. (`Glass.tint` alone covered far less than the model on a real screen: the ink failed over white.)
-            background(
-                ZStack {
-                    shape.fill(Color.black.opacity(dim))
-                    shape.fill(palette.baseColor.opacity(EdgeGlass.tint))
-                }
-                .allowsHitTesting(false)
-            )
-            .glassEffect(.regular, in: shape)
-            .glassEffectTransition(.identity) // no system glass motion: the existing `Motion.edge*` fades only
+            glassEffect(EdgeGlass.glass(palette), in: shape)
+                .glassEffectTransition(.identity) // no system glass motion: the existing `Motion.edge*` fades only
         }
+    }
+
+    /// A search field's well. On the glass: a light palette tint and an inner light over the surface's own clear glass
+    /// (no glass on glass, which would also lift the field above its text). Flat: the dark capsule and its shadow.
+    @ViewBuilder func edgeFieldWell(_ p: DockPalette, shadow: Bool = true) -> some View {
+        if EdgeDockArt.flat {
+            background(Capsule().fill(p.baseDarkColor.opacity(0.85)))
+                .background(Capsule().fill(p.rimTintColor.opacity(0.10)))
+                .overlay(Capsule().edgeInnerLight(p.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
+                .shadow(color: .black.opacity(shadow ? 0.35 : 0), radius: 5, x: 0, y: 3)
+        } else {
+            background(Capsule().fill(p.rimTintColor.opacity(0.12)))
+                .overlay(Capsule().edgeInnerLight(p.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
+        }
+    }
+
+    /// The dark scheme on the flat path only (a solid dark surface with light text). On the glass path the scheme is left
+    /// alone, so the glass and the hierarchical styles pick light or dark content.
+    func edgeFlatScheme() -> some View { modifier(EdgeFlatScheme()) }
+}
+
+private struct EdgeFlatScheme: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content.environment(\.colorScheme, EdgeDockArt.flat ? .dark : scheme)
     }
 }
 
@@ -146,7 +159,8 @@ extension Shape {
     }
 }
 
-/// The cards' chrome: dark glass, a 155° sheen, a white hairline, a lit top edge and a deep soft shadow.
+/// The cards' chrome: clear glass (flat: a dark surface with a 155° sheen), a palette hairline, a lit top edge and a deep
+/// soft shadow.
 private struct EdgeCardChrome: ViewModifier {
     let palette: DockPalette
     let radius: CGFloat
@@ -177,7 +191,7 @@ private struct EdgeCardChrome: ViewModifier {
             content
                 .clipShape(shape)
                 .overlay(lights(shape))
-                .edgeGlass(shape, palette: palette, dim: EdgeGlass.cardDim, flat: palette.baseDarkColor)
+                .edgeGlass(shape, palette: palette, flat: palette.baseDarkColor)
                 .background(shadow)
         }
     }
@@ -225,8 +239,8 @@ struct EdgeDockView: View {
         }
         .animation(calm ? nil : Motion.edgeIn, value: items.map(\.id))
         .frame(width: s.width, height: s.height)
-        // Dark glass in light and dark mode alike.
-        .environment(\.colorScheme, .dark)
+        // Flat path: dark in light and dark mode alike. Glass path: the system picks light or dark content.
+        .edgeFlatScheme()
         .environment(\.edgePalette, p)
         .animation(Motion.edgePaletteAnimation, value: p)
     }
@@ -312,7 +326,7 @@ private struct EdgeDockDisc: View {
                 .frame(width: s.width, height: s.height, alignment: .topLeading)
                 .offset(x: r - s.width, y: r - s.height / 2)
                 .frame(width: r * 2, height: r * 2, alignment: .topLeading)
-                .edgeGlass(Circle(), palette: p, dim: EdgeGlass.dockDim, flat: p.baseColor)
+                .edgeGlass(Circle(), palette: p, flat: p.baseColor)
                 .position(x: s.width, y: s.height / 2)
             }
         }
@@ -369,7 +383,7 @@ private struct EdgeDockDisc: View {
         if model.isFiltering && model.searchMatch == nil {
             Text("No app")
                 .font(.geist(11, .medium))
-                .foregroundStyle(p.inkColor) // full ink: 4.5:1 on the glass over a white window
+                .foregroundStyle(.primary) // on the glass: the system picks light or dark
                 .position(x: EdgePanelLayout.noMatchCentre.x, y: EdgePanelLayout.noMatchCentre.y)
                 .transition(.opacity)
                 .accessibilityLabel("No app matches")
@@ -444,7 +458,7 @@ private struct EdgeRingItem: View {
                 if EdgeDockArt.flat {
                     content(p, on: active || hovering)
                         .frame(width: size, height: size)
-                        .edgeGlass(Circle(), palette: p, dim: EdgeGlass.dockDim, flat: p.baseDarkColor.opacity(0.95))
+                        .edgeGlass(Circle(), palette: p, flat: p.baseDarkColor.opacity(0.95))
                         .overlay(rim)
                         .overlay(alignment: .topTrailing) { mark(p) }
                         .contentShape(Circle())
@@ -453,7 +467,7 @@ private struct EdgeRingItem: View {
                         .frame(width: size, height: size)
                         .overlay(rim)
                         .overlay(alignment: .topTrailing) { mark(p) }
-                        .edgeGlass(Circle(), palette: p, dim: EdgeGlass.dockDim, flat: p.baseDarkColor.opacity(0.95))
+                        .edgeGlass(Circle(), palette: p, flat: p.baseDarkColor.opacity(0.95))
                         .contentShape(Circle())
                 }
             }
@@ -513,10 +527,11 @@ private struct EdgeRingItem: View {
     }
 
     private func symbol(_ name: String, tint: Color, on: Bool, _ inner: CGFloat) -> some View {
-        // On the see-through glass the glyph takes the ink (the accent fails 3:1 over a bright window); the well keeps the tint.
+        // On the see-through glass the glyph is a template symbol in `.primary` (the system picks light or dark; the accent
+        // fails 3:1 over a bright window); the well keeps the tint.
         Image(systemName: name)
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(EdgeDockArt.flat ? tint.opacity(on ? 1 : 0.9) : model.palette.inkColor)
+            .foregroundStyle(EdgeDockArt.flat ? AnyShapeStyle(tint.opacity(on ? 1 : 0.9)) : AnyShapeStyle(.primary))
             .frame(width: inner, height: inner)
             .background(Circle().fill(tint.opacity(on ? EdgeGlass.wellTint : 0.15)))
             .overlay(Circle().strokeBorder(tint.opacity(0.25), lineWidth: 0.5))
@@ -781,13 +796,18 @@ private struct EdgeSmallButton: View {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .regular))
                 .imageScale(.small)
-                .foregroundStyle(palette.inkColor.opacity(active || hovering ? 1 : 0.85))
+                .foregroundStyle(active || hovering ? HierarchicalShapeStyle.primary : .secondary)
                 .frame(width: size, height: size)
                 .background(Circle().fill(palette.rimTintColor.opacity(hovering ? 0.26 : 0.18)))
                 .overlay(Circle().edgeInnerLight(palette.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
                 .overlay(Circle().strokeBorder(active ? palette.accentColor : palette.rimTintColor.opacity(0.4), lineWidth: active ? 1.5 : 1))
-                .background(Circle().fill(Color.black.opacity(0.3)).shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 3)
-                    .allowsHitTesting(false))
+                .background {
+                    // The flat stand-in's dark well; on the glass the button is the disc's own clear glass.
+                    if EdgeDockArt.flat {
+                        Circle().fill(Color.black.opacity(0.3)).shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 3)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .contentShape(Circle())
         }
         .buttonStyle(EdgePressStyle())
@@ -815,10 +835,11 @@ private struct EdgeTimerChip: View {
                         .font(.geistMono(11, .medium))
                         .monospacedDigit()
                 }
-                .foregroundStyle(palette.inkColor)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 8)
                 .frame(height: 22)
-                .background(Capsule().fill(Color.black.opacity(0.32)))
+                // The flat stand-in keeps its dark chip; on the glass a light palette well (the disc's clear glass shows).
+                .background(Capsule().fill(EdgeDockArt.flat ? Color.black.opacity(0.32) : palette.rimTintColor.opacity(0.14)))
                 .overlay(Capsule().strokeBorder(palette.rimTintColor.opacity(0.4), lineWidth: 1))
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel((t.isReminder ? "Reminder in " : "Timer: ") + ActionCommand.duration(max(left, 1)) + " left")
@@ -845,16 +866,16 @@ private struct EdgeSearchField: View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(palette.inkColor.opacity(0.6))
+                .foregroundStyle(.secondary)
             if Motion.still {
                 // The pictures: a live text field can't be drawn headlessly, so the query as text.
                 Text(model.query.isEmpty ? "Search apps" : model.query)
-                    .foregroundStyle(palette.inkColor.opacity(model.query.isEmpty ? 0.45 : 1))
+                    .foregroundStyle(model.query.isEmpty ? HierarchicalShapeStyle.secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                TextField("", text: $model.query, prompt: Text("Search apps").foregroundColor(palette.inkColor.opacity(0.45)))
+                TextField("", text: $model.query, prompt: Text("Search apps").foregroundStyle(.secondary))
                     .textFieldStyle(.plain)
-                    .foregroundStyle(palette.inkColor)
+                    .foregroundStyle(.primary)
                     .focused($focused)
                     .onSubmit { model.submitSearch() }
                     .accessibilityLabel("Search apps")
@@ -864,11 +885,8 @@ private struct EdgeSearchField: View {
         .lineLimit(1)
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity, maxHeight: .infinity) // the capsule fills the field's frame
-        .background(Capsule().fill(palette.baseDarkColor.opacity(0.85)))
-        .background(Capsule().fill(palette.rimTintColor.opacity(0.10)))
-        .overlay(Capsule().edgeInnerLight(palette.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
+        .edgeFieldWell(palette)
         .overlay(Capsule().strokeBorder(palette.accentColor.opacity(0.6), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 3)
         // After the panel has become key (the controller does that as search opens).
         .onAppear { DispatchQueue.main.async { focused = true } }
     }
@@ -885,16 +903,16 @@ private struct EdgeAppsSearchField: View {
         HStack(spacing: 5) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(palette.inkColor.opacity(0.6))
+                .foregroundStyle(.secondary)
             if Motion.still || !model.appsSearchActive {
                 // The pictures (a live text field can't be drawn headlessly), or the field without the keyboard: the query as text.
                 Text(model.appsQuery.isEmpty ? "Search apps" : model.appsQuery)
-                    .foregroundStyle(palette.inkColor.opacity(model.appsQuery.isEmpty ? 0.45 : 1))
+                    .foregroundStyle(model.appsQuery.isEmpty ? HierarchicalShapeStyle.secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                TextField("", text: $model.appsQuery, prompt: Text("Search apps").foregroundColor(palette.inkColor.opacity(0.45)))
+                TextField("", text: $model.appsQuery, prompt: Text("Search apps").foregroundStyle(.secondary))
                     .textFieldStyle(.plain)
-                    .foregroundStyle(palette.inkColor)
+                    .foregroundStyle(.primary)
                     .focused($focused)
                     .onSubmit { model.submitAppsSearch() }
                     .accessibilityLabel("Search apps")
@@ -905,11 +923,8 @@ private struct EdgeAppsSearchField: View {
         .lineLimit(1)
         .padding(.horizontal, 9)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Capsule().fill(palette.baseDarkColor.opacity(0.85)))
-        .background(Capsule().fill(palette.rimTintColor.opacity(0.10)))
-        .overlay(Capsule().edgeInnerLight(palette.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
+        .edgeFieldWell(palette)
         .overlay(Capsule().strokeBorder(palette.accentColor.opacity(model.appsSearchActive ? 0.6 : 0.3), lineWidth: 1))
-        .shadow(color: .black.opacity(0.35), radius: 5, x: 0, y: 3)
         .overlay {
             // Only while the field is inactive, so the live text field keeps its own clicks.
             if !model.appsSearchActive && !Motion.still {
@@ -932,16 +947,16 @@ private struct EdgeSongsSearchField: View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(palette.inkColor.opacity(0.6))
+                .foregroundStyle(.secondary)
             if Motion.still || !model.songsSearchActive {
                 // The pictures, or the field without the keyboard: the query as text.
                 Text(model.songsQuery.isEmpty ? Self.prompt : model.songsQuery)
-                    .foregroundStyle(palette.inkColor.opacity(model.songsQuery.isEmpty ? 0.6 : 1))
+                    .foregroundStyle(model.songsQuery.isEmpty ? HierarchicalShapeStyle.secondary : .primary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                TextField("", text: $model.songsQuery, prompt: Text(Self.prompt).foregroundColor(palette.inkColor.opacity(0.45)))
+                TextField("", text: $model.songsQuery, prompt: Text(Self.prompt).foregroundStyle(.secondary))
                     .textFieldStyle(.plain)
-                    .foregroundStyle(palette.inkColor)
+                    .foregroundStyle(.primary)
                     .focused($focused)
                     .onSubmit { model.submitSongsSearch() }
                     .accessibilityLabel("Search songs or artists")
@@ -952,9 +967,7 @@ private struct EdgeSongsSearchField: View {
         .lineLimit(1)
         .padding(.horizontal, 11)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Capsule().fill(palette.baseDarkColor.opacity(0.85)))
-        .background(Capsule().fill(palette.rimTintColor.opacity(0.10)))
-        .overlay(Capsule().edgeInnerLight(palette.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
+        .edgeFieldWell(palette, shadow: false)
         .overlay(Capsule().strokeBorder(model.songsSearchActive ? palette.accentColor.opacity(0.6) : palette.rimTintColor.opacity(0.3),
                                         lineWidth: 1))
         .overlay {
@@ -978,19 +991,29 @@ private struct EdgeSongsList: View {
         let rows = model.songsVisible
         VStack(spacing: 6) {
             if let notice = model.songsNotice {
-                Text(notice).font(.geist(11, .medium)).foregroundStyle(palette.accent2Color).lineLimit(1)
+                Text(notice).font(.geist(11, .medium)).foregroundStyle(.primary).lineLimit(1)
                     .frame(maxWidth: .infinity).frame(height: 16)
             }
-            if model.songs.songs.isEmpty {
+            if model.songs.songs.isEmpty && !model.songsSearchRowShown {
                 EdgeQuietLine(text: "Play a song in Spotify. It shows here.")
-                Spacer(minLength: 0)
-            } else if rows.isEmpty {
-                EdgeQuietLine(text: "No song found")
                 Spacer(minLength: 0)
             } else {
                 let content = VStack(spacing: 4) {
+                    if model.songs.songs.isEmpty {
+                        EdgeQuietLine(text: "Play a song in Spotify. It shows here.")
+                    } else if rows.isEmpty {
+                        // One short line, above the Spotify search row.
+                        Text("No song found").font(.geist(12)).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 10)
+                            .frame(height: 22)
+                    }
                     ForEach(rows) { song in
                         EdgeSongRow(song: song, cover: cover(for: song), palette: palette) { model.tapSong(song) }
+                    }
+                    if model.songsSearchRowShown {
+                        EdgeSpotifySearchRow(query: model.songsQuery.trimmingCharacters(in: .whitespacesAndNewlines),
+                                             palette: palette) { model.searchSpotify() }
                     }
                 }
                 if Motion.still {
@@ -1011,6 +1034,42 @@ private struct EdgeSongsList: View {
     }
 }
 
+/// The last row while a query is typed: `Search Spotify for "<query>"`, which opens Spotify's own search.
+private struct EdgeSpotifySearchRow: View {
+    let query: String
+    let palette: DockPalette
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(palette.rimTintColor.opacity(0.12)))
+                Text("Search Spotify for \u{201C}\(query)\u{201D}").font(.geist(12, .medium)).foregroundStyle(.primary)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 6)
+                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.leading, 5)
+            .padding(.trailing, 10)
+            .frame(height: 38)
+            .background(shape.fill(hovering ? palette.hoverFill : palette.restFill))
+            .overlay(shape.strokeBorder(palette.hairlineColor, lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(EdgePressStyle(scale: 0.98))
+        .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
+        .edgeHover { hovering = $0 }
+        .help("Search Spotify for \u{201C}\(query)\u{201D}")
+        .accessibilityLabel("Search Spotify for \(query)")
+    }
+}
+
 private struct EdgeSongRow: View {
     let song: SpotifySong
     let cover: NSImage?
@@ -1027,21 +1086,21 @@ private struct EdgeSongRow: View {
                         Image(nsImage: cover).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
                     } else {
                         Image(systemName: "music.note").font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(palette.inkColor.opacity(0.55))
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .frame(width: 28, height: 28)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(palette.rimTintColor.opacity(0.12)))
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(song.name).font(.geist(12, .medium)).foregroundStyle(Theme.ink.color)
-                    Text(song.artist).font(.geist(11)).foregroundStyle(Theme.inkSecondary.color)
+                    Text(song.name).font(.geist(12, .medium)).foregroundStyle(.primary)
+                    Text(song.artist).font(.geist(11)).foregroundStyle(.secondary)
                 }
                 .lineLimit(1)
                 Spacer(minLength: 6)
                 Image(systemName: song.starred ? "star.fill" : "star")
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(song.starred ? palette.accentColor : palette.inkColor.opacity(0.4))
+                    .foregroundStyle(song.starred ? AnyShapeStyle(palette.accentColor) : AnyShapeStyle(.tertiary))
                     .accessibilityLabel(song.starred ? "Starred" : "Not starred")
             }
             .padding(.leading, 5)
@@ -1064,7 +1123,7 @@ private struct EdgeSongRow: View {
 /// The Spotify mini player, one layout in every state: a search row ("my songs" and the star filter; a query or the filter
 /// shows the saved songs in the record's place), the song's record in three
 /// waves (they move while it plays), the title and artist or a status line, previous / play-pause / next / stop / heart,
-/// and "Open Spotify", the only control that may launch or bring up Spotify.
+/// and "Open Spotify", which with the list's "Search Spotify for …" row is the only control that may bring up Spotify.
 struct EdgeSpotifyCard: View {
     @ObservedObject var model: EdgePanelModel
 
@@ -1137,11 +1196,11 @@ struct EdgeSpotifyCard: View {
         Group {
             if let t {
                 VStack(spacing: 3) {
-                    Text(t.title).font(.geist(14, .semibold)).foregroundStyle(Theme.ink.color).lineLimit(1)
-                    Text(t.artist).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color).lineLimit(1)
+                    Text(t.title).font(.geist(14, .semibold)).foregroundStyle(.primary).lineLimit(1)
+                    Text(t.artist).font(.geist(12)).foregroundStyle(.secondary).lineLimit(1)
                 }
             } else {
-                Text(status).font(.geist(12)).foregroundStyle(Theme.inkSecondary.color)
+                Text(status).font(.geist(12)).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).lineLimit(3).minimumScaleFactor(0.85)
             }
         }
@@ -1177,7 +1236,10 @@ private struct EdgeMusicButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: prominent == nil ? 12 : 16, weight: .semibold))
-                .foregroundStyle(prominent.map { $0.baseDarkColor } ?? (lit || tint != nil ? pal.inkColor : pal.inkColor.opacity(0.75)))
+                // Play-pause: black or white, whichever contrasts more with its accent fill (at least 4.5:1). The rest sit
+                // on the glass: hierarchical, so the system picks light or dark.
+                .foregroundStyle(prominent.map { AnyShapeStyle($0.onAccentColor) }
+                                 ?? AnyShapeStyle(lit || tint != nil ? HierarchicalShapeStyle.primary : .secondary))
                 .frame(width: size, height: size)
                 // Round glass: the palette's light at 10% with a 30% edge; play-pause filled with the accent; a tint fills its own well.
                 .background(Circle().fill(prominent.map { $0.accentColor }
@@ -1186,7 +1248,8 @@ private struct EdgeMusicButton: View {
                 .overlay(Circle().strokeBorder(tint.map { $0.opacity(0.45) } ?? pal.rimTintColor.opacity(prominent == nil ? 0.30 : 0.4),
                                                lineWidth: 1))
                 .overlay(Circle().edgeInnerLight(pal.rimTintColor.opacity(0.3), x: 0, y: 1, blur: 1))
-                .shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 2)
+                // On the glass only the solid play-pause casts a shadow (a shadow under a see-through well shows as a dark blot).
+                .shadow(color: .black.opacity(EdgeDockArt.flat ? 0.3 : (prominent == nil ? 0 : 0.2)), radius: 4, x: 0, y: 2)
                 .contentShape(Circle())
                 .opacity(enabled ? 1 : 0.4)
         }
@@ -1211,7 +1274,7 @@ private struct EdgeOpenSpotifyButton: View {
                 Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold))
             }
             .font(.geist(12, .medium))
-            .foregroundStyle(hovering ? pal.inkColor : pal.inkColor.opacity(0.75))
+            .foregroundStyle(hovering ? HierarchicalShapeStyle.primary : .secondary)
             .padding(.horizontal, 8)
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
@@ -1260,7 +1323,7 @@ struct EdgeAppsCard: View {
 
     private func titleBar(_ p: DockPalette) -> some View {
         ZStack {
-            Text("App Customization").font(.geist(13, .semibold)).foregroundStyle(Theme.ink.color)
+            Text("App Customization").font(.geist(13, .semibold)).foregroundStyle(.primary)
             HStack {
                 Button(action: close) {
                     Circle().fill(Color(red: 1, green: 0.37, blue: 0.34))
@@ -1285,7 +1348,7 @@ struct EdgeAppsCard: View {
                 Button { model.appsFilter = f } label: {
                     Text(f.title)
                         .font(.geist(11, .medium))
-                        .foregroundStyle(filter == f ? Theme.ink.color : Theme.inkSecondary.color)
+                        .foregroundStyle(filter == f ? HierarchicalShapeStyle.primary : .secondary)
                         .frame(maxWidth: .infinity)
                         .frame(height: 24)
                         .background(Capsule().fill(filter == f ? p.selectedFill : .clear))
@@ -1343,7 +1406,7 @@ struct EdgeAppsCard: View {
             Spacer()
             Text("\(count)").font(.geistMono(10, .medium))
         }
-        .foregroundStyle(Theme.inkTertiary.color)
+        .foregroundStyle(.secondary)
         .padding(.horizontal, 4)
         .frame(height: 22)
     }
@@ -1358,17 +1421,17 @@ struct EdgeAppsCard: View {
     private func footer(_ p: DockPalette) -> some View {
         HStack {
             if model.apps.canPin {
-                Text("\(model.apps.pinned.count) in rotation").font(.geistMono(11)).foregroundStyle(Theme.inkSecondary.color)
+                Text("\(model.apps.pinned.count) in rotation").font(.geistMono(11)).foregroundStyle(.secondary)
             } else {
                 // The dock is full: the Add buttons are dim and disabled, and this says why.
-                Text("Remove an app to add another").font(.geist(11, .medium)).foregroundStyle(Theme.inkSecondary.color)
+                Text("Remove an app to add another").font(.geist(11, .medium)).foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 8)
             Button(action: close) {
                 Text("Done")
                     .font(.geist(12, .semibold))
-                    .foregroundStyle(p.baseDarkColor)
+                    .foregroundStyle(p.onAccentColor)
                     .padding(.horizontal, 14)
                     .frame(height: 26)
                     .background(Capsule().fill(p.accentColor))
@@ -1398,21 +1461,22 @@ private struct EdgeAppRow: View {
                     // The whole app icon in its own rounded-square shape (never cut to the circle).
                     Image(nsImage: icon).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 26, height: 26)
                 } else {
-                    Image(systemName: "app").font(.system(size: 12)).foregroundStyle(palette.rimTintColor)
+                    Image(systemName: "app").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
             .frame(width: 32, height: 32)
             .background(Circle().fill(palette.rimColor.opacity(0.18)))
             .overlay(Circle().strokeBorder(palette.hairlineColor, lineWidth: 1))
-            Text(app.name).font(.geist(12, .medium)).foregroundStyle(Theme.ink.color).lineLimit(1)
+            Text(app.name).font(.geist(12, .medium)).foregroundStyle(.primary).lineLimit(1)
             Spacer(minLength: 8)
             Button(action: action) {
+                // Solid fills with their own contrast (white on dark red; black or white on the accent), never see-through.
                 Text(pinned ? "Remove" : "Add")
                     .font(.geist(11, .semibold))
-                    .foregroundStyle(pinned ? Color(red: 1, green: 0.48, blue: 0.46) : palette.baseDarkColor)
+                    .foregroundStyle(pinned ? Color.white : palette.onAccentColor)
                     .padding(.horizontal, 10)
                     .frame(height: 22)
-                    .background(Capsule().fill(pinned ? Color(red: 0.6, green: 0.12, blue: 0.12).opacity(0.4) : palette.accentColor))
+                    .background(Capsule().fill(pinned ? Color(red: 0.6, green: 0.12, blue: 0.12) : palette.accentColor))
                     .contentShape(Capsule())
             }
             .buttonStyle(EdgePressStyle())

@@ -140,6 +140,13 @@ struct DockPalette: Equatable {
     var baseDark: NSColor { (base.usingColorSpace(.sRGB) ?? base).blended(withFraction: 0.55, of: .black) ?? base }
     /// A light tint of the rim (rim lights and hairlines).
     var rimTint: NSColor { (rim.usingColorSpace(.sRGB) ?? rim).blended(withFraction: 0.6, of: .white) ?? rim }
+    /// Text on an accent fill: black or white, whichever contrasts more with `accent` (always at least about 4.58:1).
+    var onAccent: NSColor { Self.onFill(accent) }
+
+    static func onFill(_ fill: NSColor) -> NSColor {
+        let black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1), white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        return contrast(black, fill) >= contrast(white, fill) ? black : white
+    }
 
     static let emerald = DockPalette(base: rgb(0x0B2B22), rim: rgb(0x10B981), accent: rgb(0xFF6B4A),
                                      accent2: rgb(0xF0509A), ink: rgb(0xF5FFFA))
@@ -168,7 +175,8 @@ struct DockPalette: Equatable {
     static let minHueGap: CGFloat = 0.08
     /// ...or, when either is nearly grey, when their contrast ratio is at least this.
     static let minToneContrast: CGFloat = 1.6
-    /// The ink on the tinted base must keep this on the dock glass over white and over black.
+    /// The ink on the flat path's solid base, and the text on an accent fill, keep at least this. (On the glass the system
+    /// picks the text colour; that is checked only on a real screen.)
     static let minInkContrast: CGFloat = 4.5
 
     /// The hue distance of two colours on the circle (0 same, 0.5 opposite).
@@ -190,25 +198,6 @@ struct DockPalette: Equatable {
     static func accentsDiffer(_ a: NSColor, _ b: NSColor) -> Bool {
         if saturation(a) >= 0.25 && saturation(b) >= 0.25 && hueGap(a, b) >= minHueGap { return true }
         return contrast(a, b) >= minToneContrast
-    }
-
-    /// The least ink contrast on the dock glass (`EdgeGlass.surface`) of `base` over a white and a black backdrop.
-    static func inkContrast(ink: NSColor, base: NSColor) -> CGFloat {
-        let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1), black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-        return [white, black].map { contrast(ink, EdgeGlass.surface(base: base, dim: EdgeGlass.dockDim, over: $0)) }.min()!
-    }
-
-    /// Darkens `base` until the ink keeps `minInkContrast` (plus a small margin) on the glass.
-    private static func fit(base: NSColor, ink: NSColor) -> NSColor {
-        var c = base.usingColorSpace(.sRGB) ?? base
-        var n = 0
-        while inkContrast(ink: ink, base: c) < minInkContrast + 0.1 && n < 30 {
-            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
-            c.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
-            c = NSColor(hue: h, saturation: s, brightness: max(0, b - 0.02), alpha: 1)
-            n += 1
-        }
-        return c
     }
 
     /// The second accent: `wanted`, moved around the hue circle (then in tone) until it differs from `accent`.
@@ -274,7 +263,7 @@ struct DockPalette: Equatable {
         guard let top = weight.indices.max(by: { weight[$0] < weight[$1] }), weight[top] > 0.5 else {
             // Grey cover: neutral dark palette.
             let ink = hsb(0, 0, 0.97)
-            let base = fit(base: hsb(0, 0, 0.15), ink: ink)
+            let base = hsb(0, 0, 0.15)
             let accent = ensure(hsb(0, 0, 0.82), on: base, ratio: 3)
             let accent2 = distinct(ensure(hsb(0, 0, 0.55), on: base, ratio: 3), from: accent, on: base, hue: 0, sat: 0)
             return DockPalette(base: base, rim: hsb(0, 0, 0.6), accent: accent, accent2: accent2, ink: ink)
@@ -290,7 +279,7 @@ struct DockPalette: Equatable {
         let h2 = second.map(hue) ?? (h1 + 0.12)
 
         let ink = hsb(h1, 0.04, 0.98)
-        let base = fit(base: hsb(h1, min(0.6, max(0.4, s1 * 0.7)), 0.16), ink: ink)
+        let base = hsb(h1, min(0.6, max(0.4, s1 * 0.7)), 0.16)
         let rim = ensure(hsb(h1, s1, 0.85), on: base, ratio: 3)
         let accent = ensure(hsb(h1, s1, 0.9), on: base, ratio: 3)
         let accent2 = distinct(ensure(hsb(h2, max(0.55, s1), 0.9), on: base, ratio: 3), from: accent, on: base, hue: h1, sat: s1)

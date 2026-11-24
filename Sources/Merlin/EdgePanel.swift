@@ -577,10 +577,23 @@ final class EdgePanelModel: ObservableObject {
         if !songsQuery.isEmpty { songsQuery = "" } else { deactivateSongsSearch() }
     }
 
-    /// Return in the songs field: plays the first result.
+    /// Opens `spotify:search:` URLs (Spotify's own search). Tests put a fake here.
+    var urlOpener: URLOpening = LiveURLOpener()
+
+    /// The list ends with "Search Spotify for …" while a query is typed.
+    var songsSearchRowShown: Bool { songsListShown && SpotifySearch.url(for: songsQuery) != nil }
+
+    /// "Search Spotify for …": opens Spotify's own search for the query (with "Open Spotify", the only controls that may
+    /// bring Spotify to the front). An empty query does nothing.
+    func searchSpotify() {
+        guard let url = SpotifySearch.url(for: songsQuery) else { return }
+        urlOpener.open(url)
+    }
+
+    /// Return in the songs field: plays the first result; with no song match, opens Spotify's search for the query.
     func submitSongsSearch() {
-        guard songsListShown, let first = songsVisible.first else { return }
-        tapSong(first)
+        guard songsListShown else { return }
+        if let first = songsVisible.first { tapSong(first) } else { searchSpotify() }
     }
 
     /// A row: plays that song, only while Spotify is open (never launches it). The query and the filter stay.
@@ -722,7 +735,8 @@ final class EdgePanelModel: ObservableObject {
         case .notRunning, .denied: return false
         }
     }
-    /// "Open Spotify": the only control that may launch or activate Spotify (through the workspace).
+    /// "Open Spotify": the only control that may launch Spotify (through the workspace); with "Search Spotify for …" the
+    /// only two that may bring it to the front.
     func tapOpenSpotify() { apps.open(DockApp(bundleID: LiveSpotifyBackend.bundleID, name: "Spotify")) }
     /// "+": the add/remove card (it reads the installed apps the first time).
     func tapManageApps() {
@@ -803,8 +817,8 @@ struct EdgePanelView: View {
             }
         }
             .frame(width: size.width, height: size.height, alignment: .top)
-            // Dark glass in light and dark mode alike, so every row uses the light ink.
-            .environment(\.colorScheme, .dark)
+            // Flat path: a dark surface in light and dark mode alike (light text). Glass path: the system picks the content.
+            .edgeFlatScheme()
             .environment(\.edgePalette, model.palette)
             .edgeCardChrome(model.palette, radius: radius)
     }
@@ -863,7 +877,7 @@ private struct EdgeListView: View {
         return Button { model.choose(s) } label: {
             Text(title)
                 .font(.geist(13, on ? .semibold : .medium))
-                .foregroundStyle(on ? Theme.ink.color : Theme.inkTertiary.color)
+                .foregroundStyle(on ? HierarchicalShapeStyle.primary : .secondary)
                 .padding(.horizontal, 8)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
@@ -927,7 +941,7 @@ private struct EdgeRows<Row: View>: View {
 struct EdgeQuietLine: View {
     let text: String
     var body: some View {
-        Text(text).font(.geist(13)).foregroundStyle(Theme.inkTertiary.color)
+        Text(text).font(.geist(13)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, EdgePanelLayout.pad + 10)
             .frame(height: EdgePanelLayout.lineHeight)
@@ -941,11 +955,11 @@ private struct EdgeChatRowView: View {
     @Environment(\.edgePalette) private var pal
     @State private var hovering = false
 
-    private var statusColor: Color {
+    private var statusColor: AnyShapeStyle {
         switch row.phase {
-        case .idle: return Theme.inkTertiary.color
-        case .working, .done: return Theme.inkSecondary.color
-        case .failed: return Theme.alert.color
+        case .idle: return AnyShapeStyle(.secondary)
+        case .working, .done: return AnyShapeStyle(.secondary)
+        case .failed: return AnyShapeStyle(Theme.alert.color)
         }
     }
 
@@ -955,7 +969,7 @@ private struct EdgeChatRowView: View {
                 HStack(spacing: 10) {
                     EdgeStatusMark(phase: row.phase).frame(width: 20)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(row.title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color).lineLimit(1)
+                        Text(row.title).font(.geist(13, .medium)).foregroundStyle(.primary).lineLimit(1)
                         Text(row.subtitle).font(.geist(12)).foregroundStyle(statusColor).lineLimit(1)
                     }
                     Spacer(minLength: trailingRoom)
@@ -966,7 +980,7 @@ private struct EdgeChatRowView: View {
                     .fill(row.isOpen ? pal.selectedFill : (hovering ? pal.hoverFill : .clear)))
                 .overlay(alignment: .leading) {
                     // The open chat's slim ink bar (the Library marks selected rows the same way).
-                    if row.isOpen { Capsule().fill(Theme.ink.color).frame(width: 2, height: 20).padding(.leading, 4) }
+                    if row.isOpen { Capsule().fill(.primary).frame(width: 2, height: 20).padding(.leading, 4) }
                 }
                 .contentShape(Rectangle())
             }
@@ -976,10 +990,10 @@ private struct EdgeChatRowView: View {
             HStack(spacing: 2) {
                 if row.canStar && (hovering || row.starred) {
                     EdgeIconButton(symbol: row.starred ? "star.fill" : "star", help: row.starred ? "Unstar" : "Star",
-                                   tint: row.starred ? pal.accentColor : Theme.inkSecondary.color) { model.tapStar(row.id) }
+                                   tint: row.starred ? pal.accentColor : nil) { model.tapStar(row.id) }
                 }
                 if hovering {
-                    EdgeIconButton(symbol: "xmark", help: "Delete chat", tint: Theme.inkSecondary.color) { model.tapDelete(row.id) }
+                    EdgeIconButton(symbol: "xmark", help: "Delete chat", tint: nil) { model.tapDelete(row.id) }
                 }
             }
             .padding(.trailing, 6)
@@ -1003,10 +1017,10 @@ private struct EdgeNoteRowView: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: "tablecells").font(.system(size: 12)).foregroundStyle(Theme.inkTertiary.color).frame(width: 20)
+                Image(systemName: "tablecells").font(.system(size: 12)).foregroundStyle(.tertiary).frame(width: 20)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(row.title).font(.geist(13, .medium)).foregroundStyle(Theme.ink.color).lineLimit(1)
-                    Text(row.detail).font(.geist(12)).foregroundStyle(Theme.inkTertiary.color).lineLimit(1)
+                    Text(row.title).font(.geist(13, .medium)).foregroundStyle(.primary).lineLimit(1)
+                    Text(row.detail).font(.geist(12)).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer(minLength: 8)
             }
@@ -1030,8 +1044,8 @@ private struct EdgeNewNoteRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 10) {
-                Image(systemName: "plus").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.inkSecondary.color).frame(width: 20)
-                Text("New note").font(.geist(13, .medium)).foregroundStyle(Theme.inkSecondary.color)
+                Image(systemName: "plus").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).frame(width: 20)
+                Text("New note").font(.geist(13, .medium)).foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(.leading, 8)
@@ -1050,7 +1064,8 @@ private struct EdgeNewNoteRow: View {
 private struct EdgeIconButton: View {
     let symbol: String
     let help: String
-    let tint: Color
+    /// nil: the glass's own secondary style.
+    let tint: Color?
     let action: () -> Void
     @Environment(\.edgePalette) private var pal
     @State private var hovering = false
@@ -1059,7 +1074,7 @@ private struct EdgeIconButton: View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(hovering ? Theme.ink.color : tint)
+                .foregroundStyle(hovering ? AnyShapeStyle(.primary) : tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
                 .frame(width: 24, height: 24)
                 .background(Circle().fill(hovering ? pal.selectedFill : .clear))
                 .contentShape(Circle())
@@ -1081,10 +1096,10 @@ struct EdgeStatusMark: View {
     var body: some View {
         Group {
             switch phase {
-            case .idle: Circle().strokeBorder(Theme.inkSecondary.color, lineWidth: 1.5)
-            // The dock's accent (the card is always dark glass, and the accent keeps 3:1 on its base).
+            case .idle: Circle().strokeBorder(.secondary, lineWidth: 1.5)
+            // The dock's accent.
             case .working: EdgeBreathing { Circle().fill(pal.accentColor) }
-            case .done: Circle().fill(Theme.ink.color)
+            case .done: Circle().fill(.primary)
             case .failed: Circle().fill(Theme.alert.color)
             }
         }
