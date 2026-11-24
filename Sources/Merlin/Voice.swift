@@ -18,13 +18,15 @@ enum CommandCenter {
         /// "Show my chats" / "show my notes": the edge panel, pinned.
         case openChats
         case openNotes
+        /// "Add Notion to the dock", "remind me in 25 minutes", "pause": one fixed action (see `ActionCommand`).
+        case act(LibraryAssistant.Action)
         /// Anything else is a question for Claude.
         case ask
 
-        /// One of the commands that act and open no chat (see `NoteCommand`).
+        /// One of the commands that act and open no chat (`NoteCommand` and `ActionCommand`).
         var isNoteCommand: Bool {
             switch self {
-            case .openNote, .addToNote, .newNote, .openChats, .openNotes: return true
+            case .openNote, .addToNote, .newNote, .openChats, .openNotes, .act: return true
             case .calendar, .video, .ask: return false
             }
         }
@@ -38,9 +40,15 @@ enum CommandCenter {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// `sheets`: the names of the sheets (named notes), so "show my physics terms" can open one. Calendar and video come
-    /// first, exactly as before; a note command is checked last and only with strict rules (`NoteCommand`).
-    static func route(_ text: String, now: Date = Date(), sheets: [String] = []) -> Route {
+    /// `sheets`: the names of the sheets (named notes), so "show my physics terms" can open one. `actions`: the apps, songs
+    /// and routines the fixed actions may name. A fixed action comes first, with strict anchors ("add Calendar to the dock"
+    /// would read as a calendar request otherwise), but "open X" opens a sheet called X before an app called X. Then
+    /// calendar and video, exactly as before; a note command is checked last and only with strict rules (`NoteCommand`).
+    static func route(_ text: String, now: Date = Date(), sheets: [String] = [], actions: ActionContext = ActionContext()) -> Route {
+        if let a = ActionCommand.parse(text, context: actions) {
+            if a.type == "app_open", let note = NoteCommand.parse(text, sheets: sheets) { return note }
+            return .act(a)
+        }
         if CalendarIntent.looksLikeRequest(text, now: now) { return .calendar }
         if let video = VideoIntent.parse(text) { return .video(video) }
         return NoteCommand.parse(text, sheets: sheets) ?? .ask
@@ -277,6 +285,14 @@ final class VoiceController: ObservableObject {
     }
 
     /// One line of result for a command that acted ("Opened Microeconomics terms"). It hides by itself, like any message.
+    /// Listening or turning a new press into text: a late result line must not cover it.
+    var isTalking: Bool {
+        switch phase {
+        case .listening, .working: return true
+        default: return false
+        }
+    }
+
     func say(_ line: String) {
         hideWork?.cancel()
         show(line)

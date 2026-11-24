@@ -41,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edge.start()
         statusMenu.onShowEdgePanel = { edge.show(.chats) }
         CommandRunner.shared = commands
+        LibraryAssistant.actionHook = commands.actions
+        // Timers and reminders: banners show while Merlin is in front too; one that ends while Merlin runs also says so here.
+        NotificationPresenter.install()
+        TimerStore.shared.onFinish = { [weak self] t in
+            self?.voice.say(t.label.isEmpty ? (t.isReminder ? "Reminder: \(ActionCommand.duration(t.seconds)) are up" : "Your timer is done") : "Reminder: \(t.label)")
+        }
         statusMenu.onHistory = { notebook in LibraryWindow.shared.show(notebook: notebook) }
         statusMenu.onScreenshots = { LibraryWindow.shared.show(mode: .screenshots) }
         statusMenu.onBin = { LibraryWindow.shared.show(mode: .bin) }
@@ -138,17 +144,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let text = CommandCenter.cleaned(spoken)
         guard !text.isEmpty else { return }
         trigger.hide()
-        let route = CommandCenter.route(text, sheets: Library.shared.sheets.map(\.name))
+        let route = CommandCenter.route(text, sheets: Library.shared.sheets.map(\.name), actions: commands.actionContext)
         switch route {
         case .video(let intent):
             return summarizeVideo(intent)
-        case .openNote, .addToNote, .newNote, .openChats, .openNotes:
+        case .openNote, .addToNote, .newNote, .openChats, .openNotes, .act:
             // A command acts at once and opens no chat. A point-to-ask picture meant for these words is dropped.
             pendingPicture = nil
             pendingSpoken = nil
             if pointAsk.isActive || pointCapturing { dropComingPicture = true }
             if let line = commands.run(route) { voice.say(line) }
             return
+        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && ActionCommand.looksLikeAction(text, context: commands.actionContext):
+            // No rule fits, but it opens like a request to act: one Haiku call maps it to one fixed command line.
+            return actByModel(text)
         case .calendar, .ask:
             break
         }
@@ -164,6 +173,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         askSpoken(text)
+    }
+
+    /// The Haiku fallback: the words go to Haiku with the fixed command lines and the names it may use; the reply is read
+    /// by the same rules. NONE, a failure or a reply the rules refuse: the words go to Claude as a question, as before.
+    private func actByModel(_ text: String) {
+        let context = commands.actionContext
+        voice.say("Working on it…")
+        ClaudeOneShot.run(ActionCommand.fallbackPrompt(text, context: context), system: ActionCommand.fallbackSystem,
+                          model: .haiku, effort: "low", timeout: 30) { [weak self] result in
+            guard let self else { return }
+            if case .success(let reply) = result, let action = ActionCommand.fromFallback(reply.text, context: context) {
+                let line = self.commands.run(.act(action))
+                if let line, !self.voice.isTalking { self.voice.say(line) }
+                return
+            }
+            self.askSpoken(text)
+        }
     }
 
     /// A spoken question with no picture: to the open chat, or a new one about what's highlighted.

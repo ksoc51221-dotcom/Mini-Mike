@@ -131,9 +131,13 @@ final class CommandRunner {
     /// Shows the edge panel pinned on that list. False if it could not show (a snip or point to ask is under way).
     let showPanel: (EdgePanelModel.Section) -> Bool
 
+    /// The fixed actions (dock, apps, music, timers, routines). Nil: none (the note-command checks).
+    let actions: ActionRunner?
+
     init(library: Library, openSheet: @escaping (UUID) -> Void, appendAnswer: @escaping (String) -> SheetActions.AppendResult,
-         showPanel: @escaping (EdgePanelModel.Section) -> Bool) {
+         showPanel: @escaping (EdgePanelModel.Section) -> Bool, actions: ActionRunner? = nil) {
         self.library = library
+        self.actions = actions
         self.openSheet = openSheet
         self.appendAnswer = appendAnswer
         self.showPanel = showPanel
@@ -147,19 +151,23 @@ final class CommandRunner {
                       showPanel: { section in
                           EdgePanelController.shared.show(section)
                           return EdgePanelController.shared.isVisible
-                      })
+                      },
+                      actions: .live())
     }
 
     /// The same for spoken and typed words: wake-up words off, then the router with the sheets' names. Nil unless it is
     /// one of the note commands (calendar, video and questions go on as before).
-    static func commandRoute(_ text: String, sheets: [String]) -> CommandCenter.Route? {
-        let route = CommandCenter.route(CommandCenter.cleaned(text), sheets: sheets)
+    static func commandRoute(_ text: String, sheets: [String], actions: ActionContext = ActionContext()) -> CommandCenter.Route? {
+        let route = CommandCenter.route(CommandCenter.cleaned(text), sheets: sheets, actions: actions)
         return route.isNoteCommand ? route : nil
     }
 
     func commandRoute(_ text: String) -> CommandCenter.Route? {
-        Self.commandRoute(text, sheets: library.sheets.map(\.name))
+        Self.commandRoute(text, sheets: library.sheets.map(\.name), actions: actionContext)
     }
+
+    /// What the fixed actions may name now (empty without an action runner).
+    var actionContext: ActionContext { actions?.context ?? ActionContext() }
 
     /// Does it, and says what happened. Nil for a route that is not a note command.
     func run(_ route: CommandCenter.Route) -> String? {
@@ -188,6 +196,8 @@ final class CommandRunner {
             return showPanel(.chats) ? "Showing your chats" : Self.panelBusy
         case .openNotes:
             return showPanel(.notes) ? "Showing your notes" : Self.panelBusy
+        case .act(let action):
+            return actions?.run(action).line ?? "I can't do that here."
         case .calendar, .video, .ask:
             return nil
         }

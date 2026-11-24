@@ -333,6 +333,8 @@ private struct EdgeDockDisc: View {
             } else {
                 search(p).transition(fade)
             }
+            EdgeTimerChip(timers: TimerStore.shared, palette: p)
+                .position(x: EdgePanelLayout.timerChipCentre.x, y: EdgePanelLayout.timerChipCentre.y)
         }
     }
 
@@ -793,6 +795,43 @@ private struct EdgeSmallButton: View {
         .edgeHover { hovering = $0 }
         .help(help)
         .accessibilityLabel(help)
+    }
+}
+
+/// The time left on the soonest timer or reminder, low in the disc by the screen edge (nothing when none runs). It
+/// changes once a second; no other motion.
+private struct EdgeTimerChip: View {
+    @ObservedObject var timers: TimerStore
+    let palette: DockPalette
+
+    var body: some View {
+        if let t = timers.next {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let left = max(0, Int(t.end.timeIntervalSince(ctx.date).rounded(.up)))
+                HStack(spacing: 4) {
+                    Image(systemName: t.isReminder ? "bell.fill" : "timer")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(Self.clock(left))
+                        .font(.geistMono(11, .medium))
+                        .monospacedDigit()
+                }
+                .foregroundStyle(palette.inkColor)
+                .padding(.horizontal, 8)
+                .frame(height: 22)
+                .background(Capsule().fill(Color.black.opacity(0.32)))
+                .overlay(Capsule().strokeBorder(palette.rimTintColor.opacity(0.4), lineWidth: 1))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel((t.isReminder ? "Reminder in " : "Timer: ") + ActionCommand.duration(max(left, 1)) + " left")
+                .help(t.label.isEmpty ? (t.isReminder ? "Reminder" : "Timer") : t.label)
+            }
+            .transition(.opacity)
+        }
+    }
+
+    /// 24:59 under an hour, 1:05:00 from an hour.
+    static func clock(_ s: Int) -> String {
+        let h = s / 3600, m = (s % 3600) / 60, sec = s % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec) : String(format: "%d:%02d", m, sec)
     }
 }
 

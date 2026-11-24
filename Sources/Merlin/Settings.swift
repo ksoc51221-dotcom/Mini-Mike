@@ -204,6 +204,13 @@ final class Settings {
     }
 
     /// Library rules: standing instructions for the Library Assistant. Goes in its prompt (never in a chat's).
+    /// Routines: one per line, "name: step; step; …" (see `Routine`).
+    static let routinesKey = "assistantRoutines"
+    var routines: String {
+        get { defaults.string(forKey: Self.routinesKey) ?? "" }
+        set { defaults.set(newValue, forKey: Self.routinesKey) }
+    }
+
     static let libraryRulesKey = "libraryRules"
     var libraryRules: String {
         get { defaults.string(forKey: Self.libraryRulesKey) ?? "" }

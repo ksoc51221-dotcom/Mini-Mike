@@ -740,6 +740,7 @@ private struct LSRules: View {
     @AppStorage private var context: String
     @AppStorage private var rules: String
     @AppStorage private var libraryRules: String
+    @AppStorage private var routines: String
     @AppStorage private var lockRename: Bool
     @AppStorage private var lockMove: Bool
 
@@ -747,6 +748,7 @@ private struct LSRules: View {
         _context = AppStorage(wrappedValue: "", Settings.contextKey, store: store)
         _rules = AppStorage(wrappedValue: "", Settings.rulesKey, store: store)
         _libraryRules = AppStorage(wrappedValue: "", Settings.libraryRulesKey, store: store)
+        _routines = AppStorage(wrappedValue: "", Settings.routinesKey, store: store)
         _lockRename = AppStorage(wrappedValue: true, Settings.lockRenameKey, store: store)
         _lockMove = AppStorage(wrappedValue: true, Settings.lockAskMoveKey, store: store)
     }
@@ -759,6 +761,8 @@ private struct LSRules: View {
                       placeholder: "Straight forward answer: no beating around the bush, deliver the idea directly.", text: $rules)
             LSTextBox(title: "Library rules", detail: "How the Library Assistant should work with your chats, notes and screenshots.",
                       placeholder: "File anything about exams under Study. Keep titles short.", text: $libraryRules)
+            LSTextBox(title: "Routines", detail: "One routine on each line: a name, a colon, then the steps with a semicolon between them. Say \"run\" and the name.",
+                      placeholder: "Study time: open Notion; start a 50 minute timer; play", text: $routines)
             VStack(alignment: .leading, spacing: 8) {
                 Text("Hard locks").mLabelStyle()
                 LSGroup {

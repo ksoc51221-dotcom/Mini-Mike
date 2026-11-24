@@ -30,6 +30,26 @@ extension FeatureTests {
             let end = Date().addingTimeInterval(2)
             while !cond() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         }
+        // Every script must COMPILE. Compiling sends no event. It needs Spotify's dictionary, so it runs only while
+        // Spotify is already open (a test never starts an app). The first poll script used `st`, an AppleScript
+        // word, and never compiled: the fakes hid that, and no song ever showed in the real app.
+        if LiveSpotifyBackend().isRunning() {
+            var sources = [("poll", LiveSpotifyBackend.fetchSource)]
+            let commands: [(String, SpotifyCommand)] = [
+                ("play/pause", .playPause), ("play", .play), ("pause", .pause), ("next", .next), ("previous", .previous),
+                ("stop", .stop), ("play track", .playTrack("spotify:track:5YBxGJYKJ7Se2Uq7S0pVOL")),
+            ]
+            for (name, command) in commands {
+                if let s = LiveSpotifyBackend.source(for: command) { sources.append((name, s)) }
+            }
+            for (name, source) in sources {
+                var error: NSDictionary?
+                let ok = NSAppleScript(source: source)?.compileAndReturnError(&error) ?? false
+                check("spotify script compiles: \(name)", ok && error == nil)
+            }
+        } else {
+            print("  [skip] spotify script compile checks: Spotify is not open")
+        }
         let url = URL(string: "https://i.scdn.co/image/abc")
         let playing = SpotifyTrack(title: "T", artist: "A", artworkURL: url, isPlaying: true)
 

@@ -88,6 +88,16 @@ final class DockAppStore: ObservableObject {
         }
     }
 
+    /// The installed apps now: the cached list, or one scan on this thread the first time (a voice command can come
+    /// before the dock ever loaded it).
+    func installedNow() -> [DockApp] {
+        if loaded { return installed }
+        let apps = workspace.installedApps()
+        installed = apps
+        loaded = true
+        return apps
+    }
+
     func isPinned(_ bundleID: String) -> Bool { pinned.contains { $0.bundleID == bundleID } }
 
     var canPin: Bool { pinned.count < Self.maxPinned }

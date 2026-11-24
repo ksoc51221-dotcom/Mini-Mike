@@ -35,6 +35,7 @@ enum FeatureTests {
         tableChecks(check)
         sheetChecks(check)
         commandChecks(check)
+        actionChecks(check)
         MainActor.assumeIsolated { edgePanelChecks(check) }
         MainActor.assumeIsolated { spotifyDockChecks(check) }
         MainActor.assumeIsolated { spotifySongsChecks(check) }

@@ -252,6 +252,9 @@ final class LibraryAssistant {
     - empty_bin: delete everything in the Bin for good. {"type":"empty_bin"}
     - create_sector: {"type":"create_sector","sector":"Chemistry"}
     - set_setting: {"type":"set_setting","key":"<one of the settings>","value":"on"}
+    - Mac actions ("title" = the app, song or routine name as the user said it; "value" = seconds): dock_add, dock_remove, app_open, \
+    app_quit, music_play, music_pause, music_next, music_previous, music_star, timer_start, reminder_start (title = what to remember), \
+    timer_cancel, routine_run. Example: {"type":"dock_add","title":"Notion"}
 
     filter fields (all optional, combine freely): "kinds" (["chat"],["note"],["screenshot"], default chats), "query" (words to search for), \
     "sector", "from" and "to" (yyyy-MM-dd, inclusive; work them out from TODAY), "starred" (true/false), "refs" (numbers from the last results list), \
@@ -335,6 +338,7 @@ final class LibraryAssistant {
         switch a.type {
         case "delete": return .confirm
         case "empty_bin", "delete_forever": return .permanent
+        case _ where ActionCommand.confirmTypes.contains(a.type): return .confirm
         case "set_setting": return deletingSettings.contains(a.key ?? "") ? .confirm : .safe
         default: return .safe
         }
@@ -570,10 +574,20 @@ final class LibraryAssistant {
             guard spec.write(settings, value) else { return Step(text: "“\(value)” isn't a valid value for “\(spec.about)”.", failed: true) }
             return Step(text: "Set “\(spec.about)” to \(spec.read(settings)) (was \(old)).", undo: { _ = spec.write(self.settings, old) })
 
+        case _ where ActionCommand.types.contains(a.type):
+            // The fixed actions (dock, apps, music, timers, routines): the same runner as voice and the Ask box.
+            guard let runner = Self.actionHook else { return Step(text: "I can't do that here.", failed: true) }
+            guard apply else { return Step(text: "Will do: \(a.type.replacingOccurrences(of: "_", with: " ")) \(a.title ?? "")") }
+            let out = runner.run(a, confirmed: confirmed)
+            return Step(text: out.line, failed: !out.ok)
+
         default:
             return Step(text: "I don't know how to “\(a.type)”.", failed: true)
         }
     }
+
+    /// The fixed actions' runner (set by the app; tests leave it empty).
+    nonisolated(unsafe) static var actionHook: ActionRunner?
 
     /// Opens a result in the Library window (set by the app; tests leave it empty).
     nonisolated(unsafe) static var openHook: ((ItemRef) -> Void)? = { ref in

@@ -16,7 +16,7 @@ enum SpotifyState: Equatable {
     case notRunning, denied, stopped, track(SpotifyTrack)
 }
 
-enum SpotifyCommand: Equatable { case playPause, next, previous, stop, playTrack(String) }
+enum SpotifyCommand: Equatable { case playPause, play, pause, next, previous, stop, playTrack(String) }
 
 protocol SpotifyBackend {
     func isRunning() -> Bool
@@ -34,19 +34,22 @@ struct LiveSpotifyBackend: SpotifyBackend {
         !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty
     }
 
+    /// The poll script. Constant: nothing from outside goes into it. The names are long on purpose: `st` is an
+    /// AppleScript word (as in "1st"), and with it the script did not compile, so no song ever showed.
+    static let fetchSource = """
+    tell application id "\(bundleID)"
+        set playerState to player state as text
+        if playerState is "stopped" then return playerState
+        set theTrack to current track
+        set sep to (ASCII character 31)
+        return playerState & sep & (name of theTrack) & sep & (artist of theTrack) & sep & (artwork url of theTrack) & sep & (spotify url of theTrack)
+    end tell
+    """
+
     func fetch() -> SpotifyState {
         guard isRunning() else { return .notRunning }
-        let source = """
-        tell application id "\(Self.bundleID)"
-            set st to player state as text
-            if st is "stopped" then return st
-            set tr to current track
-            set d to (ASCII character 31)
-            return st & d & (name of tr) & d & (artist of tr) & d & (artwork url of tr) & d & (spotify url of tr)
-        end tell
-        """ // constant: nothing from outside goes into it
         var error: NSDictionary?
-        let result = NSAppleScript(source: source)?.executeAndReturnError(&error).stringValue
+        let result = NSAppleScript(source: Self.fetchSource)?.executeAndReturnError(&error).stringValue
         if let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue {
             return code == -1743 ? .denied : .stopped
         }
@@ -73,6 +76,8 @@ struct LiveSpotifyBackend: SpotifyBackend {
             guard SpotifyTrackURI.isValid(uri) else { return nil }
             return "tell application id \"\(bundleID)\" to play track \"\(uri)\""
         case .playPause: return "tell application id \"\(bundleID)\" to playpause"
+        case .play: return "tell application id \"\(bundleID)\" to play"
+        case .pause: return "tell application id \"\(bundleID)\" to pause"
         case .next: return "tell application id \"\(bundleID)\" to next track"
         case .previous: return "tell application id \"\(bundleID)\" to previous track"
         case .stop:

@@ -258,6 +258,8 @@ enum EdgePanelLayout {
     /// The "No app" line under the field.
     static var noMatchCentre: CGPoint { CGPoint(x: searchFieldFrame.midX, y: dockSize.height / 2 + 30) }
     /// The small Spotify glyph button (Spotify open, but Merlin may not control it), in the cover's place.
+    /// The timer chip: low in the disc, by the screen edge, below the button column and the record.
+    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 38, y: dockSize.height / 2 + discRadius - 36) }
     static var glyphCentre: CGPoint { CGPoint(x: dockSize.width - 26, y: dockSize.height / 2) }
 
     /// The Spotify mini player, one size in every state, top to bottom with `spotifySpacing` between rows and
