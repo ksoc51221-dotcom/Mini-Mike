@@ -93,11 +93,11 @@ struct EdgeReveal {
     }
 }
 
-/// What keeps the panel from showing: a drag (a mouse button is down), a snip, point to ask, or a full-screen app or
-/// video on that screen. Any one is enough.
+/// What keeps the panel from showing: a drag (a mouse button is down), a snip, or point to ask. Any one is enough.
+/// A full-screen app does not block it.
 enum EdgeBlock {
-    static func blocked(mouseButtonsDown: Int, snipping: Bool, pointing: Bool, fullScreen: Bool) -> Bool {
-        mouseButtonsDown != 0 || snipping || pointing || fullScreen
+    static func blocked(mouseButtonsDown: Int, snipping: Bool, pointing: Bool) -> Bool {
+        mouseButtonsDown != 0 || snipping || pointing
     }
 }
 
@@ -139,12 +139,6 @@ enum EdgeGeometry {
             CGRect(x: $0.minX, y: primary.maxY - $0.maxY, width: $0.width, height: $0.height)
         }
     }
-
-    /// The front app shows a window that covers the whole screen (a full-screen app or video). Bounds are top-left based,
-    /// like `CGWindowListCopyWindowInfo` gives them; `screen` must be in the same coordinates.
-    static func coversScreen(_ windowBounds: [CGRect], screen: CGRect) -> Bool {
-        windowBounds.contains { $0.insetBy(dx: -1, dy: -1).contains(screen) }
-    }
 }
 
 /// The 3 pt dot at the screen edge: the only thing that shows at rest.
@@ -176,26 +170,39 @@ enum EdgePanelLayout {
 
     /// The glass half-disc: flush with the screen edge, its round side to the left.
     static let discRadius: CGFloat = 110
-    /// The thin halo ring outside the disc. The round items sit on it.
-    static let ringRadius: CGFloat = 160
     static let itemSize: CGFloat = 44
-    /// The angle between two neighbouring items on the ring, in degrees (a 55.6 pt chord: 11 pt clear between 44 pt items).
-    static let itemStep: CGFloat = 20
+    /// From the disc's rim to each ring item's edge (the same for every item).
+    static let ringGap: CGFloat = 12
+    /// The thin ring outside the disc, concentric with it. The round items sit on it: disc + gap + half an item.
+    static var ringRadius: CGFloat { discRadius + ringGap + itemSize / 2 }
+    /// The least clear space between two neighbouring items' edges.
+    static let minItemGap: CGFloat = 8
+    /// The angle between two neighbouring items on the ring, in degrees (a 55.0 pt chord on 144 pt: 11 pt clear between
+    /// 44 pt items; 20.8° is the least for `minItemGap`, and 8 items at 22° keep the end ones clear of the screen edge).
+    static let itemStep: CGFloat = 22
+    /// An item under the pointer grows to 1.08 and rises 2 pt (the dock keeps room for it).
+    static let liftScale: CGFloat = 1.08
+    static let liftRise: CGFloat = 2
+    /// The glass container's blend distance: below `minItemGap`, so the shapes never fuse at rest, only while they move.
+    static let glassBlend: CGFloat = 6
     /// Chats, Notes and up to `DockAppStore.maxPinned` apps.
     static let maxItems = 2 + DockAppStore.maxPinned
     /// The Spotify cover inside the disc (half of it behind the screen edge) and the small "+" button.
     static let coverSize: CGFloat = 72
     static let plusSize: CGFloat = 28
     /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included).
-    static let appIconSize: CGFloat = 36
+    static let appIconSize: CGFloat = 40
     /// From the list card's right side to the screen edge: the ring, half an item and the gap.
     static var listInset: CGFloat { ringRadius + itemSize / 2 + gap }
 
-    /// The dock: the disc, the ring and every item on it (fixed, sized for `maxItems`). The circles' centre is the
-    /// middle of its right side.
+    /// The dock: the disc, the ring and every item on it, lifted ones included (fixed, sized for `maxItems`). The
+    /// circles' centre is the middle of its right side.
     static var dockSize: CGSize {
         let half = (CGFloat(maxItems - 1) / 2 * itemStep) * .pi / 180
-        let h = max(ringRadius, ringRadius * sin(half) + itemSize / 2)
+        let lifted = itemSize / 2 * liftScale
+        let h = max(discRadius, ringRadius * sin(half) + lifted + liftRise)
+        // The width stops at the leftmost item's edge, so a card sits `gap` from it (a lifted item's 1.76 pt more is in
+        // the window's slack and in `hoverFrame`).
         return CGSize(width: ringRadius + itemSize / 2, height: h.rounded(.up) * 2)
     }
 
@@ -227,12 +234,19 @@ enum EdgePanelLayout {
     /// The cover's centre (on the screen edge, in the middle) and the "+" button's centre, from the dock's top-left (y down).
     static var coverCentre: CGPoint { CGPoint(x: dockSize.width, y: dockSize.height / 2) }
 
-    /// The disc's three small buttons ("+", search, collapse): one column, `discButtonGap` apart, centred on the disc's
-    /// vertical centre, `discButtonInset` in from the screen edge (left of the record and its waves).
-    static let discButtonGap: CGFloat = 36
-    static let discButtonInset: CGFloat = 80
+    /// The disc's three small buttons ("+", search, collapse): one column with `discButtonGap` between their edges, centred
+    /// on the disc's vertical centre, the top and bottom ones `discButtonRim` in from the disc's rim (left of the record).
+    static let discButtonGap: CGFloat = 12
+    static let discButtonRim: CGFloat = 14
+    static var discButtonPitch: CGFloat { plusSize + discButtonGap }
+    /// From the screen edge to the column: the outer buttons' centres sit on a circle `discButtonRim` + half a button
+    /// inside the rim (about 71.6 pt).
+    static var discButtonInset: CGFloat {
+        let r = discRadius - discButtonRim - plusSize / 2
+        return (r * r - discButtonPitch * discButtonPitch).squareRoot()
+    }
     static func discButtonCentre(_ row: Int) -> CGPoint {
-        CGPoint(x: dockSize.width - discButtonInset, y: dockSize.height / 2 + CGFloat(row - 1) * discButtonGap)
+        CGPoint(x: dockSize.width - discButtonInset, y: dockSize.height / 2 + CGFloat(row - 1) * discButtonPitch)
     }
     static var plusCentre: CGPoint { discButtonCentre(0) }
     static var searchCentre: CGPoint { discButtonCentre(1) }
@@ -246,8 +260,22 @@ enum EdgePanelLayout {
     /// The small Spotify glyph button (Spotify open, but Merlin may not control it), in the cover's place.
     static var glyphCentre: CGPoint { CGPoint(x: dockSize.width - 26, y: dockSize.height / 2) }
 
-    /// The Spotify card: a playing song (cover, title, artist, three buttons) or one plain line.
-    static func spotifySize(track: Bool) -> CGSize { CGSize(width: listWidth, height: track ? 132 : 76) }
+    /// The Spotify mini player, one size in every state, top to bottom with `spotifySpacing` between rows and
+    /// `spotifyPad` around: the search row, the record in its wave orb, the title and artist (or the status line), the
+    /// five round buttons and "Open Spotify".
+    static let spotifyPad: CGFloat = 14
+    static let spotifySpacing: CGFloat = 10
+    static let spotifySearchHeight: CGFloat = 30
+    static let spotifyRecord: CGFloat = 100
+    /// The orb the card's three waves are drawn in (the outer wave at 0.84 of it, about 1.45 × the record's radius).
+    static let spotifyOrbRadius: CGFloat = 86
+    static let spotifyTextHeight: CGFloat = 46
+    static let spotifyButtonsHeight: CGFloat = 44
+    static let spotifyOpenHeight: CGFloat = 22
+    static var spotifySize: CGSize {
+        let rows = spotifySearchHeight + spotifyOrbRadius * 2 + spotifyTextHeight + spotifyButtonsHeight + spotifyOpenHeight
+        return CGSize(width: listWidth, height: rows + spotifySpacing * 4 + spotifyPad * 2)
+    }
     /// The add/remove card: the header and a scrolling list of `appsRows` visible rows.
     static let appsRowHeight: CGFloat = 44
     static let appsRows = 7
@@ -288,6 +316,18 @@ enum EdgePanelLayout {
     static func listFrame(window: NSRect, card: CGSize) -> NSRect {
         NSRect(x: window.maxX - listInset - card.width, y: window.midY - card.height / 2, width: card.width, height: card.height)
     }
+
+    /// Everything the pointer may rest on: the card (or nothing), the dock and the strip between them, as one rectangle
+    /// that reaches the screen edge (so the path from the edge to every item stays inside).
+    static func hoverFrame(window: NSRect, card: CGSize?) -> NSRect {
+        // The dock, grown left by a lifted item's extra (1.76 pt), so a click on the lifted middle item is not "outside".
+        let lift = itemSize / 2 * (liftScale - 1)
+        var dock = dockFrame(window: window)
+        dock.origin.x -= lift
+        dock.size.width += lift
+        guard let card else { return dock }
+        return listFrame(window: window, card: card).union(dock)
+    }
 }
 
 // MARK: - Model
@@ -319,11 +359,33 @@ final class EdgePanelModel: ObservableObject {
     private let makeApps: () -> DockAppStore
     private var forwards: [AnyCancellable] = []
 
-    init(apps: @autoclosure @escaping () -> DockAppStore = .shared, spotify: SpotifyService = .shared) {
+    /// "My songs". The app's own list (on disk) only with the live Spotify service; otherwise the given one, or a list in
+    /// memory (tests and pictures never touch the real file). Made on first use.
+    lazy var songs: SpotifySongs = {
+        let s = givenSongs ?? (spotify === SpotifyService.shared ? SpotifySongs.shared : SpotifySongs(folder: nil))
+        forwards.append(s.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() })
+        return s
+    }()
+    private let givenSongs: SpotifySongs?
+    /// The last song recorded, so the 5-second poll does not rewrite the list: a song is recorded as it starts.
+    private var lastRecorded: String?
+
+    init(apps: @autoclosure @escaping () -> DockAppStore = .shared, spotify: SpotifyService = .shared,
+         songs: SpotifySongs? = nil) {
         makeApps = apps
         self.spotify = spotify
+        givenSongs = songs
         // The dock redraws when the pinned apps (see `apps`), the song or its colours change.
         forwards.append(spotify.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() })
+        forwards.append(spotify.$state.sink { [weak self] s in self?.record(s) })
+    }
+
+    /// A song seen playing goes into "my songs" (once each time it starts).
+    private func record(_ state: SpotifyState) {
+        guard case .track(let t) = state, t.isPlaying, let uri = t.uri, SpotifyTrackURI.isValid(uri),
+              uri != lastRecorded else { return }
+        lastRecorded = uri
+        songs.saw(t)
     }
 
     /// Chats, Notes, then the pinned apps (at most `DockAppStore.maxPinned`).
@@ -358,15 +420,16 @@ final class EdgePanelModel: ObservableObject {
         return searchMatch.map { [.app($0)] } ?? []
     }
 
+    /// Opening it closes the apps card (and its field): the two searches are never open together.
     func openSearch() {
         guard !searchOpen else { return }
         hoverWork?.cancel()
         query = ""
         withAnimation(Motion.still || Motion.reduceMotion ? nil : Motion.edgeIn) {
+            searchOpen = true // first, so the keyboard stays with the panel while the card's field lets go
             section = nil
-            searchOpen = true
         }
-        onSearchChange?(true)
+        keyboardChanged()
     }
 
     /// Esc, a click outside, loss of the keyboard, an app opening or the dock hiding: the field closes and the query clears.
@@ -376,7 +439,168 @@ final class EdgePanelModel: ObservableObject {
             searchOpen = false
             query = ""
         }
-        onSearchChange?(false)
+        keyboardChanged()
+    }
+
+    // MARK: The apps card's search
+
+    /// The apps card's field has the keyboard (it takes it as the card opens).
+    @Published private(set) var appsSearchActive = false
+    @Published var appsQuery = ""
+    /// The card's tab (All / In Rotation / Available). Back to All when the card closes.
+    @Published var appsFilter: AppsFilter = .all
+
+    enum AppsFilter: CaseIterable { case all, inRotation, available
+        var title: String {
+            switch self {
+            case .all: return "All"
+            case .inRotation: return "In Rotation"
+            case .available: return "Available"
+            }
+        }
+    }
+
+    /// The panel may take the keyboard: the disc's search, the apps card's field or the songs field is active.
+    var wantsKeyboard: Bool { searchOpen || appsSearchActive || songsSearchActive }
+    private var keyboardTold = false
+    /// Tells the controller only when `wantsKeyboard` flips (a switch from one field to the other keeps the keyboard).
+    private func keyboardChanged() {
+        guard wantsKeyboard != keyboardTold else { return }
+        keyboardTold = wantsKeyboard
+        onSearchChange?(keyboardTold)
+    }
+
+    /// The card's rows for a query: case-insensitive; a name that starts with it first, then a later word that starts with
+    /// it, then a name that only contains it; ties in alphabetical order. An empty query: the rows as given.
+    static func appsMatches(_ query: String, in apps: [DockApp]) -> [DockApp] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return apps }
+        func rank(_ name: String) -> Int? {
+            let n = name.lowercased()
+            if n.hasPrefix(q) { return 0 }
+            let words = n.split(whereSeparator: { !$0.isLetter && !$0.isNumber }).dropFirst()
+            if words.contains(where: { $0.hasPrefix(q) }) { return 1 }
+            return n.contains(q) ? 2 : nil
+        }
+        var ranked: [(app: DockApp, rank: Int)] = []
+        for a in apps { if let r = rank(a.name) { ranked.append((a, r)) } }
+        ranked.sort { x, y in
+            if x.rank != y.rank { return x.rank < y.rank }
+            return x.app.name.localizedCaseInsensitiveCompare(y.app.name) == .orderedAscending
+        }
+        return ranked.map { $0.app }
+    }
+
+    /// The card's rows (pinned and installed) for the typed query.
+    var appsResults: [DockApp] { Self.appsMatches(appsQuery, in: manageRows) }
+
+    /// The results the current tab shows (what the card draws and what Return picks from).
+    var appsVisible: [DockApp] {
+        switch appsFilter {
+        case .all: return appsResults
+        case .inRotation: return appsResults.filter { apps.isPinned($0.bundleID) }
+        case .available: return appsResults.filter { !apps.isPinned($0.bundleID) }
+        }
+    }
+
+    /// The field takes the keyboard (the card opening, or a click on the field after the keyboard went elsewhere).
+    func activateAppsSearch() {
+        guard section == .apps, !appsSearchActive else { return }
+        if searchOpen { searchOpen = false; query = "" } // never both
+        appsQuery = ""
+        appsSearchActive = true
+        keyboardChanged()
+    }
+
+    /// Loss of the keyboard, the card closing, the dock hiding or an app opening: the query clears, the keyboard goes back.
+    func deactivateAppsSearch() {
+        guard appsSearchActive || !appsQuery.isEmpty else { return }
+        appsSearchActive = false
+        appsQuery = ""
+        keyboardChanged()
+    }
+
+    /// Return in the card's field: adds the first result not yet in the dock. Nothing while the dock is full or the query
+    /// is empty.
+    func submitAppsSearch() {
+        guard apps.canPin, !appsQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let app = appsVisible.first(where: { !apps.isPinned($0.bundleID) }) else { return }
+        tapPin(app)
+    }
+
+    /// Esc in the card's field: clears a typed query, else closes the card.
+    func escapeAppsSearch() {
+        if !appsQuery.isEmpty { appsQuery = "" } else { toggle(.apps) }
+    }
+
+    /// Every field lets go of the keyboard (the panel loses it, hides, or an app opens).
+    func releaseKeyboard() {
+        closeSearch()
+        deactivateAppsSearch()
+        deactivateSongsSearch()
+    }
+
+    // MARK: The Spotify card's songs
+
+    /// The songs field has the keyboard. Only a click on the field activates it (never the card opening).
+    @Published private(set) var songsSearchActive = false
+    @Published var songsQuery = "" { didSet { if songsQuery != oldValue { songsNotice = nil } } }
+    /// The star filter: starred songs only.
+    @Published var songsStarredOnly = false
+    /// A line about the last row click ("Spotify is not open.").
+    @Published private(set) var songsNotice: String?
+
+    /// The card shows the list (in the record's place) while a query is typed or the star filter is on.
+    var songsListShown: Bool { songsStarredOnly || !songsQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var songsVisible: [SpotifySong] { SpotifySongs.filter(songs.songs, query: songsQuery, starredOnly: songsStarredOnly) }
+
+    /// A click on the songs field: it takes the keyboard (the other two let go).
+    func activateSongsSearch() {
+        guard section == .spotify, !songsSearchActive else { return }
+        if searchOpen { searchOpen = false; query = "" } // never two at once
+        songsSearchActive = true
+        keyboardChanged()
+    }
+
+    /// Loss of the keyboard, the card closing, the dock hiding or an app opening: the query clears, the keyboard goes back.
+    func deactivateSongsSearch() {
+        guard songsSearchActive || !songsQuery.isEmpty else { return }
+        songsSearchActive = false
+        songsQuery = ""
+        keyboardChanged()
+    }
+
+    /// Esc in the songs field: clears a typed query, else lets go of the keyboard (the card stays).
+    func escapeSongsSearch() {
+        if !songsQuery.isEmpty { songsQuery = "" } else { deactivateSongsSearch() }
+    }
+
+    /// Return in the songs field: plays the first result.
+    func submitSongsSearch() {
+        guard songsListShown, let first = songsVisible.first else { return }
+        tapSong(first)
+    }
+
+    /// A row: plays that song, only while Spotify is open (never launches it). The query and the filter stay.
+    func tapSong(_ song: SpotifySong) {
+        guard SpotifyTrackURI.isValid(song.uri) else { return }
+        guard spotify.state != .notRunning else {
+            songsNotice = "Spotify is not open."
+            return
+        }
+        songsNotice = nil
+        spotify.play(song.uri)
+    }
+
+    func tapSongsStarFilter() { songsStarredOnly.toggle() }
+
+    /// The song playing or paused has a URI Merlin can keep (the heart is on).
+    var canStarCurrent: Bool { SpotifyTrackURI.isValid(track?.uri) }
+    var currentStarred: Bool { canStarCurrent && songs.isStarred(track?.uri) }
+    /// The heart: stars or unstars the current song in Merlin's list only (never in Spotify's library).
+    func tapHeart() {
+        guard canStarCurrent, let t = track else { return }
+        songs.toggleStar(t)
     }
 
     /// Return: opens the match (as a click on it would) and closes search. No match: nothing happens.
@@ -411,7 +635,15 @@ final class EdgePanelModel: ObservableObject {
     }
 
     /// nil: the small box with the two choices.
-    @Published var section: Section?
+    @Published var section: Section? {
+        didSet {
+            guard oldValue != section else { return }
+            // The new field first, so a switch from one field to another keeps the keyboard.
+            if section == .apps { activateAppsSearch() } // focus goes to the card's field as it opens
+            else if oldValue == .apps { deactivateAppsSearch(); appsFilter = .all }
+            if oldValue == .spotify { deactivateSongsSearch(); songsStarredOnly = false; songsNotice = nil }
+        }
+    }
     @Published var chats: [ChatRow] = []
     @Published var notes: [NoteRow] = []
     /// Drives the slide in and out.
@@ -434,7 +666,7 @@ final class EdgePanelModel: ObservableObject {
         case nil: return EdgePanelLayout.boxSize
         case .chats: return EdgePanelLayout.listSize(rows: chats.count, newNoteRow: false)
         case .notes: return EdgePanelLayout.listSize(rows: notes.count, newNoteRow: true)
-        case .spotify: return EdgePanelLayout.spotifySize(track: track != nil)
+        case .spotify: return EdgePanelLayout.spotifySize
         case .apps: return EdgePanelLayout.appsSize
         }
     }
@@ -471,20 +703,34 @@ final class EdgePanelModel: ObservableObject {
     func tapDelete(_ id: ObjectIdentifier) { onDelete?(id) }
     func tapNote(_ id: UUID) { onOpenNote?(id) }
     func tapNewNote() { onNewNote?() }
-    /// An app on the ring: opens it, then the panel hides (like a chat row).
+    /// An app on the ring: opens it, then the panel hides (like a chat row). Spotify's icon (a click, or Return on it in
+    /// search) opens or closes the mini player instead and never opens or activates Spotify.
     func tapApp(_ app: DockApp) {
-        closeSearch()
+        releaseKeyboard()
+        if app.bundleID == LiveSpotifyBackend.bundleID { return tapSpotify() }
         apps.open(app)
         onOpenApp?(app)
     }
     /// The cover (or the Spotify glyph): the Spotify card.
     func tapSpotify() { toggle(.spotify) }
+    /// The mini player's transport buttons work only while Spotify runs and lets Merlin control it.
+    var transportEnabled: Bool {
+        switch spotify.state {
+        case .track, .stopped: return true
+        case .notRunning, .denied: return false
+        }
+    }
+    /// "Open Spotify": the only control that may launch or activate Spotify (through the workspace).
+    func tapOpenSpotify() { apps.open(DockApp(bundleID: LiveSpotifyBackend.bundleID, name: "Spotify")) }
     /// "+": the add/remove card (it reads the installed apps the first time).
     func tapManageApps() {
         apps.loadInstalled()
         toggle(.apps)
     }
-    func tapSpotifyCommand(_ c: SpotifyCommand) { spotify.send(c) }
+    func tapSpotifyCommand(_ c: SpotifyCommand) {
+        guard transportEnabled else { return }
+        spotify.send(c)
+    }
     func tapCollapse() { onCollapse?() }
     func tapPin(_ app: DockApp) { apps.pin(app) }
     func tapUnpin(_ app: DockApp) { apps.unpin(app.bundleID) }
@@ -514,12 +760,24 @@ struct EdgePanelView: View {
     private var radius: CGFloat { Theme.Radius.container }
 
     var body: some View {
-        let panel = HStack(alignment: .center, spacing: EdgePanelLayout.gap) {
+        let stack = HStack(alignment: .center, spacing: EdgePanelLayout.gap) {
             if let section = model.section {
                 listCard(section)
                     .transition(Motion.reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .trailing).combined(with: .opacity))
             }
             EdgeDockView(model: model)
+        }
+        // The dock and the card follow a song's cover with the one palette crossfade (`Motion.edgePalette`).
+        .animation(Motion.edgePaletteAnimation, value: model.palette)
+        // One glass container for the disc, the ring items and the card, so near shapes blend like one liquid glass.
+        // The flat path (pictures, Reduce Transparency, `Motion.still`) draws no glass and needs none.
+        // Every surface's content is its glass view's own content (`edgeGlass`), so the container blends shapes only.
+        let panel = Group {
+            if EdgeDockArt.flat || !EdgeDockArt.glassContainer {
+                stack
+            } else {
+                GlassEffectContainer(spacing: EdgePanelLayout.glassBlend) { stack }
+            }
         }
         .offset(x: model.shown || Motion.reduceMotion ? 0 : 16)
         .opacity(model.shown ? 1 : 0)
@@ -545,6 +803,7 @@ struct EdgePanelView: View {
             .frame(width: size.width, height: size.height, alignment: .top)
             // Dark glass in light and dark mode alike, so every row uses the light ink.
             .environment(\.colorScheme, .dark)
+            .environment(\.edgePalette, model.palette)
             .edgeCardChrome(model.palette, radius: radius)
     }
 }
@@ -564,11 +823,12 @@ struct EdgeHalfDisc: Shape {
 private struct EdgeListView: View {
     @ObservedObject var model: EdgePanelModel
     let section: EdgePanelModel.Section
+    @Environment(\.edgePalette) private var pal
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            Rectangle().fill(Theme.hairline.color).frame(height: 1)
+            Rectangle().fill(pal.hairlineColor).frame(height: 1)
             Group {
                 switch section {
                 case .chats: chatRows
@@ -579,7 +839,7 @@ private struct EdgeListView: View {
             .padding(.vertical, EdgePanelLayout.pad - 1)
             .id(section) // a new list restarts its stagger
             if section == .notes {
-                Rectangle().fill(Theme.hairline.color).frame(height: 1)
+                Rectangle().fill(pal.hairlineColor).frame(height: 1)
                 EdgeNewNoteRow { model.tapNewNote() }
                     .padding(.horizontal, EdgePanelLayout.pad)
             }
@@ -605,7 +865,7 @@ private struct EdgeListView: View {
                 .padding(.horizontal, 8)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
-                    .fill(on ? Theme.surfaceSelected.color : .clear))
+                    .fill(on ? pal.selectedFill : .clear))
                 .contentShape(Rectangle())
         }
         .buttonStyle(EdgePressStyle())
@@ -676,6 +936,7 @@ struct EdgeQuietLine: View {
 private struct EdgeChatRowView: View {
     let row: EdgePanelModel.ChatRow
     @ObservedObject var model: EdgePanelModel
+    @Environment(\.edgePalette) private var pal
     @State private var hovering = false
 
     private var statusColor: Color {
@@ -700,7 +961,7 @@ private struct EdgeChatRowView: View {
                 .padding(.leading, 8)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                    .fill(row.isOpen ? Theme.surfaceSelected.color : (hovering ? Theme.surfaceRaised.color : .clear)))
+                    .fill(row.isOpen ? pal.selectedFill : (hovering ? pal.hoverFill : .clear)))
                 .overlay(alignment: .leading) {
                     // The open chat's slim ink bar (the Library marks selected rows the same way).
                     if row.isOpen { Capsule().fill(Theme.ink.color).frame(width: 2, height: 20).padding(.leading, 4) }
@@ -713,7 +974,7 @@ private struct EdgeChatRowView: View {
             HStack(spacing: 2) {
                 if row.canStar && (hovering || row.starred) {
                     EdgeIconButton(symbol: row.starred ? "star.fill" : "star", help: row.starred ? "Unstar" : "Star",
-                                   tint: row.starred ? Theme.ink.color : Theme.inkSecondary.color) { model.tapStar(row.id) }
+                                   tint: row.starred ? pal.accentColor : Theme.inkSecondary.color) { model.tapStar(row.id) }
                 }
                 if hovering {
                     EdgeIconButton(symbol: "xmark", help: "Delete chat", tint: Theme.inkSecondary.color) { model.tapDelete(row.id) }
@@ -734,6 +995,7 @@ private struct EdgeChatRowView: View {
 private struct EdgeNoteRowView: View {
     let row: EdgePanelModel.NoteRow
     let action: () -> Void
+    @Environment(\.edgePalette) private var pal
     @State private var hovering = false
 
     var body: some View {
@@ -749,7 +1011,7 @@ private struct EdgeNoteRowView: View {
             .padding(.leading, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                .fill(hovering ? Theme.surfaceRaised.color : .clear))
+                .fill(hovering ? pal.hoverFill : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(EdgePressStyle())
@@ -760,6 +1022,7 @@ private struct EdgeNoteRowView: View {
 
 private struct EdgeNewNoteRow: View {
     let action: () -> Void
+    @Environment(\.edgePalette) private var pal
     @State private var hovering = false
 
     var body: some View {
@@ -772,7 +1035,7 @@ private struct EdgeNewNoteRow: View {
             .padding(.leading, 8)
             .frame(height: EdgePanelLayout.lineHeight - 8)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.control, style: .continuous)
-                .fill(hovering ? Theme.surfaceRaised.color : .clear))
+                .fill(hovering ? pal.hoverFill : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(EdgePressStyle())
@@ -787,6 +1050,7 @@ private struct EdgeIconButton: View {
     let help: String
     let tint: Color
     let action: () -> Void
+    @Environment(\.edgePalette) private var pal
     @State private var hovering = false
 
     var body: some View {
@@ -795,7 +1059,7 @@ private struct EdgeIconButton: View {
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(hovering ? Theme.ink.color : tint)
                 .frame(width: 24, height: 24)
-                .background(Circle().fill(hovering ? Theme.surfaceSelected.color : .clear))
+                .background(Circle().fill(hovering ? pal.selectedFill : .clear))
                 .contentShape(Circle())
         }
         .buttonStyle(EdgePressStyle(scale: 0.9))
@@ -810,13 +1074,14 @@ private struct EdgeIconButton: View {
 struct EdgeStatusMark: View {
     let phase: AgentPhase
     var size: CGFloat = 8
+    @Environment(\.edgePalette) private var pal
 
     var body: some View {
         Group {
             switch phase {
             case .idle: Circle().strokeBorder(Theme.inkSecondary.color, lineWidth: 1.5)
-            // The accent's text tone: the plain accent can be too pale on a light card for a mark this small.
-            case .working: EdgeBreathing { Circle().fill(Theme.accentText.color) }
+            // The dock's accent (the card is always dark glass, and the accent keeps 3:1 on its base).
+            case .working: EdgeBreathing { Circle().fill(pal.accentColor) }
             case .done: Circle().fill(Theme.ink.color)
             case .failed: Circle().fill(Theme.alert.color)
             }
@@ -909,12 +1174,15 @@ struct EdgePressStyle: ButtonStyle {
 
 // MARK: - Windows
 
-/// The panel's window: a non-activating panel that takes the keyboard only while the search field is open (the front app
+/// The panel's window: a non-activating panel that takes the keyboard only while the disc's search, the apps card's field
+/// or the Spotify card's songs field is active (the front app
 /// stays active), takes the first click, and its transparent parts let clicks through.
 final class EdgePanelWindow: FloatingPanel {
-    /// Set by the controller from `EdgePanelModel.searchOpen`.
+    /// Set by the controller from `EdgePanelModel.searchOpen` and `appsSearchActive`.
     var searchOpen = false
-    override var canBecomeKey: Bool { searchOpen }
+    var appsSearchOpen = false
+    var songsSearchOpen = false
+    override var canBecomeKey: Bool { searchOpen || appsSearchOpen || songsSearchOpen }
 
     init() {
         super.init(size: EdgePanelLayout.windowSize, canKey: false)
@@ -1140,7 +1408,7 @@ final class EdgePanelController {
         let screens = NSScreen.screens.map(\.frame)
         let inZone = EdgeGeometry.inZone(p, screens: screens)
         // While search is open the dock stays, wherever the pointer goes (it may leave mid-typing).
-        let over = reveal.visible && (model.searchOpen || hoverFrame.insetBy(dx: -6, dy: -6).contains(p))
+        let over = reveal.visible && (model.wantsKeyboard || hoverFrame.insetBy(dx: -6, dy: -6).contains(p))
         let blocked = !reveal.visible && inZone && liveBlocked(at: p, screens: screens)
         let stop = reveal.visible && interrupted
         let now = ProcessInfo.processInfo.systemUptime
@@ -1155,33 +1423,10 @@ final class EdgePanelController {
         if !reveal.isWatching { stopWatching() }
     }
 
-    /// A drag (a mouse button is down), a snip, point to ask, or a full-screen app or video on that screen.
+    /// A drag (a mouse button is down), a snip, or point to ask. A full-screen front app does not block: the panel
+    /// shows above it (`.fullScreenAuxiliary`).
     private func liveBlocked(at p: NSPoint, screens: [NSRect]) -> Bool {
-        // The cheap ones first; the window list is read only when they all say go.
-        if EdgeBlock.blocked(mouseButtonsDown: NSEvent.pressedMouseButtons, snipping: Snipper.isActive, pointing: isBlocked(), fullScreen: false) {
-            return true
-        }
-        guard let s = EdgeGeometry.screen(containing: p, screens: screens) else { return false }
-        return EdgeBlock.blocked(mouseButtonsDown: 0, snipping: false, pointing: false,
-                                 fullScreen: Self.frontAppIsFullScreen(on: s, primary: screens.first ?? s))
-    }
-
-    /// The front app has an on-screen window covering the whole screen: a full-screen app or video. Read only while the
-    /// pointer waits in the hot zone (a handful of times), never on every move.
-    private static func frontAppIsFullScreen(on screen: NSRect, primary: NSRect) -> Bool {
-        guard let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-              let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
-        else { return false }
-        let bounds: [CGRect] = list.compactMap { info in
-            guard (info[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
-                  (info[kCGWindowLayer as String] as? Int) == 0,
-                  let b = info[kCGWindowBounds as String] as? NSDictionary,
-                  let r = CGRect(dictionaryRepresentation: b) else { return nil }
-            return r
-        }
-        let flipped = CGRect(x: screen.minX, y: primary.maxY - screen.maxY, width: screen.width, height: screen.height)
-        return EdgeGeometry.coversScreen(bounds, screen: flipped)
+        EdgeBlock.blocked(mouseButtonsDown: NSEvent.pressedMouseButtons, snipping: Snipper.isActive, pointing: isBlocked())
     }
 
     private func screenUnderPointer() -> NSRect {
@@ -1231,7 +1476,7 @@ final class EdgePanelController {
     private var drivesSpotify: Bool { started || !liveSpotify }
 
     private func dismiss() {
-        model.closeSearch() // gives the keyboard back before the panel leaves
+        model.releaseKeyboard() // gives the keyboard back before the panel leaves
         removeMonitors()
         if drivesSpotify { model.spotify.stop() }
         withAnimation(Motion.still ? nil : (Motion.reduceMotion ? .easeOut(duration: 0.12) : Motion.edgeOut)) { model.shown = false }
@@ -1261,9 +1506,19 @@ final class EdgePanelController {
                 self.model.closeSearch()
                 return nil
             }
+            // Esc in the apps card's field: clears the query, else closes the card (the dock stays).
+            if e.type == .keyDown, e.keyCode == 53, self.model.appsSearchActive {
+                self.model.escapeAppsSearch()
+                return nil
+            }
+            // Esc in the songs field: clears the query, then a second Esc lets go of the keyboard (the card stays).
+            if e.type == .keyDown, e.keyCode == 53, self.model.songsSearchActive {
+                self.model.escapeSongsSearch()
+                return nil
+            }
             // Tab (the first key of a hold-Tab chord reaches the panel before the tap sees the second) would move the
             // focus out of the field.
-            if e.type == .keyDown, e.keyCode == 48, self.model.searchOpen, e.window === self.window { return nil }
+            if e.type == .keyDown, e.keyCode == 48, self.model.wantsKeyboard, e.window === self.window { return nil }
             if e.type == .keyDown || e.window !== self.window { self.outside(e) }
             return e
         }) { monitors.append(m) }
@@ -1279,15 +1534,17 @@ final class EdgePanelController {
     /// goes back to where it was.
     private func searchChanged(_ open: Bool) {
         guard let window else { return }
-        window.searchOpen = open
+        window.searchOpen = model.searchOpen
+        window.appsSearchOpen = model.appsSearchActive
+        window.songsSearchOpen = model.songsSearchActive
         if open {
-            guard reveal.visible, window.isVisible else { return }
+            guard reveal.visible, window.isVisible, !window.isKeyWindow else { return }
             keyBeforeSearch = NSApp.isActive ? NSApp.keyWindow : nil
             window.makeKey()
             if resignObserver == nil {
                 resignObserver = NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: window,
                                                                         queue: .main) { [weak self] _ in
-                    self?.model.closeSearch() // a click in another app or window
+                    self?.model.releaseKeyboard() // a click in another app or window
                 }
             }
         } else {
@@ -1328,7 +1585,8 @@ final class EdgePanelController {
 
     /// Everything the pointer may rest on: the disc, the ring with its items, the card and the strip between them.
     private var hoverFrame: NSRect {
-        cardFrame.union(EdgePanelLayout.dockFrame(window: EdgePanelLayout.windowFrame(screen: screen)))
+        EdgePanelLayout.hoverFrame(window: EdgePanelLayout.windowFrame(screen: screen),
+                                   card: model.section == nil ? nil : model.cardSize)
     }
 
     // MARK: Rows and the dot

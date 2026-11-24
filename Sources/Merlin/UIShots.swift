@@ -158,6 +158,27 @@ enum UIShots {
             shot("edge-7-full", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(nil, music: true, apps: 6)).clipped(), pad: 0))
             // Search open with "ca" typed: only Calendar shows, at the ring's middle-left point.
             shot("edge-8-search", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSearchModel("ca")).clipped(), pad: 0))
+            // The add/remove card's search with "no" typed (a text stand-in for the field), and a full dock (six apps) on
+            // the Available tab: dim Add buttons and the "Remove an app to add another" line.
+            shot("edge-9-apps-search", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAppsModel(query: "no"), framed: false)))
+            shot("edge-10-apps-full", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAppsModel(apps: 6, filter: .available),
+                                                                              framed: false)))
+            // The Spotify mini player in the whole window as on screen (clipped to it, so anything outside the window's
+            // slack would be cut): a song playing (the fixture song), and Spotify not open (transport off, "Open Spotify").
+            shot("edge-11-spotify-mini", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.spotify, music: true)).clipped(), pad: 0))
+            shot("edge-12-spotify-closed", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.spotify, spotify: .notRunning)).clipped(), pad: 0))
+            // "My songs": "mi" typed (three sample rows, one starred) in the record's place; the star filter on with no
+            // saved song (the empty-list line). The query is set on the model (a text stand-in for the field).
+            shot("edge-13-songs-list", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(query: "mi")).clipped(), pad: 0))
+            shot("edge-14-songs-empty", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(starred: true, empty: true)).clipped(), pad: 0))
+
+            // The dock taking its colours from generated covers: very bright, grey, blue. The full dock (six apps) with the
+            // Spotify mini window open.
+            for (name, image) in [("edge-15-cover-bright", EdgeDockFixtures.coverBright()),
+                                  ("edge-16-cover-grey", EdgeDockFixtures.coverGrey()),
+                                  ("edge-17-cover-blue", EdgeDockFixtures.coverBlue())] {
+                shot(name, margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.spotify, music: true, apps: 6, cover: image)).clipped(), pad: 0))
+            }
 
             // The Assistant's button up close: in the Library's sidebar (resting, open, working) and in the settings list.
             shot("assistant-button", margin: 20, HStack(alignment: .top, spacing: 20) {
@@ -422,7 +443,8 @@ enum UIShots {
     /// The edge panel's model with made-up chats and notes, two fixture apps (Claude and Figma) and, with `music`, a song
     /// playing with a generated cover. Fakes only: nothing launched, no live Spotify, throwaway defaults.
     private static func edgeModel(_ section: EdgePanelModel.Section?, hovering: Bool = false, empty: Bool = false,
-                                  music: Bool = false, spotify state: SpotifyState? = nil, apps count: Int = 2) -> EdgePanelModel {
+                                  music: Bool = false, spotify state: SpotifyState? = nil, apps count: Int = 2,
+                                  songs: SpotifySongs? = nil, cover: NSImage? = nil) -> EdgePanelModel {
         let (defaults, name) = EdgeDockFixtures.defaults()
         // The first `count` of the shot apps pinned (a fixed list, so the picture is the same on every Mac).
         if let data = try? JSONEncoder().encode(Array(ShotDockWorkspace.apps.prefix(count))) {
@@ -431,12 +453,12 @@ enum UIShots {
         let apps = DockAppStore(defaults: defaults, workspace: ShotDockWorkspace())
         EdgeDockFixtures.forget(name)
         let backend = FixtureSpotifyBackend(state ?? (music ? .track(EdgeDockFixtures.track) : .notRunning))
-        let spotify = EdgeDockFixtures.spotify(backend, cover: music ? EdgeDockFixtures.coverImage() : nil)
+        let spotify = EdgeDockFixtures.spotify(backend, cover: music ? (cover ?? EdgeDockFixtures.coverImage()) : nil)
         if section == .apps {
             apps.loadInstalled()
             EdgeDockFixtures.waitUntil { !apps.installed.isEmpty }
         }
-        let m = EdgePanelModel(apps: apps, spotify: spotify)
+        let m = EdgePanelModel(apps: apps, spotify: spotify, songs: songs ?? SpotifySongs(folder: nil))
         let owners = (0..<3).map { _ in NSObject() }
         edgeOwners.append(contentsOf: owners)
         m.chats = [
@@ -462,6 +484,24 @@ enum UIShots {
         let m = edgeModel(nil, music: true, apps: 6)
         m.openSearch()
         m.query = query
+        return m
+    }
+
+    /// The Spotify card with sample saved songs (memory only) and a query or the star filter set on the model.
+    private static func edgeSongsModel(query: String = "", starred: Bool = false, empty: Bool = false) -> EdgePanelModel {
+        // Empty: nothing playing either (a playing song would be saved at once).
+        let m = edgeModel(.spotify, music: !empty, spotify: empty ? .stopped : nil,
+                          songs: empty ? SpotifySongs(folder: nil) : EdgeDockFixtures.songs())
+        m.songsQuery = query
+        m.songsStarredOnly = starred
+        return m
+    }
+
+    private static func edgeAppsModel(query: String = "", apps count: Int = 2,
+                                      filter: EdgePanelModel.AppsFilter = .all) -> EdgePanelModel {
+        let m = edgeModel(.apps, apps: count)
+        m.appsQuery = query
+        m.appsFilter = filter
         return m
     }
 

@@ -8,13 +8,15 @@ struct SpotifyTrack: Equatable {
     var artist: String
     var artworkURL: URL?
     var isPlaying: Bool
+    /// The track's `spotify url`, only when it is a valid `spotify:track:` URI (else nil).
+    var uri: String? = nil
 }
 
 enum SpotifyState: Equatable {
     case notRunning, denied, stopped, track(SpotifyTrack)
 }
 
-enum SpotifyCommand { case playPause, next, previous }
+enum SpotifyCommand: Equatable { case playPause, next, previous, stop, playTrack(String) }
 
 protocol SpotifyBackend {
     func isRunning() -> Bool
@@ -40,9 +42,9 @@ struct LiveSpotifyBackend: SpotifyBackend {
             if st is "stopped" then return st
             set tr to current track
             set d to (ASCII character 31)
-            return st & d & (name of tr) & d & (artist of tr) & d & (artwork url of tr)
+            return st & d & (name of tr) & d & (artist of tr) & d & (artwork url of tr) & d & (spotify url of tr)
         end tell
-        """
+        """ // constant: nothing from outside goes into it
         var error: NSDictionary?
         let result = NSAppleScript(source: source)?.executeAndReturnError(&error).stringValue
         if let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue {
@@ -56,20 +58,37 @@ struct LiveSpotifyBackend: SpotifyBackend {
         let parts = raw.components(separatedBy: delimiter)
         guard parts.count >= 3, parts[0] != "stopped" else { return .stopped }
         let art = parts.count > 3 ? URL(string: parts[3]) : nil
+        let uri = parts.count > 4 && SpotifyTrackURI.isValid(parts[4]) ? parts[4] : nil
         return .track(SpotifyTrack(title: parts[1], artist: parts[2], artworkURL: art,
-                                   isPlaying: parts[0].lowercased().contains("playing")))
+                                   isPlaying: parts[0].lowercased().contains("playing"), uri: uri))
+    }
+
+    /// The script for a command: constant text (only the bundle id goes in), never song or user text, except the one
+    /// track URI of `playTrack`, checked again here: a value that is not exactly `spotify:track:` + 22 ASCII letters or
+    /// digits builds no script (nil).
+    /// Spotify has no stop command: stop is `pause`, then `player position` (read-write in its dictionary) back to 0.
+    static func source(for command: SpotifyCommand) -> String? {
+        switch command {
+        case .playTrack(let uri):
+            guard SpotifyTrackURI.isValid(uri) else { return nil }
+            return "tell application id \"\(bundleID)\" to play track \"\(uri)\""
+        case .playPause: return "tell application id \"\(bundleID)\" to playpause"
+        case .next: return "tell application id \"\(bundleID)\" to next track"
+        case .previous: return "tell application id \"\(bundleID)\" to previous track"
+        case .stop:
+            return """
+            tell application id "\(bundleID)"
+                pause
+                set player position to 0
+            end tell
+            """
+        }
     }
 
     func send(_ command: SpotifyCommand) {
-        guard isRunning() else { return }
-        let verb: String
-        switch command {
-        case .playPause: verb = "playpause"
-        case .next: verb = "next track"
-        case .previous: verb = "previous track"
-        }
+        guard isRunning(), let source = Self.source(for: command) else { return }
         var error: NSDictionary?
-        _ = NSAppleScript(source: "tell application id \"\(Self.bundleID)\" to \(verb)")?.executeAndReturnError(&error)
+        _ = NSAppleScript(source: source)?.executeAndReturnError(&error)
     }
 }
 
@@ -133,7 +152,71 @@ struct DockPalette: Equatable {
     }
 
     private static func hsb(_ h: CGFloat, _ s: CGFloat, _ b: CGFloat) -> NSColor {
-        NSColor(hue: h.truncatingRemainder(dividingBy: 1), saturation: s, brightness: b, alpha: 1)
+        var x = h.truncatingRemainder(dividingBy: 1)
+        if x < 0 { x += 1 }
+        return NSColor(hue: x, saturation: s, brightness: b, alpha: 1)
+    }
+
+    // MARK: Guards (pure; the tests read the same numbers)
+
+    /// Two accents count as different when their hues are at least this far apart (0...0.5 of the circle, 0.08 = 29 degrees)...
+    static let minHueGap: CGFloat = 0.08
+    /// ...or, when either is nearly grey, when their contrast ratio is at least this.
+    static let minToneContrast: CGFloat = 1.6
+    /// The ink on the tinted base must keep this on the dock glass over white and over black.
+    static let minInkContrast: CGFloat = 4.5
+
+    /// The hue distance of two colours on the circle (0 same, 0.5 opposite).
+    static func hueGap(_ a: NSColor, _ b: NSColor) -> CGFloat {
+        var ha: CGFloat = 0, hb: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, al: CGFloat = 0
+        (a.usingColorSpace(.sRGB) ?? a).getHue(&ha, saturation: &s, brightness: &v, alpha: &al)
+        (b.usingColorSpace(.sRGB) ?? b).getHue(&hb, saturation: &s, brightness: &v, alpha: &al)
+        let d = abs(ha - hb)
+        return min(d, 1 - d)
+    }
+
+    private static func saturation(_ c: NSColor) -> CGFloat {
+        var h: CGFloat = 0, s: CGFloat = 0, v: CGFloat = 0, al: CGFloat = 0
+        (c.usingColorSpace(.sRGB) ?? c).getHue(&h, saturation: &s, brightness: &v, alpha: &al)
+        return s
+    }
+
+    /// Whether accent and accent2 look different: a clear hue gap between two coloured accents, else a clear tone gap.
+    static func accentsDiffer(_ a: NSColor, _ b: NSColor) -> Bool {
+        if saturation(a) >= 0.25 && saturation(b) >= 0.25 && hueGap(a, b) >= minHueGap { return true }
+        return contrast(a, b) >= minToneContrast
+    }
+
+    /// The least ink contrast on the dock glass (`EdgeGlass.surface`) of `base` over a white and a black backdrop.
+    static func inkContrast(ink: NSColor, base: NSColor) -> CGFloat {
+        let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1), black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
+        return [white, black].map { contrast(ink, EdgeGlass.surface(base: base, dim: EdgeGlass.dockDim, over: $0)) }.min()!
+    }
+
+    /// Darkens `base` until the ink keeps `minInkContrast` (plus a small margin) on the glass.
+    private static func fit(base: NSColor, ink: NSColor) -> NSColor {
+        var c = base.usingColorSpace(.sRGB) ?? base
+        var n = 0
+        while inkContrast(ink: ink, base: c) < minInkContrast + 0.1 && n < 30 {
+            var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            c.getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+            c = NSColor(hue: h, saturation: s, brightness: max(0, b - 0.02), alpha: 1)
+            n += 1
+        }
+        return c
+    }
+
+    /// The second accent: `wanted`, moved around the hue circle (then in tone) until it differs from `accent`.
+    private static func distinct(_ wanted: NSColor, from accent: NSColor, on base: NSColor, hue: CGFloat, sat: CGFloat) -> NSColor {
+        if accentsDiffer(accent, wanted) { return wanted }
+        for step: CGFloat in [0.12, -0.12, 0.18, -0.18, 0.25, -0.25] {
+            let c = ensure(hsb(hue + step, max(0.55, sat), 0.9), on: base, ratio: 3)
+            if accentsDiffer(accent, c) { return c }
+        }
+        for c in [ensure(hsb(hue, max(0.5, sat), 0.55), on: base, ratio: 3), hsb(hue, 0.1, 0.98)] where accentsDiffer(accent, c) {
+            return c
+        }
+        return wanted
     }
 
     /// Lightens a colour until it reaches `ratio` against `base`.
@@ -185,9 +268,11 @@ struct DockPalette: Equatable {
         }
         guard let top = weight.indices.max(by: { weight[$0] < weight[$1] }), weight[top] > 0.5 else {
             // Grey cover: neutral dark palette.
-            let base = hsb(0, 0, 0.15)
-            return DockPalette(base: base, rim: hsb(0, 0, 0.6), accent: ensure(hsb(0, 0, 0.8), on: base, ratio: 3),
-                               accent2: ensure(hsb(0, 0, 0.65), on: base, ratio: 3), ink: hsb(0, 0, 0.97))
+            let ink = hsb(0, 0, 0.97)
+            let base = fit(base: hsb(0, 0, 0.15), ink: ink)
+            let accent = ensure(hsb(0, 0, 0.82), on: base, ratio: 3)
+            let accent2 = distinct(ensure(hsb(0, 0, 0.55), on: base, ratio: 3), from: accent, on: base, hue: 0, sat: 0)
+            return DockPalette(base: base, rim: hsb(0, 0, 0.6), accent: accent, accent2: accent2, ink: ink)
         }
         let h1 = hue(top)
         let s1 = min(1, max(0.55, satSum[top] / weight[top]))
@@ -199,11 +284,11 @@ struct DockPalette: Equatable {
         }
         let h2 = second.map(hue) ?? (h1 + 0.12)
 
-        let base = hsb(h1, min(0.6, max(0.4, s1 * 0.7)), 0.16)
+        let ink = hsb(h1, 0.04, 0.98)
+        let base = fit(base: hsb(h1, min(0.6, max(0.4, s1 * 0.7)), 0.16), ink: ink)
         let rim = ensure(hsb(h1, s1, 0.85), on: base, ratio: 3)
         let accent = ensure(hsb(h1, s1, 0.9), on: base, ratio: 3)
-        let accent2 = ensure(hsb(h2, max(0.55, s1), 0.9), on: base, ratio: 3)
-        let ink = hsb(h1, 0.04, 0.98)
+        let accent2 = distinct(ensure(hsb(h2, max(0.55, s1), 0.9), on: base, ratio: 3), from: accent, on: base, hue: h1, sat: s1)
         return DockPalette(base: base, rim: rim, accent: accent, accent2: accent2, ink: ink)
     }
 }
@@ -265,6 +350,13 @@ final class SpotifyService: ObservableObject {
         }
     }
 
+    /// Plays one saved song (`play track`), only while Spotify runs (never launches it). A URI that is not a valid
+    /// `spotify:track:` URI sends nothing.
+    func play(_ uri: String) {
+        guard SpotifyTrackURI.isValid(uri) else { return }
+        send(.playTrack(uri))
+    }
+
     private func apply(_ new: SpotifyState) {
         if state != new { state = new }
         var url: URL?
@@ -272,10 +364,10 @@ final class SpotifyService: ObservableObject {
         if url != coverURL {
             coverURL = url
             cover = nil
-            coverPalette = nil
+            coverPalette = nil // `updatePalette` keeps the shown palette until the new cover has one
             if let url {
                 loader.load(url) { [weak self] image in
-                    guard let self, self.coverURL == url, let image else { return }
+                    guard let self, self.coverURL == url, let image else { return } // a failed load changes nothing
                     self.cover = image
                     self.coverPalette = DockPalette.from(image: image)
                     self.updatePalette()
@@ -285,9 +377,11 @@ final class SpotifyService: ObservableObject {
         updatePalette()
     }
 
+    /// Emerald unless a song plays. While one plays, the cover's palette once it exists; until then (or if the cover never
+    /// loads) the palette already shown stays, so two songs never pass through emerald.
     private func updatePalette() {
         var target = DockPalette.emerald
-        if case .track(let t) = state, t.isPlaying, cover != nil, let p = coverPalette { target = p }
+        if case .track(let t) = state, t.isPlaying { target = coverPalette ?? palette }
         if target != palette { palette = target }
     }
 }

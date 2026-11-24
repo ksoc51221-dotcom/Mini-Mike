@@ -33,8 +33,10 @@ enum Motion {
     static let edgeRise = Animation.spring(duration: 0.25, bounce: 0)
     /// Rows fade in one after another, 30 ms apart, capped so the last starts within 0.12 s (the whole list stays under 0.3 s).
     static func edgeStagger(_ index: Int) -> Double { Double(min(index, 4)) * 0.03 }
-    /// The dock's colours following the song's cover (and back to emerald): 0.3 s ease-out.
-    static let edgePalette = Animation.easeOut(duration: 0.3)
+    /// The dock's colours following the song's cover (and back to emerald): one 0.4 s ease-in-out crossfade.
+    static let edgePalette = Animation.easeInOut(duration: 0.4)
+    /// `edgePalette`, or nil (an instant change) under `still` and Reduce Motion. The one place the palette animates from.
+    static var edgePaletteAnimation: Animation? { still || reduceMotion ? nil : edgePalette }
     /// The cover disc turns once in this many seconds while a song plays (never under `still` or Reduce Motion).
     static let edgeSpinPeriod: Double = 9
     /// `a`, or a 0.12 s ease-out when Reduce Motion is on (pair with opacity-only changes).

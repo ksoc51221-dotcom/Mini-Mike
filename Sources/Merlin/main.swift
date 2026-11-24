@@ -376,6 +376,8 @@ if let i = arguments.firstIndex(of: "--pilldemo") {
 if arguments.contains("--libtest") { FeatureTests.liveLibraryTest() }
 if arguments.contains("--tokenbench") { FeatureTests.tokenBench() }
 if let i = arguments.firstIndex(of: "--uishots"), i + 1 < arguments.count { MainActor.assumeIsolated { UIShots.run(directory: arguments[i + 1]) } }
+// The edge dock's real Liquid Glass on the real screen, fixtures only: six pictures into the folder, then exit.
+if let i = arguments.firstIndex(of: "--edgeglasscheck"), i + 1 < arguments.count { MainActor.assumeIsolated { FeatureTests.edgeGlassCheck(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--chromeshots"), i + 1 < arguments.count { MainActor.assumeIsolated { ChromeShots.run(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--glyphshots"), i + 1 < arguments.count { MainActor.assumeIsolated { GlyphGallery.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--sectorshots"), i + 1 < arguments.count { MainActor.assumeIsolated { SectorEditorView.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }

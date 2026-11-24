@@ -37,6 +37,7 @@ enum FeatureTests {
         commandChecks(check)
         MainActor.assumeIsolated { edgePanelChecks(check) }
         MainActor.assumeIsolated { spotifyDockChecks(check) }
+        MainActor.assumeIsolated { spotifySongsChecks(check) }
         MainActor.assumeIsolated { resizeChecks(check) }
         sceneChecks(check)
         voiceOrbChecks(check)
