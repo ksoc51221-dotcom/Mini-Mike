@@ -12,6 +12,7 @@ enum FeatureTests {
         quiz(check)
         calendar(check)
         voiceUnitChecks(check)
+        voiceModelChecks(check)
         documents(check)
         oneShotChecks(check)
         voiceRouting(check)
@@ -1155,7 +1156,8 @@ extension FeatureTests {
         let voice = VoiceController()
         let states: [(String, VoiceController.Phase, String, Float)] = [
             ("pill-listening", .listening, "add dinner with Anna to my calendar tomorrow at seven", 0.6),
-            ("pill-needs-model", .needsModel("English"), "", 0),
+            ("pill-needs-model", .needsModel("English", .notOnMac), "", 0),
+            ("pill-model-not-ready", .needsModel("English", .notReady), "", 0),
             ("pill-denied", .micDenied, "", 0),
             ("pill-ready", .message("Ready. Hold Tab + Q to talk, let go to send."), "", 0),
         ]

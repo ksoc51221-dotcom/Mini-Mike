@@ -71,8 +71,8 @@ final class VoiceController: ObservableObject {
         case idle
         case working(String)
         case listening
-        /// Apple's English speech model isn't on the Mac yet; the pill asks before downloading.
-        case needsModel(String)
+        /// Apple's English speech model isn't ready. Only `.notOnMac` asks to download; the other two offer Try again.
+        case needsModel(String, Dictation.ModelProblem = .notOnMac)
         case micDenied
         case message(String)
     }
@@ -176,28 +176,7 @@ final class VoiceController: ObservableObject {
         held = false
         level = 0
         if case Dictation.Failure.notInstalled = error {
-            // The model is often already on this Mac and only needs claiming for Merlin: do that without asking.
-            // Only when it truly isn't here does the prompt show (that download needs your OK).
-            phase = .working("Getting the voice model ready…")
-            pill.show()
-            let mine = session
-            // It normally takes about 15 seconds. If macOS never answers (offline, say), stop waiting and show the prompt.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
-                guard let self, mine == self.session, case .working("Getting the voice model ready…") = self.phase else { return }
-                self.phase = .needsModel("English")
-                self.pill.show()
-            }
-            Task { @MainActor in
-                let ready = await Dictation.allocateIfOnThisMac()
-                guard mine == self.session, case .working = self.phase else { return }
-                if ready {
-                    Task.detached(priority: .utility) { await Dictation.warmUp() }
-                    self.show("Ready. Hold \(KeybindStore.shared.current.chord(.talk).display) to talk, let go to send.")
-                } else {
-                    self.phase = .needsModel("English")
-                    self.pill.show()
-                }
-            }
+            claimModel()
         } else {
             show("Couldn't listen: \(error.localizedDescription)")
         }
@@ -245,6 +224,80 @@ final class VoiceController: ObservableObject {
                 pill.hide(after: 0.9) // long enough to read which engine made the text; the chat opens at once
             }
             onCommand?(final)
+        }
+    }
+
+    /// A press found no ready model. The model is often on this Mac and only needs claiming for Merlin: do that
+    /// without asking. Only a model that truly isn't here gets the Download prompt (that download needs your OK).
+    /// Every step goes to ~/Library/Logs/Merlin/voice.log, so the cause can be read after the fact.
+    func claimModel() {
+        phase = .working(Self.claimingText)
+        pill.show()
+        let mine = session
+        Task { @MainActor in
+            let probe = await Dictation.probe()
+            Dictation.log("press found no ready model: \(probe.line)")
+            guard mine == self.session, self.phase == .working(Self.claimingText) else { return }
+            if probe.problem == .notOnMac {
+                self.phase = .needsModel("English", .notOnMac)
+                self.pill.show()
+                return
+            }
+            // It normally takes about 15 seconds. If macOS never answers, stop waiting and say so (no Download).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 45) { [weak self] in
+                guard let self, mine == self.session, self.phase == .working(Self.claimingText) else { return }
+                Dictation.log("claim still running after 45 s")
+                self.phase = .needsModel("English", probe.problem)
+                self.pill.show()
+            }
+            let ready = await Dictation.allocateIfOnThisMac()
+            // A claim that ends after the 45 s prompt still counts: the prompt then turns into "Ready".
+            guard mine == self.session, Self.acceptsLateResult(self.phase) else { return }
+            if ready {
+                Task.detached(priority: .utility) { await Dictation.warmUp() }
+                self.show("Ready. Hold \(KeybindStore.shared.current.chord(.talk).display) to talk, let go to send.")
+            } else {
+                let after = await Dictation.probe()
+                Dictation.log("claim failed: \(after.line)")
+                guard mine == self.session, Self.acceptsLateResult(self.phase) else { return }
+                self.phase = .needsModel("English", after.problem)
+                self.pill.show()
+            }
+        }
+    }
+
+    static let claimingText = "Getting the voice model ready…"
+
+    /// Whether the end of a model claim may still change the pill: while it waits, or while it shows the "not ready"
+    /// prompt that the 45 s timer put up. Never over a new press, a message, or the Download prompt.
+    static func acceptsLateResult(_ phase: Phase) -> Bool {
+        switch phase {
+        case .working(let s): return s == claimingText
+        case .needsModel(_, let problem): return problem != .notOnMac
+        default: return false
+        }
+    }
+
+    /// "Try again" on the "not ready" prompt: claim the model again.
+    func retryModel() {
+        session += 1
+        claimModel()
+    }
+
+    /// The pill's words for each model fault. Only `notOnMac` says the model is missing.
+    static func modelCaption(_ lang: String, _ problem: Dictation.ModelProblem) -> String {
+        switch problem {
+        case .notOnMac: return "Get the \(lang) voice model?"
+        case .notReady: return "The \(lang) voice model isn't ready yet"
+        case .noLocale: return "macOS didn't answer about the voice model"
+        }
+    }
+
+    static func modelHint(_ problem: Dictation.ModelProblem) -> String {
+        switch problem {
+        case .notOnMac: return "Apple's speech model isn't on this Mac. Download it, or use a Groq key instead."
+        case .notReady: return "It's on this Mac, but macOS hasn't set it up for Merlin. Try again, or use a Groq key."
+        case .noLocale: return "macOS gave no English model this time. Try again, or use a Groq key."
         }
     }
 
@@ -449,7 +502,7 @@ struct VoicePillView: View {
         switch voice.phase {
         case .listening: return voice.text.isEmpty ? "Listening…" : voice.text
         case .working(let s): return s
-        case .needsModel(let lang): return "Get the \(lang) voice model?"
+        case .needsModel(let lang, let problem): return VoiceController.modelCaption(lang, problem)
         case .micDenied: return "Microphone is off for Merlin"
         case .message(let m): return m
         case .idle: return voice.text // the finished text, for the moment the orb takes to leave
@@ -459,7 +512,7 @@ struct VoicePillView: View {
     private var hint: String? {
         switch voice.phase {
         case .listening: return "Let go of \(KeybindStore.shared.current.chord(.talk).display) to send"
-        case .needsModel: return "Apple's speech model isn't on this Mac. Download it, or use a Groq key instead."
+        case .needsModel(_, let problem): return VoiceController.modelHint(problem)
         case .micDenied: return "Allow it in System Settings → Privacy & Security → Microphone."
         case .idle: return voice.engine?.title
         default: return nil
@@ -469,10 +522,14 @@ struct VoicePillView: View {
     @ViewBuilder
     private var action: some View {
         switch voice.phase {
-        case .needsModel:
+        case .needsModel(_, let problem):
             HStack(spacing: 8) {
                 Button("Use a Groq key") { voice.openGroqKeySettings() }.buttonStyle(QuietPillAction())
-                Button("Download") { voice.downloadModel() }.buttonStyle(PillAction(fill: accent))
+                if problem == .notOnMac {
+                    Button("Download") { voice.downloadModel() }.buttonStyle(PillAction(fill: accent))
+                } else {
+                    Button("Try again") { voice.retryModel() }.buttonStyle(PillAction(fill: accent))
+                }
             }
         case .micDenied:
             Button("Open Settings") {

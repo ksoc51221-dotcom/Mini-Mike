@@ -86,8 +86,74 @@ final class Dictation {
         let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
         if await AssetInventory.status(forModules: [transcriber]) == .installed { return true }
         guard await isInstalled() else { return false }
-        try? await Transcription.install(transcriber, reserving: supported, progress: { _ in })
-        return await AssetInventory.status(forModules: [transcriber]) == .installed
+        do { try await Transcription.install(transcriber, reserving: supported, progress: { _ in }) }
+        catch { log("claim threw: \(error)") }
+        let ready = await AssetInventory.status(forModules: [transcriber]) == .installed
+        log("claim ended: ready=\(ready)")
+        return ready
+    }
+
+    // MARK: - Why a press found no model
+
+    /// Which of three different faults stopped a press. Only `notOnMac` may offer a download: a model that is on this
+    /// Mac must never show "Download".
+    enum ModelProblem: Equatable {
+        /// macOS gave no English model to match (`supportedLocale` was nil): a lookup fault, not a missing model.
+        case noLocale
+        /// The model really isn't on this Mac: the download needs your OK.
+        case notOnMac
+        /// The model is on this Mac, but it isn't ready for Merlin yet (the claim failed, or is slow).
+        case notReady
+
+        static func decide(localeFound: Bool, onMac: Bool) -> ModelProblem {
+            guard localeFound else { return .noLocale }
+            return onMac ? .notReady : .notOnMac
+        }
+    }
+
+    /// What macOS says about the model at one moment. Reads only: no download, no claim.
+    struct ModelProbe: Equatable {
+        var locale: String?
+        var status: String
+        var onMac: Bool
+        var hasFormat: Bool
+        var reserved: [String]
+
+        var problem: ModelProblem { .decide(localeFound: locale != nil, onMac: onMac) }
+        var line: String {
+            "locale=\(locale ?? "nil") status=\(status) onMac=\(onMac) format=\(hasFormat) reserved=\(reserved) -> \(problem)"
+        }
+    }
+
+    static func probe() async -> ModelProbe {
+        guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else {
+            return ModelProbe(locale: nil, status: "n/a", onMac: false, hasFormat: false, reserved: [])
+        }
+        let live = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
+        let status = await AssetInventory.status(forModules: [live])
+        let onMac = await SpeechTranscriber.installedLocales.contains { $0.identifier(.bcp47) == supported.identifier(.bcp47) }
+        let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [live])
+        let reserved = await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) }
+        return ModelProbe(locale: supported.identifier(.bcp47), status: "\(status)", onMac: onMac, hasFormat: format != nil,
+                          reserved: reserved)
+    }
+
+    /// One line in ~/Library/Logs/Merlin/voice.log, only in the installed app (never in a test run). It holds model
+    /// states and errors only: never words, never sound.
+    static func log(_ line: String) {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Merlin")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("voice.log")
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        guard let data = "\(stamp) \(line)\n".data(using: .utf8) else { return }
+        if let handle = try? FileHandle(forWritingTo: file) {
+            defer { try? handle.close() }
+            if (try? handle.seekToEnd()) ?? 0 > 200_000 { try? handle.truncate(atOffset: 0) }
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: file)
+        }
     }
 
     /// Downloads the model when it isn't on this Mac at all: only when the pill's Download button is pressed.
