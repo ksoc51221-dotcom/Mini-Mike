@@ -357,6 +357,8 @@ final class AskPanelController {
         model.onMinimize = { [weak self] in self?.onMinimizeRequest?() }
         model.onMeta = { [weak self] in self?.onUpdate?() } // the sidebar row takes the new name
         model.onTurnComplete = { [weak self] in self?.turnCompleted() }
+        model.chatID = recordID
+        model.onVisualAdded = { [weak self] in self?.saveToLibrary() }
         model.onKeep = { [weak self] id in self?.keep(turn: id) }
         model.onToggleStar = { [weak self] in self?.toggleStar() }
         model.onAttachScreenshot = { [weak self] in self?.attachScreenshot() }
@@ -619,6 +621,8 @@ final class AskPanelController {
         stopWatchdog()
         model.stopAnimations()
         model.speech.cleanup()
+        model.cancelVisual()
+        TeachVisuals.removeIfUnsaved(chat: recordID, library: .shared) // a chat that was never saved keeps no files
         listenTimer?.invalidate()
         if let transcription { Task { await transcription.cancel() } }
         onClosed?()

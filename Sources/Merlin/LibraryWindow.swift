@@ -2703,6 +2703,7 @@ struct ChatDetail: View {
                 ForEach(Array(chat.turns.enumerated()), id: \.offset) { _, turn in
                     LibraryTurn(question: turn.question, answer: turn.answer, speech: speech)
                 }
+                .environment(\.visualsFolder, TeachVisuals.folder(chat: chat.id, library: Library.shared.directory))
                 HStack(spacing: 8) {
                     Button { onAsk(digest, Prompts.quiz) } label: {
                         HStack(spacing: 6) { Image(systemName: "questionmark.circle").font(.system(size: 12)); Text("Quiz me") }.secondaryButtonLook(height: 28)
@@ -2962,6 +2963,7 @@ struct BinDetail: View {
                 ForEach(Array(chat.turns.enumerated()), id: \.offset) { _, turn in
                     LibraryTurn(question: turn.question, answer: turn.answer, speech: speech)
                 }
+                .environment(\.visualsFolder, TeachVisuals.folder(chat: chat.id, library: Library.shared.directory))
             }
         case .note:
             if let note = item.note {

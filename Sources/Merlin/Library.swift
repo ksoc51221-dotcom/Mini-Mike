@@ -805,6 +805,7 @@ final class Library {
     func deleteForever(_ id: UUID) {
         guard let item = binItem(id) else { return }
         if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+        if let c = item.chat { remove(TeachVisuals.folder(chat: c.id, library: directory)) } // its diagrams and videos
         forget(item)
         announce()
     }
@@ -815,6 +816,7 @@ final class Library {
         let all = binned
         for item in all {
             if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+            if let c = item.chat { remove(TeachVisuals.folder(chat: c.id, library: directory)) } // its diagrams and videos
             forget(item)
         }
         if !all.isEmpty { announce() }
@@ -829,6 +831,7 @@ final class Library {
         let old = binned.filter { $0.deleted < cutoff }
         for item in old {
             if let s = item.screenshot { remove(screenshotImagesDirectory.appendingPathComponent(s.imageFile)) }
+            if let c = item.chat { remove(TeachVisuals.folder(chat: c.id, library: directory)) } // its diagrams and videos
             forget(item)
         }
         return old.count

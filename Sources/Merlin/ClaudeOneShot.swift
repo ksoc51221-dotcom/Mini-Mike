@@ -34,10 +34,7 @@ enum ClaudeOneShot {
     static func runSync(_ prompt: String, system: String, model: ModelChoice, modelID: String? = nil, effort: String? = nil,
                         timeout: TimeInterval = 180) -> Result<Reply, Failure> {
         guard let cli = ClaudeSession.claudePath else { return .failure(.cliNotFound) }
-        var args = ["-p", "--output-format", "json", "--model", modelID ?? model.rawValue, "--tools", "",
-                    "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--system-prompt", system]
-        if let effort { args += ["--effort", effort] }
-        let p = ClaudeSession.cliProcess(cli, arguments: args)
+        let p = ClaudeSession.cliProcess(cli, arguments: launchArguments(system: system, model: model, modelID: modelID, effort: effort))
         let (inPipe, outPipe, errPipe) = p.attachPipes()
         do { try p.run() } catch { return .failure(.failed(error.localizedDescription)) }
 
@@ -63,6 +60,14 @@ enum ClaudeOneShot {
         }
         _ = readers.wait(timeout: .now() + 5)
         return parse(outBox.data, stderr: String(decoding: errBox.data, as: UTF8.self), exit: p.terminationStatus)
+    }
+
+    /// The CLI arguments for one call: no tools, no settings files (so no user skills, hooks or CLAUDE.md), no MCP, no saved session.
+    static func launchArguments(system: String, model: ModelChoice, modelID: String? = nil, effort: String? = nil) -> [String] {
+        var args = ["-p", "--output-format", "json", "--model", modelID ?? model.rawValue, "--tools", "",
+                    "--strict-mcp-config", "--setting-sources", "", "--no-session-persistence", "--system-prompt", system]
+        if let effort { args += ["--effort", effort] }
+        return args
     }
 
     static func parse(_ data: Data, stderr: String = "", exit: Int32 = 0) -> Result<Reply, Failure> {

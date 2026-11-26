@@ -381,6 +381,12 @@ if let i = arguments.firstIndex(of: "--calendardemo") {
 }
 if let i = arguments.firstIndex(of: "--voicetest") { FeatureTests.voiceTest(phrase: argument(after: i)) }
 if arguments.contains("--doctest") { FeatureTests.liveDocumentTest() }
+if arguments.contains("--visualrendertest") { FeatureTests.visualRenderTest() }
+if arguments.contains("--visualsandboxtest") { FeatureTests.visualSandboxTest() }
+if let i = arguments.firstIndex(of: "--visualshots"), i + 2 < arguments.count {
+    MainActor.assumeIsolated { FeatureTests.visualShots(svg: arguments[i + 1], directory: arguments[i + 2]) }
+}
+if let i = arguments.firstIndex(of: "--visuallive") { MainActor.assumeIsolated { FeatureTests.visualLiveTest(directory: argument(after: i) ?? NSTemporaryDirectory()) } }
 if arguments.contains("--voicecheck") { FeatureTests.voiceCheck() }
 if arguments.contains("--voicelag") { FeatureTests.voiceLag() }
 if arguments.contains("--voicedictation") { FeatureTests.dictationTest() }

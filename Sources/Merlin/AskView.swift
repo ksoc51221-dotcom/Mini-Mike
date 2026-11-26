@@ -283,6 +283,60 @@ final class AskModel: ObservableObject {
 
     func goDeeper() { ask(display: Self.deeperLabel, prompt: Prompts.deeper) }
 
+    // MARK: Teaching visuals (the Visual menu: Diagram, Animate)
+
+    /// The Library chat this window saves into (set by the panel); its Visuals folder holds the files.
+    var chatID: UUID?
+    /// A visual was added to an answer: the panel saves the chat again.
+    var onVisualAdded: (() -> Void)?
+    @Published var visualStage: TeachVisuals.Stage?
+    @Published var visualError: TeachVisuals.Failure?
+    private var visualJob: TeachVisuals.CancelHandle?
+    /// The job the status line belongs to: a cancelled job's late result never touches a newer one.
+    private var visualToken: UUID?
+
+    var visualsFolder: URL? { chatID.map { TeachVisuals.folder(chat: $0, library: Library.shared.directory) } }
+
+    var canMakeVisual: Bool { canKeep && chatID != nil && visualStage == nil }
+
+    /// One extra model call for the newest answer. The tag goes on that turn, even if you ask something else meanwhile.
+    func makeVisual(_ kind: TeachVisuals.Kind) {
+        guard canMakeVisual, let chatID, let turn = turns.last else { return }
+        let turnID = turn.id
+        visualError = nil
+        let input = TeachVisuals.Input(kind: kind, chat: chatID, library: Library.shared.directory,
+                                       selection: selection.text, question: turn.question, answer: turn.answer)
+        let token = UUID()
+        visualToken = token
+        visualJob = TeachVisuals.make(input, stage: { [weak self] stage in
+            guard let self, self.visualToken == token else { return }
+            self.visualStage = stage
+        }) { [weak self] result in
+            guard let self, self.visualToken == token else { return }
+            self.visualToken = nil
+            self.visualJob = nil
+            self.visualStage = nil
+            switch result {
+            case .success(let file):
+                // Only onto the same, finished answer ("Ask Claude" may have restarted it meanwhile).
+                guard let i = self.turns.firstIndex(where: { $0.id == turnID }), self.turns[i].done, !self.turns[i].isError else { return }
+                withAnimation(Motion.animation(Motion.functional)) {
+                    self.turns[i].answer += "\n\n" + Answer.visualMarkup(kind: kind, file: file)
+                }
+                self.onVisualAdded?()
+            case .failure(let f):
+                self.visualError = f == .cancelled ? nil : f
+            }
+        }
+    }
+
+    func cancelVisual() {
+        visualJob?.cancel()
+        visualJob = nil
+        visualToken = nil
+        visualStage = nil
+    }
+
     func summarize(_ kind: Prompts.Summary) {
         choosingSummary = false
         ask(display: kind.display, prompt: kind.prompt)
@@ -565,12 +619,27 @@ struct AskView: View {
                                                     removal: .opacity))
                     }
                     if model.canGoDeeper || model.canAskClaude || model.canKeep {
-                        HStack(spacing: 16) {
+                        HStack(spacing: model.canMakeVisual ? 10 : 16) {
                             if model.canGoDeeper {
                                 Button { model.goDeeper() } label: {
                                     Label("Go deeper", systemImage: "arrow.down.right")
                                 }
                                 .buttonStyle(GhostStyle())
+                            }
+                            if model.canMakeVisual {
+                                Menu {
+                                    Button("Diagram") { model.makeVisual(.diagram) }
+                                    Button("Animate") { model.makeVisual(.video) }
+                                } label: {
+                                    Label("Visual", systemImage: "photo.on.rectangle.angled")
+                                        .labelStyle(.iconOnly)
+                                }
+                                .accessibilityLabel("Visual")
+                                .menuStyle(.button)
+                                .buttonStyle(GhostStyle())
+                                .menuIndicator(.hidden)
+                                .fixedSize()
+                                .help("Draw a diagram or animate a short video of this answer (one extra Claude call)")
                             }
                             if model.canQuiz {
                                 Button { model.quizMe() } label: {
@@ -601,9 +670,15 @@ struct AskView: View {
                         }
                         .transition(.opacity.combined(with: .offset(y: 6)))
                     }
+                    if model.visualStage != nil || model.visualError != nil {
+                        TeachVisualStatus(stage: model.visualStage, error: model.visualError,
+                                          cancel: { model.cancelVisual() }, dismiss: { model.visualError = nil })
+                            .transition(.opacity)
+                    }
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .environment(\.visualsFolder, model.visualsFolder)
                 .padding(.trailing, 6)
                 .background(GeometryReader { g in
                     Color.clear.preference(key: ThreadHeightKey.self, value: g.size.height)

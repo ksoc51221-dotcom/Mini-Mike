@@ -169,6 +169,9 @@ struct AnswerView: View {
                 case .buildingScene:
                     ShimmerText(text: "Building a 3D scene…")
                         .transition(.opacity)
+                case .visual(let kind, let file):
+                    TeachVisualView(kind: kind, file: file)
+                        .transition(.opacity)
                 }
             }
         }

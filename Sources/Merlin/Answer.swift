@@ -25,6 +25,9 @@ enum Answer {
         case scene(String)
         /// A <scene> that's still streaming in.
         case buildingScene
+        /// A teaching diagram or video Merlin made on request (<visual kind="diagram|video" file="<n>.svg|mp4"/>).
+        /// The file lives in the chat's Visuals folder (`TeachVisuals.folder`).
+        case visual(TeachVisuals.Kind, String)
     }
 
     /// What Claude says a chat is about, and which sector it belongs in.
@@ -85,6 +88,37 @@ enum Answer {
     static func pieces(_ answer: String, hidePartial: Bool = false) -> [Piece] {
         let answer = withoutMeta(answer)
         let ns = answer as NSString
+        let visuals = visualTag.matches(in: answer, range: NSRange(location: 0, length: ns.length))
+        guard !visuals.isEmpty else { return segmentPieces(answer, hidePartial: hidePartial) }
+        // Merlin's own <visual …/> tags split the answer; each part is read as before. A tag that fails the checks is dropped.
+        var out: [Piece] = []
+        var cursor = 0
+        for m in visuals {
+            out += segmentPieces(ns.substring(with: NSRange(location: cursor, length: m.range.location - cursor)), hidePartial: false)
+            if let v = visual(attributes(ns.substring(with: m.range(at: 1)))) { out.append(.visual(v.kind, v.file)) }
+            cursor = m.range.location + m.range.length
+        }
+        out += segmentPieces(ns.substring(from: cursor), hidePartial: hidePartial)
+        return out
+    }
+
+    /// Merlin's tag for a saved diagram or video. Self-closing, so it has its own pattern.
+    private static let visualTag = try! NSRegularExpression(pattern: #"<visual\b([^>]*?)/?>(?:\s*</visual\s*>)?"#, options: [.caseInsensitive])
+
+    /// The kind and file name, only when both are safe: a plain number with the extension that matches the kind.
+    /// (The chat model could write a <visual> tag too, so nothing else is trusted or loaded.)
+    static func visual(_ attrs: [String: String]) -> (kind: TeachVisuals.Kind, file: String)? {
+        guard let kind = attrs["kind"].flatMap({ TeachVisuals.Kind(rawValue: $0.lowercased()) }), let file = attrs["file"],
+              file.range(of: #"^[0-9]{1,6}\.(svg|mp4)$"#, options: .regularExpression) != nil,
+              file.hasSuffix("." + kind.fileExtension) else { return nil }
+        return (kind, file)
+    }
+
+    /// The tag Merlin appends to an answer for a finished visual.
+    static func visualMarkup(kind: TeachVisuals.Kind, file: String) -> String { "<visual kind=\"\(kind.rawValue)\" file=\"\(file)\"/>" }
+
+    private static func segmentPieces(_ answer: String, hidePartial: Bool) -> [Piece] {
+        let ns = answer as NSString
         var pieces: [Piece] = []
         var cursor = 0
         for match in tag.matches(in: answer, range: NSRange(location: 0, length: ns.length)) {
@@ -124,6 +158,7 @@ enum Answer {
             // Any opening tag left in the tail is unfinished.
             let opens: [(Range<String.Index>, Piece?)] = [
                 ("<say", nil), ("<graph", .drawing), ("<quiz", .writingQuiz), ("<meta", nil), ("<heard", nil), ("<board", .drawingBoard), ("<scene", .buildingScene),
+                ("<visual", nil),
             ].compactMap { name, piece in
                 tail.range(of: name, options: [.backwards, .caseInsensitive]).map { ($0, piece) }
             }
@@ -132,7 +167,8 @@ enum Answer {
                 tail = String(tail[..<open.0.lowerBound])
             }
             for prefix in ["<grap", "<gra", "<gr", "<g", "<sa", "<s", "<quiz", "<qui", "<qu", "<q", "<meta", "<met", "<me", "<m",
-                           "<boar", "<boa", "<bo", "<b", "<scen", "<sce", "<sc", "<hear", "<hea", "<he", "<h", "<"]
+                           "<boar", "<boa", "<bo", "<b", "<scen", "<sce", "<sc", "<hear", "<hea", "<he", "<h",
+                           "<visua", "<visu", "<vis", "<vi", "<v", "<"]
             where tail.hasSuffix(prefix) {
                 tail.removeLast(prefix.count)
                 break
@@ -163,6 +199,8 @@ enum Answer {
             case .scene(let json):
                 let words = SceneSpec.parse(json)?.plainText ?? ""
                 return words.isEmpty ? "[a 3D scene was shown here]" : "[a 3D scene was shown here: \(words)]"
+            // A diagram or video is left out: copies, exports, search, names and the history sent back to a model never see it.
+            case .visual: return nil
             case .drawing, .writingQuiz, .drawingBoard, .buildingScene: return nil
             }
         }.filter { !$0.isEmpty }.joined(separator: " ")
@@ -174,7 +212,9 @@ enum Answer {
     /// the <meta> naming tag goes. Replacing in place keeps a <say> inside a table cell in its row.
     static func noteMarkup(_ answer: String) -> String {
         let dropped = "\u{E000}" // marks where a dropped tag was, until its fence (if any) is removed
-        let answer = withoutMeta(answer)
+        let raw = withoutMeta(answer)
+        // A diagram or video can't be kept as text: its tag goes.
+        let answer = visualTag.stringByReplacingMatches(in: raw, range: NSRange(location: 0, length: (raw as NSString).length), withTemplate: "")
         let ns = answer as NSString
         let out = NSMutableString(string: answer)
         for match in tag.matches(in: answer, range: NSRange(location: 0, length: ns.length)).reversed() {
@@ -211,7 +251,7 @@ enum Answer {
         func isGraph(_ j: Int) -> Bool {
             guard pieces.indices.contains(j) else { return false }
             switch pieces[j] {
-            case .graph, .drawing, .quiz, .writingQuiz, .event, .board, .drawingBoard, .scene, .buildingScene: return true
+            case .graph, .drawing, .quiz, .writingQuiz, .event, .board, .drawingBoard, .scene, .buildingScene, .visual: return true
             case .text, .say: return false
             }
         }

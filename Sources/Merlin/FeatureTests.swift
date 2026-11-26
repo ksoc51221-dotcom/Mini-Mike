@@ -46,6 +46,7 @@ enum FeatureTests {
         sceneChecks(check)
         voiceOrbChecks(check)
         pointToAskChecks(check)
+        teachVisualChecks(check)
         // MERLIN_HEADLESS_TESTS=1 skips the one check that orders a (transparent, click-through) window in on screen.
         if ProcessInfo.processInfo.environment["MERLIN_HEADLESS_TESTS"] == nil { MainActor.assumeIsolated { assistantCardChecks(check) } }
         themeChecks(check)
