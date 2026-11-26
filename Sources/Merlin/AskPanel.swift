@@ -1041,7 +1041,16 @@ final class AskPanelController {
     /// shows where the chat was. False for anything else, which is asked as usual.
     private func runTypedCommand(_ text: String) -> Bool {
         guard selection.isBlank, model.video == nil, docIndex == nil, model.turns.isEmpty, model.attachments.isEmpty,
-              let runner = CommandRunner.shared, let route = runner.commandRoute(text) else { return false }
+              let runner = CommandRunner.shared else { return false }
+        guard let route = runner.commandRoute(text) else {
+            // Not a fixed command, but a request to act ("create a reminder in 30 minutes to eat lunch"): the agent loop.
+            guard CalendarIntent.parse(text) == nil, AgentRequest.looksLikeRequest(CommandCenter.cleaned(text), context: runner.actionContext),
+                  let start = AgentLoop.typedHook else { return false }
+            let spot = panel.frame
+            close()
+            start(CommandCenter.cleaned(text), NSPoint(x: spot.minX + 12, y: spot.maxY - 4))
+            return true
+        }
         let spot = panel.frame
         close() // first, so "add this to …" takes the answer of the chat you used before this blank one
         guard let line = runner.run(route) else { return true }

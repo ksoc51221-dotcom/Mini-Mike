@@ -36,9 +36,12 @@ enum FeatureTests {
         sheetChecks(check)
         commandChecks(check)
         actionChecks(check)
+        agentChecks(check)
         MainActor.assumeIsolated { edgePanelChecks(check) }
+        MainActor.assumeIsolated { edgeLensChecks(check) }
         MainActor.assumeIsolated { spotifyDockChecks(check) }
         MainActor.assumeIsolated { spotifySongsChecks(check) }
+        MainActor.assumeIsolated { spotifyBeatChecks(check) }
         MainActor.assumeIsolated { resizeChecks(check) }
         sceneChecks(check)
         voiceOrbChecks(check)

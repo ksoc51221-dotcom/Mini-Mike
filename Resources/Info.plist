@@ -22,6 +22,8 @@
     <string>26.0</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Merlin reads the address of your browser's current tab when you ask it to summarize the video you're watching, and shows and controls the song that plays in Spotify from its dock.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Merlin listens to the sound of Spotify on this Mac so the strings on its dock move with the music. It saves and sends no audio.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Merlin transcribes a video's audio on your Mac so Claude can summarize it.</string>
     <key>NSCalendarsFullAccessUsageDescription</key>

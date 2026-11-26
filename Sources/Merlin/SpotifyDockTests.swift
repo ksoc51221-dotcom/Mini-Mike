@@ -50,6 +50,15 @@ extension FeatureTests {
         } else {
             print("  [skip] spotify script compile checks: Spotify is not open")
         }
+        // The mini window controls Spotify in the background: no script may bring it forward or start it.
+        let every: [SpotifyCommand] = [.playPause, .play, .pause, .next, .previous, .stop, .playTrack("spotify:track:5YBxGJYKJ7Se2Uq7S0pVOL")]
+        let scripts = [LiveSpotifyBackend.fetchSource] + every.compactMap(LiveSpotifyBackend.source(for:))
+        check("spotify scripts: none activates, opens a location or launches Spotify (\(scripts.count) scripts)",
+              scripts.count == 8 && scripts.allSatisfy { s in
+                  let l = s.lowercased()
+                  return !l.contains("activate") && !l.contains("open location") && !l.contains("launch") && !l.contains("reopen")
+              })
+
         let url = URL(string: "https://i.scdn.co/image/abc")
         let playing = SpotifyTrack(title: "T", artist: "A", artworkURL: url, isPlaying: true)
 

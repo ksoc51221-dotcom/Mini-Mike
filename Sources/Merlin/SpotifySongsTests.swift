@@ -200,30 +200,32 @@ extension FeatureTests {
         check("songs card: a row plays that song with the exact play track script",
               backend.sent == [.playTrack(uri(42))]
               && backend.scripts == ["tell application id \"com.spotify.client\" to play track \"\(uri(42))\""])
+        check("songs card: a row click clears the query, so the player shows the new song", m.songsQuery.isEmpty && !m.songsListShown)
         m.songsQuery = "city"
+        check("songs card: a query ends the list with the Spotify search row", m.songsSearchRowShown)
         m.submitSongsSearch()
         EdgeDockFixtures.waitUntil { backend.sent.count == 2 }
         check("songs card: Return plays the first result", backend.sent.last == .playTrack(current))
-        check("songs card: Return with a match opens no search", opener.opened.isEmpty)
-        check("songs card: a query ends the list with the Spotify search row", m.songsSearchRowShown)
+        check("songs card: Return with a match opens no search and clears the query", opener.opened.isEmpty && m.songsQuery.isEmpty)
         m.songsQuery = "zzz"
         m.submitSongsSearch()
         EdgeDockFixtures.waitUntil(0.2) { backend.sent.count > 2 }
-        check("songs card: no match: Return plays nothing and opens Spotify's search exactly once",
-              m.songsVisible.isEmpty && backend.sent.count == 2 && opener.opened.map(\.absoluteString) == ["spotify:search:zzz"])
+        check("songs card: no match: Return plays nothing, opens nothing and says \"Not in your songs yet.\"",
+              m.songsVisible.isEmpty && backend.sent.count == 2 && opener.opened.isEmpty
+              && m.songsNotice == EdgePanelModel.notInSongs && m.songsQuery == "zzz")
         m.songsQuery = "  Art House  "
         m.searchSpotify()
-        check("songs card: the search row opens Spotify's search for the trimmed query exactly once",
-              opener.opened.map(\.absoluteString) == ["spotify:search:zzz", "spotify:search:Art%20House"] && backend.sent.count == 2)
+        check("songs card: only the search row's click opens Spotify's search for the trimmed query, once",
+              opener.opened.map(\.absoluteString) == ["spotify:search:Art%20House"] && backend.sent.count == 2)
         m.songsQuery = "   "
         m.submitSongsSearch(); m.searchSpotify()
-        check("songs card: a blank query shows no search row and opens nothing", !m.songsSearchRowShown && opener.opened.count == 2)
+        check("songs card: a blank query shows no search row and opens nothing", !m.songsSearchRowShown && opener.opened.count == 1)
         m.songsQuery = ""
         m.tapSongsStarFilter()
         check("songs card: the star filter shows starred songs only (none yet)", m.songsListShown && m.songsVisible.isEmpty)
         m.submitSongsSearch()
         check("songs card: the star filter with no query: no search row, Return opens nothing",
-              !m.songsSearchRowShown && opener.opened.count == 2)
+              !m.songsSearchRowShown && opener.opened.count == 1)
         m.tapSongsStarFilter()
         check("songs card: the filter toggles off", !m.songsStarredOnly && !m.songsListShown)
 

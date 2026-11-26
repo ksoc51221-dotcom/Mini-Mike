@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dropComingPicture = false
     /// "Open microeconomics note", "show my chats": commands that act and open no chat (spoken here, typed in a blank chat).
     private lazy var commands = CommandRunner.live(dock: dock)
+    private let agent = AgentLoop()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ThemeStore.shared.applyMode()
@@ -42,6 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.onShowEdgePanel = { edge.show(.chats) }
         CommandRunner.shared = commands
         LibraryAssistant.actionHook = commands.actions
+        // A request typed in a blank chat goes to the same agent loop; its lines show where the chat was.
+        AgentLoop.typedHook = { [weak self] text, spot in
+            self?.runAgent(text) { line in Toast.show(line, near: NSRect(x: spot.x, y: spot.y, width: 1, height: 1)) }
+        }
         // Timers and reminders: banners show while Merlin is in front too; one that ends while Merlin runs also says so here.
         NotificationPresenter.install()
         TimerStore.shared.onFinish = { [weak self] t in
@@ -155,9 +160,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if pointAsk.isActive || pointCapturing { dropComingPicture = true }
             if let line = commands.run(route) { voice.say(line) }
             return
-        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && ActionCommand.looksLikeAction(text, context: commands.actionContext):
-            // No rule fits, but it opens like a request to act: one Haiku call maps it to one fixed command line.
-            return actByModel(text)
+        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && AgentRequest.looksLikeRequest(text, context: commands.actionContext):
+            // No rule fits, but it asks Merlin to do something: the agent loop (Claude with Merlin's tools).
+            return runAgent(text) { [weak self] line in
+                guard let self, !self.voice.isTalking else { return }
+                self.voice.say(line)
+            }
         case .calendar, .ask:
             break
         }
@@ -175,27 +183,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         askSpoken(text)
     }
 
-    /// The Haiku fallback: the words go to Haiku with the fixed command lines and the names it may use; the reply is read
-    /// by the same rules. NONE, a failure or a reply the rules refuse: the words go to Claude as a question, as before.
-    private func actByModel(_ text: String) {
-        let context = commands.actionContext
-        voice.say("Working on it…")
-        ClaudeOneShot.run(ActionCommand.fallbackPrompt(text, context: context), system: ActionCommand.fallbackSystem,
-                          model: .haiku, effort: "low", timeout: 30) { [weak self] result in
-            guard let self else { return }
-            if case .success(let reply) = result, let action = ActionCommand.fromFallback(reply.text, context: context) {
-                let line = self.commands.run(.act(action))
-                if let line, !self.voice.isTalking { self.voice.say(line) }
-                return
+    /// The agent loop (C1b): Claude gets the words and Merlin's tools and does the task; `report` shows the status lines
+    /// and the last line. If Claude reads the words as a question, they go to a chat as before.
+    private func runAgent(_ text: String, report: @escaping (String) -> Void) {
+        let mouse = NSEvent.mouseLocation, app = NSWorkspace.shared.frontmostApplication
+        guard let runner = commands.actions else { return askSpoken(text, mouse: mouse, app: app) }
+        let tools = AgentTools(runner: runner, confirmScript: AgentTools.liveConfirmScript)
+        tools.onStep = { line in report(line + "…") }
+        report("Working on it…")
+        agent.run(text, tools: tools) { [weak self] outcome in
+            switch outcome {
+            case .done(let line), .failed(let line): report(line)
+            case .question: self?.askSpoken(text, mouse: mouse, app: app)
             }
-            self.askSpoken(text)
         }
     }
 
     /// A spoken question with no picture: to the open chat, or a new one about what's highlighted.
-    private func askSpoken(_ text: String) {
-        let mouse = NSEvent.mouseLocation
-        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+    /// `mouse` and `app`: read when the words came (the agent loop hands a question back seconds later).
+    private func askSpoken(_ text: String, mouse: NSPoint = NSEvent.mouseLocation,
+                           app: NSRunningApplication? = NSWorkspace.shared.frontmostApplication) {
+        guard let app else { return }
         SelectionReader.read(app: app, mouse: mouse, allowCopy: false) { [weak self] found in
             let selection = found ?? Selection(text: "", appName: app.localizedName ?? "your screen",
                                                context: ContextBox(resolved: nil), pid: app.processIdentifier,
@@ -363,6 +371,7 @@ if let i = arguments.firstIndex(of: "--assistantcheck"), i + 1 < arguments.count
 }
 if let i = arguments.firstIndex(of: "--livecheck"), i + 1 < arguments.count { MainActor.assumeIsolated { LiveCheck.run(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])); LibrarySettingsView.renderShortcutShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
+if arguments.contains("--agenttest") { FeatureTests.agentLiveTest() }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }
 if arguments.contains("--capturetest") { SelfTest.captureTest() }

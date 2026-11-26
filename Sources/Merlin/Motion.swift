@@ -39,6 +39,14 @@ enum Motion {
     static var edgePaletteAnimation: Animation? { still || reduceMotion ? nil : edgePalette }
     /// The cover disc turns once in this many seconds while a song plays (never under `still` or Reduce Motion).
     static let edgeSpinPeriod: Double = 9
+    /// The beat strings follow the music with a spring: a fast attack (about 40 ms to the top, damping ratio 0.8)...
+    static let stringsAttack: (stiffness: Double, damping: Double) = (1600, 64)
+    /// ...and a slower release (about 250 ms, damping ratio 0.78): between motion.dev's punchy 200/18 and the no-wobble
+    /// 200/28, so the strings may overshoot a little.
+    static let stringsRelease: (stiffness: Double, damping: Double) = (200, 22)
+    /// The strings settle back to their calm shape when the song pauses: `edgeIn`'s length and curve (0.22 s, 0.16, 1, 0.3, 1).
+    static let edgeSettleDuration: Double = 0.22
+    static let edgeSettleCurve = UnitCurve.bezier(startControlPoint: UnitPoint(x: 0.16, y: 1), endControlPoint: UnitPoint(x: 0.3, y: 1))
     /// `a`, or a 0.12 s ease-out when Reduce Motion is on (pair with opacity-only changes).
     static func animation(_ a: Animation) -> Animation { reduceMotion ? .easeOut(duration: 0.12) : a }
 

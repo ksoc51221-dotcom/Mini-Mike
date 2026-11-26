@@ -3,9 +3,8 @@ import Combine
 import UserNotifications
 
 // Merlin's fixed actions (Part C1): the dock and apps, music, timers and reminders, routines. Spoken or typed words are read
-// by strict rules on this Mac (zero tokens). Only when no rule fits and the words open like a request to act does one Haiku
-// call rewrite them as ONE of the fixed command lines below, which the same rules then read again. The model never writes a
-// script and never names an action that is not on this list.
+// by strict rules on this Mac (zero tokens). Any other request to act goes to the agent loop (`AgentLoop`), where these
+// same actions are Claude's tools (`AgentTools`).
 //
 // The actions are `LibraryAssistant.Action` values (one list for voice, the Ask box and the Library Assistant):
 //   dock_add / dock_remove   title = the app name as said
@@ -207,69 +206,6 @@ enum ActionCommand {
         while groups.last == "" { groups.removeLast() }
         return groups
     }
-
-    // MARK: Haiku fallback
-
-    /// Words that open a request to act. Only these may cost one Haiku call when no rule fits.
-    static let actVerbs: Set<String> = ["add", "put", "pin", "remove", "take", "unpin", "open", "launch", "start", "run", "quit",
-                                        "close", "play", "pause", "skip", "resume", "set", "remind", "stop", "cancel", "star"]
-
-    /// Words that name what an action works on. A request with none of these (and no app, song or routine name) is
-    /// asked as usual: "add an example", "start over" and "put this in simpler words" never wait for a model call.
-    static let targetWords: Set<String> = ["dock", "doc", "rotation", "ring", "timer", "timers", "reminder", "reminders", "remind",
-                                           "music", "song", "songs", "track", "spotify", "minute", "minutes", "hour", "hours",
-                                           "routine", "app", "apps", "application"]
-
-    /// True when the words look like a request to act (so a Haiku call may map them to one fixed command line): an action
-    /// verb first, then a target word or the name of an app, song or routine.
-    static func looksLikeAction(_ text: String, context: ActionContext) -> Bool {
-        let words = normalize(text).split(separator: " ").map(String.init)
-        guard let first = words.first, words.count <= maxWords, actVerbs.contains(first) else { return false }
-        let rest = Array(words.dropFirst())
-        if rest.contains(where: targetWords.contains) { return true }
-        let names = Set(context.apps.map { key($0.name) } + context.songs.map { key($0.name) } + context.routines.map { key($0.name) })
-        // One word or two side by side ("visual studio" is not enough; "xcode", "x code" and "notion" are).
-        for i in rest.indices {
-            if names.contains(key(rest[i])) { return true }
-            if i + 1 < rest.count, names.contains(key(rest[i] + rest[i + 1])) { return true }
-        }
-        return false
-    }
-
-    static let fallbackSystem = """
-    You map one spoken request for a Mac app called Merlin to exactly ONE command line from this list, or the word NONE.
-    Reply with the command line only: no quotes, no other words.
-    add <app> to the dock
-    remove <app> from the dock
-    open <app>
-    quit <app>
-    play
-    pause
-    next song
-    previous song
-    play <song>
-    star this song
-    start a <N> minute timer
-    remind me in <N> minutes to <text>
-    cancel the timer
-    run <routine>
-    Use only an app, song or routine name from the lists given. If the request is a question, or fits none of the lines, reply NONE.
-    """
-
-    static func fallbackPrompt(_ text: String, context: ActionContext) -> String {
-        var lines = ["APPS: " + context.apps.map(\.name).joined(separator: ", ")]
-        if !context.songs.isEmpty { lines.append("SONGS: " + context.songs.prefix(60).map(\.name).joined(separator: ", ")) }
-        if !context.routines.isEmpty { lines.append("ROUTINES: " + context.routines.map(\.name).joined(separator: ", ")) }
-        lines.append("REQUEST: \(text)")
-        return lines.joined(separator: "\n")
-    }
-
-    /// The model's reply read by the same rules. Nil for NONE or anything the rules do not accept.
-    static func fromFallback(_ reply: String, context: ActionContext) -> Action? {
-        let line = reply.split(whereSeparator: \.isNewline).first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
-        guard !line.isEmpty, line.uppercased() != "NONE" else { return nil }
-        return parse(line, context: context)
-    }
 }
 
 // MARK: - Timers and reminders
@@ -454,9 +390,11 @@ final class ActionRunner {
                 let alert = NSAlert()
                 alert.messageText = question
                 alert.informativeText = "Unsaved work in that app may ask you to save first."
-                alert.addButton(withTitle: "Quit")
+                // "Cancel" is the Return button; "Quit" needs a click.
                 alert.addButton(withTitle: "Cancel")
-                return alert.runModal() == .alertFirstButtonReturn
+                let quit = alert.addButton(withTitle: "Quit")
+                quit.keyEquivalent = ""
+                return alert.runModal() == .alertSecondButtonReturn
             },
             music: { command in
                 guard LiveSpotifyBackend().isRunning() else { return false }

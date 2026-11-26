@@ -29,8 +29,8 @@ extension FeatureTests {
             let box = EdgePanelLayout.discFrame(window: window)
             let dock = EdgePanelLayout.dockFrame(window: window)
             check("edge panel (\(name)): its window ends at the screen's right edge", window.maxX == screen.maxX)
-            check("edge panel (\(name)): the disc and the dock are flush with the edge and the list sits 8 pt left of the ring's items, all centred on the screen",
-                  box.maxX == screen.maxX && dock.maxX == screen.maxX && abs(list.maxX - (dock.minX - 8)) < 0.01
+            check("edge panel (\(name)): the disc and the dock are flush with the edge and the list sits 171 pt left of the ring's items, all centred on the screen",
+                  box.maxX == screen.maxX && dock.maxX == screen.maxX && abs(list.maxX - (dock.minX - EdgePanelLayout.cardGap)) < 0.01
                   && abs(list.midY - screen.midY) < 1 && abs(box.midY - screen.midY) < 1 && abs(dock.midY - screen.midY) < 1)
             check("edge panel (\(name)): the disc and the whole dock fit on the screen", screen.contains(box) && screen.contains(dock))
             check("edge panel (\(name)): the tallest list fits on the screen", screen.contains(list))

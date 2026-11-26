@@ -211,19 +211,20 @@ extension FeatureTests {
     private static func dockChecks(_ check: (String, Bool) -> Void, store: DockAppStore, workspace: FixtureDockWorkspace) {
         typealias L = EdgePanelLayout
         // Geometry: the numbers.
-        check("edge dock: a 110 pt disc, a 144 pt ring, 44 pt items 22° apart", L.discRadius == 110 && L.ringRadius == 144
-              && L.itemSize == 44 && L.itemStep == 22 && L.maxItems == 8)
-        check("edge dock: the ring is the disc + a 12 pt gap + half an item", L.ringGap == 12
-              && L.ringRadius == L.discRadius + L.ringGap + L.itemSize / 2)
+        // Round five (Stitch): these replace the 110 pt disc, the 144 pt ring concentric with it and the 22° step.
+        check("edge dock: a 108 pt disc, a 179.5 pt ring 13 pt left of the disc's centre, 44 pt items 21.2° apart",
+              L.discRadius == 108 && L.ringRadius == 179.5 && L.ringOffset == 13 && L.itemSize == 44 && L.itemStep == 21.2
+              && L.maxItems == 8 && L.ringLineRadius == L.ringRadius)
         check("edge dock: an app icon is 40 pt inside a 44 pt target", L.appIconSize == 40 && L.itemSize == 44)
-        check("edge dock: the card sits beside the ring's items (ring + half an item + 8 pt)", L.listInset == 144 + 22 + 8)
-        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 166, height: 334))
-        check("edge dock: the window holds the card and the dock", L.windowSize == CGSize(width: 284 + 174 + 56, height: 481 + 112))
-        // The angle step: wide enough for 8 pt between neighbours' edges, narrow enough that 8 items stay on screen.
+        check("edge dock: the card is 256 pt wide, corner 15.5, 171 pt from the dock (the leftmost item edge)",
+              L.listWidth == 256 && L.cardRadius == 15.5 && L.cardGap == 171 && L.listInset == 214.5 + 171)
+        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 214.5, height: 398))
+        check("edge dock: the window holds the card, the bridge and the dock",
+              L.windowSize == CGSize(width: (256 + 385.5 + 56).rounded(.up), height: 481 + 112))
+        // The angle step: Stitch's 22 pt between neighbours' edges (66 pt chord).
         let chord = 2 * L.ringRadius * sin(L.itemStep / 2 * .pi / 180)
-        let leastStep = 2 * asin((L.itemSize + L.minItemGap) / (2 * L.ringRadius)) * 180 / .pi
-        check("edge dock: the step keeps at least 8 pt between neighbours' edges (least \(String(format: "%.1f", leastStep))°)",
-              chord - L.itemSize >= L.minItemGap && L.itemStep >= leastStep)
+        check("edge dock: 22 pt between neighbours' edges (chord \(String(format: "%.2f", chord)))",
+              abs(chord - L.itemSize - 22) < 0.1 && chord - L.itemSize >= L.minItemGap)
         check("edge dock: the glass blends only below the least rest gap", L.glassBlend > 0 && L.glassBlend < L.minItemGap)
         // The card's shadow (radius 22, 16 pt down: about 60 pt below, 44 pt to the sides) stays inside the window.
         check("edge dock: the slack holds the card's shadow", L.slack == 56 && L.slack >= 16 + 22 * 1.8 && L.slack >= 22 * 2)
@@ -257,41 +258,79 @@ extension FeatureTests {
                 }
             }
             check("edge dock (\(n) items): the path from the screen edge to every item stays in the hover frame", pathInside)
+            // The bridge: with a card open (each of the four sizes), a straight path from any item (lifted) to the
+            // nearest point of the card's edge stays in the hover frame, so the dock never hides on the way.
+            let cards = [L.listSize(rows: 0, newNoteRow: false), L.listSize(rows: 8, newNoteRow: true), L.spotifySize, L.appsSize]
+            let bridge = cards.allSatisfy { card -> Bool in
+                let hover = L.hoverFrame(window: wideWindow, card: card), f = L.listFrame(window: wideWindow, card: card)
+                return (0..<n).allSatisfy { i in
+                    let p = L.itemCentre(i, of: n, window: wideWindow)
+                    let near = NSPoint(x: f.maxX, y: min(max(p.y, f.minY), f.maxY))
+                    return (0...40).allSatisfy { k in
+                        let t = CGFloat(k) / 40
+                        let q = NSPoint(x: p.x - lr + (near.x - p.x + lr) * t, y: p.y + (near.y - p.y) * t)
+                        return hover.contains(q) || abs(q.x - hover.minX) < 1e-6
+                    }
+                }
+            }
+            check("edge dock (\(n) items): every straight path from an item to the nearest card edge stays in the hover frame",
+                  bridge)
             let edgeGaps = (1..<n).map { hypot(c[$0].x - c[$0 - 1].x, c[$0].y - c[$0 - 1].y) - L.itemSize }
-            check("edge dock (\(n) items): at least 8 pt between neighbours' edges", edgeGaps.allSatisfy { $0 >= L.minItemGap })
-            let mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
-            check("edge dock (\(n) items): 12 pt from the disc's rim to every item's edge",
-                  c.allSatisfy { abs(hypot(mid.x - $0.x, mid.y - $0.y) - r - L.discRadius - L.ringGap) < 0.001 })
+            check("edge dock (\(n) items): 22 pt between neighbours' edges", edgeGaps.allSatisfy { abs($0 - 22) < 0.1 })
             let ys = c.map(\.y)
             check("edge dock (\(n) items): Chats is first and on top; the items go down in order", ys == ys.sorted() && ys[0] < L.dockSize.height / 2)
-            check("edge dock (\(n) items): spread evenly around the horizontal axis on the ring",
+            // The ring's centre is 13 pt left of the disc's centre (the screen edge).
+            let ringCentre = CGPoint(x: L.dockSize.width - L.ringOffset, y: L.dockSize.height / 2)
+            check("edge dock (\(n) items): symmetric about the disc's centre line, on the 179.5 pt ring 13 pt left of it",
                   abs((ys.first! + ys.last!) / 2 - L.dockSize.height / 2) < 0.01
-                  && c.allSatisfy { abs(hypot(L.dockSize.width - $0.x, L.dockSize.height / 2 - $0.y) - L.ringRadius) < 0.01 })
-            check("edge dock (\(n) items): every item is outside the disc",
-                  c.allSatisfy { hypot(L.dockSize.width - $0.x, L.dockSize.height / 2 - $0.y) - r > L.discRadius })
+                  && c.allSatisfy { abs(hypot(ringCentre.x - $0.x, ringCentre.y - $0.y) - L.ringRadius) < 0.01 })
+            check("edge dock (\(n) items): every item is outside the disc and clear of the rim buttons",
+                  c.allSatisfy { hypot(L.dockSize.width - $0.x, L.dockSize.height / 2 - $0.y) - r * L.liftScale
+                      > L.discButtonRadius + L.plusSize / 2 + 4 })
         }
         let chats = L.itemCentre(.chats, window: local), notes = L.itemCentre(.notes, window: local)
         check("edge dock: in window coordinates (y up) Chats is above Notes", chats.y > notes.y && abs(chats.x - notes.x) < 0.01)
         let cover = L.coverCentre, mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
-        // The disc's three buttons ("+", search, collapse): one column, equal gaps, centred on the disc's middle.
+        // The disc's three buttons ("+", search, collapse). Round five (Stitch) replaces the old column inside the disc
+        // (14 pt from the rim, 12 pt gaps): 30 pt buttons on a 117 pt circle about the disc's centre, straddling the rim,
+        // 41.5 pt centre to centre, the middle one on the centre line.
         let buttons = [L.plusCentre, L.searchCentre, L.collapseCentre]
-        let waves = EdgeDockArt.orbRadius * 0.84 + 2
-        let inDisc = buttons.allSatisfy { b in hypot(b.x - mid.x, b.y - mid.y) + L.plusSize / 2 <= L.discRadius - 8 }
-        let clearOfWaves = buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > waves }
-        check("edge dock: \"+\", search and collapse are inside the disc (8 pt margin), clear of the record and its waves",
-              inDisc && clearOfWaves && EdgeDockArt.orbRadius * 0.64 > L.coverSize / 2)
-        let sameX = buttons.allSatisfy { abs($0.x - buttons[0].x) < 0.001 }
-        let gap1 = buttons[1].y - buttons[0].y, gap2 = buttons[2].y - buttons[1].y
-        check("edge dock: the three buttons share one x, 12 pt between their edges, centred on the disc",
-              sameX && abs(gap1 - L.plusSize - 12) < 0.001 && abs(gap1 - gap2) < 0.001 && abs(buttons[1].y - mid.y) < 0.001)
-        let rimGaps = buttons.map { L.discRadius - hypot($0.x - mid.x, $0.y - mid.y) - L.plusSize / 2 }
-        check("edge dock: 14 pt from the disc's rim to the nearest button edge",
-              abs(rimGaps.min()! - 14) < 0.001 && L.discButtonRim == 14)
+        let disc = BeatStrings.Place.disc
+        let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - 117) < 0.001 }
+        let straddle = buttons.allSatisfy { b in
+            let d = hypot(b.x - mid.x, b.y - mid.y)
+            return d - L.plusSize / 2 < L.discRadius && d + L.plusSize / 2 > L.discRadius && abs(d - L.discRadius - 9) < 0.01
+        }
+        check("edge dock: \"+\", search and collapse: 30 pt, on the 117 pt circle, straddling the rim",
+              L.plusSize == 30 && onCircle && straddle)
+        let pitch1 = hypot(buttons[1].x - buttons[0].x, buttons[1].y - buttons[0].y)
+        let pitch2 = hypot(buttons[2].x - buttons[1].x, buttons[2].y - buttons[1].y)
+        check("edge dock: the buttons are 41.5 pt apart centre to centre, the middle one on the centre line, in order",
+              abs(pitch1 - 41.5) < 0.001 && abs(pitch2 - 41.5) < 0.001 && abs(buttons[1].y - mid.y) < 0.001
+              && buttons[0].y < buttons[1].y && buttons[1].y < buttons[2].y)
+        check("edge dock: the buttons are clear of the record's waves",
+              buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > Double(disc.outer) })
+        check("edge dock: the record at rest is 76.6 pt on the disc's centre; its waves reach 114 to 123 pt across",
+              L.coverSize == 76.6 && cover == mid && (114...123).contains(disc.outer * 2)
+              && disc.outer <= EdgeDockArt.orbRadius)
         let field = L.searchFieldFrame
         let fieldCorners = [CGPoint(x: field.minX, y: field.minY), CGPoint(x: field.minX, y: field.maxY)]
-        check("edge dock: the search field sits in the search button's row, inside the disc",
+        check("edge dock: the search field sits on the centre line, right of the search button, inside the disc",
               abs(field.midY - L.searchCentre.y) < 0.001 && field.maxX < L.dockSize.width
+              && field.minX > L.searchCentre.x + L.plusSize / 2
               && fieldCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius - 4 })
+        // The timer chip (about 60 × 22): inside the disc, clear of the bottom button and the record's waves.
+        let chip = CGRect(x: L.timerChipCentre.x - 30, y: L.timerChipCentre.y - L.timerChipHeight / 2, width: 60,
+                          height: L.timerChipHeight)
+        let chipCorners = [CGPoint(x: chip.minX, y: chip.maxY), CGPoint(x: chip.maxX, y: chip.maxY)]
+        let nearest = CGPoint(x: min(max(mid.x, chip.minX), chip.maxX), y: min(max(mid.y, chip.minY), chip.maxY))
+        check("edge dock: the timer chip is inside the disc, clear of the buttons and the waves",
+              chipCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius }
+              && hypot(nearest.x - mid.x, nearest.y - mid.y) > Double(disc.outer)
+              && chip.minX > L.collapseCentre.x + L.plusSize / 2 + 4)
+        let noApp = L.noMatchCentre
+        check("edge dock: \"No app\" sits under the field, inside the disc",
+              noApp.y > field.maxY && hypot(noApp.x - mid.x, noApp.y - mid.y) < L.discRadius - 20)
 
         // Text on the glass is the system's job now (hierarchical styles on clear `Glass.regular`): no model can measure it,
         // only `--edgeglasscheck` on a real screen. What stays pure: the flat path's ink on its solid base, and the record
@@ -337,12 +376,19 @@ extension FeatureTests {
         }
         let middle = L.itemCentre(0, of: 1)
         check("edge dock: one item sits at the ring's middle-left point",
-              abs(middle.x - (L.dockSize.width - L.ringRadius)) < 0.001 && abs(middle.y - L.dockSize.height / 2) < 0.001)
+              abs(middle.x - (L.dockSize.width - L.ringOffset - L.ringRadius)) < 0.001 && abs(middle.y - L.dockSize.height / 2) < 0.001)
         let screen = NSRect(x: 0, y: 0, width: 1440, height: 875)
         let w = L.windowFrame(screen: screen)
         let dock = L.dockFrame(window: w)
         check("edge dock: the dock frame holds the disc and the outermost item, lifted",
-              dock.contains(L.discFrame(window: w)) && dock.minX == w.maxX - L.ringRadius - L.itemSize / 2)
+              dock.contains(L.discFrame(window: w)) && dock.minX == w.maxX - L.ringOffset - L.ringRadius - L.itemSize / 2)
+        // Every card: right edge `cardGap` from the dock, vertically centred on the disc's centre line, inside the window.
+        let allCards = [L.listSize(rows: 3, newNoteRow: false), L.listSize(rows: 8, newNoteRow: true), L.spotifySize, L.appsSize]
+        check("edge cards: every card's right edge is 171 pt from the dock's left edge, centred on the disc, in the window",
+              allCards.allSatisfy { c in
+                  let f = L.listFrame(window: w, card: c)
+                  return abs(dock.minX - f.maxX - 171) < 0.001 && abs(f.midY - w.midY) < 0.001 && w.contains(f) && c.width == 256
+              })
 
         // Cards: the same slot for every section.
         let (d, name) = EdgeDockFixtures.defaults()
@@ -355,17 +401,31 @@ extension FeatureTests {
         check("edge dock: the ring holds Chats, Notes, then the pinned apps",
               m.items == [.chats, .notes, .app(FixtureDockWorkspace.sample[0]), .app(FixtureDockWorkspace.sample[2])])
         m.tapSpotify()
-        check("edge cards: the cover opens the Spotify mini player (284 × 382)", m.section == .spotify && m.cardSize == CGSize(width: 284, height: 382))
+        check("edge cards: the cover opens the Spotify mini player (256 × 304)", m.section == .spotify && m.cardSize == CGSize(width: 256, height: 304))
         m.tapSpotify()
         check("edge cards: ...and a second click closes it", m.section == nil)
         m.tapManageApps()
-        check("edge cards: \"+\" opens the add/remove card (284 × 362)", m.section == .apps && m.cardSize == CGSize(width: 284, height: 44 + 6 + 7 * 44 + 6))
+        check("edge cards: \"+\" opens the add/remove card (256 × 364)", m.section == .apps && m.cardSize == CGSize(width: 256, height: 44 + 6 + 7 * 44 + 6))
         check("edge cards: every card fits the window's card slot",
               [L.spotifySize, L.appsSize].allSatisfy { $0.width <= L.listWidth && $0.height <= L.maxCardHeight })
-        check("edge cards: the mini player's rows add up to its height",
-              L.spotifyPad * 2 + L.spotifySpacing * 4 + L.spotifySearchHeight + L.spotifyOrbRadius * 2 + L.spotifyTextHeight
-                + L.spotifyButtonsHeight + L.spotifyOpenHeight == L.spotifySize.height
-              && L.spotifyRecord < L.spotifyOrbRadius * 2 * 0.64 && L.spotifyOrbRadius * 2 <= L.listWidth - L.spotifyPad * 2)
+        // The mini player (Stitch): pad 19.7, field 184 × 33 with the 29 pt star 3.7 pt right of it, 39 pt to the 115 pt
+        // record, 38.9 pt (Stitch "about 40") to the buttons, five buttons (32.3 pt, play 38.7 pt, 6.2 pt gaps), pad 19.7.
+        let rows = L.spotifyPad + L.spotifySearchHeight + L.spotifyRecordGap + L.spotifyRecord + L.spotifyRecordToButtons
+            + L.spotifyPlaySize + L.spotifyPad
+        check("edge cards: the mini player's rows add up to 304 pt; the gap under the record is 38.9 pt",
+              abs(rows - 304) < 0.001 && abs(L.spotifyRecordToButtons - 38.9) < 0.01 && L.spotifyRecordGap == 39)
+        check("edge cards: the search row fills the padded width (184 + 3.7 + 29)",
+              abs(L.spotifySearchWidth + L.spotifyStarGap + L.spotifyStarSize - (L.listWidth - 2 * L.spotifyPad)) < 0.1
+              && L.spotifySearchHeight == 33)
+        check("edge cards: the five buttons fit the padded width",
+              L.spotifyButtonsWidth <= L.listWidth - 2 * L.spotifyPad && L.spotifyButtonSize == 32.3 && L.spotifyPlaySize == 38.7)
+        let card = BeatStrings.Place.card
+        check("edge cards: the waves reach about 152 pt across and stay clear of the field, the caption and the card edge",
+              abs(card.outer * 2 - 152) <= 2 && L.spotifyRecordCentreY - card.outer > L.spotifyPad + L.spotifySearchHeight + 4
+              && L.spotifyRecordCentreY + card.outer < L.spotifyCaptionTop && card.outer < L.listWidth / 2 - 4)
+        check("edge cards: the caption line sits between the record's waves and the buttons",
+              L.spotifyCaptionTop > L.spotifyRecordCentreY + L.spotifyRecord / 2
+              && L.spotifyCaptionTop + L.spotifyCaptionHeight + L.spotifyCaptionToButtons == L.spotifyButtonsTop)
 
         // The Spotify card's buttons reach the (fake) backend.
         m.tapSpotifyCommand(.previous)
@@ -402,6 +462,53 @@ extension FeatureTests {
         closed.tapApp(FixtureDockWorkspace.sample[0])
         check("edge spotify: another pinned app still opens (and hides the panel)",
               ws2.opened == [URL(fileURLWithPath: "/fixture/\(DockAppStore.claudeBundleID).app")] && hidden == [FixtureDockWorkspace.sample[0]])
+
+        // Playing from the mini window never brings Spotify forward and never hides the dock: a row click and Return
+        // with a match send one `playTrack` each; Return with no match opens nothing; only the "Search Spotify for …"
+        // row and the arrow may (once each).
+        do {
+            let ws3 = FixtureDockWorkspace()
+            let (d3, name3) = EdgeDockFixtures.defaults()
+            defer { EdgeDockFixtures.forget(name3) }
+            let player = FixtureSpotifyBackend(.track(EdgeDockFixtures.track))
+            let pm = EdgePanelModel(apps: EdgeDockFixtures.appStore(ws3, defaults: d3), spotify: EdgeDockFixtures.spotify(player),
+                                    songs: EdgeDockFixtures.songs())
+            let opener = CountingURLOpener()
+            pm.urlOpener = opener
+            var hides = 0
+            pm.onOpenApp = { _ in hides += 1 }
+            pm.onCollapse = { hides += 1 }
+            pm.shown = true
+            pm.tapSpotify()
+            pm.songsQuery = "m"
+            let row = pm.songsVisible.first
+            if let row { pm.tapSong(row) }
+            EdgeDockFixtures.waitUntil { player.sent.count == 1 }
+            check("edge spotify play: a row click sends exactly one playTrack, opens nothing, keeps the dock and card, clears the query",
+                  row != nil && player.sent == [.playTrack(row!.uri)] && opener.count == 0 && ws3.opened.isEmpty && hides == 0
+                  && pm.shown && pm.section == .spotify && pm.songsQuery.isEmpty && !pm.songsListShown)
+            pm.songsQuery = "m"
+            pm.submitSongsSearch()
+            EdgeDockFixtures.waitUntil { player.sent.count == 2 }
+            check("edge spotify play: Return with a match sends exactly one playTrack, opens nothing, keeps the dock and card",
+                  player.sent.count == 2 && opener.count == 0 && ws3.opened.isEmpty && hides == 0 && pm.shown
+                  && pm.section == .spotify && pm.songsQuery.isEmpty)
+            pm.songsQuery = "zzzz"
+            pm.submitSongsSearch()
+            EdgeDockFixtures.waitUntil(0.2) { player.sent.count > 2 }
+            check("edge spotify play: Return with no match opens nothing and says \"Not in your songs yet.\"",
+                  player.sent.count == 2 && opener.count == 0 && ws3.opened.isEmpty && pm.songsNotice == EdgePanelModel.notInSongs
+                  && pm.section == .spotify)
+            for c in [SpotifyCommand.playPause, .next, .previous, .stop] { pm.tapSpotifyCommand(c) }
+            pm.tapHeart()
+            EdgeDockFixtures.waitUntil { player.sent.count == 6 }
+            check("edge spotify play: play/pause, next, previous, stop and the heart open nothing and keep the dock",
+                  player.sent.count == 6 && opener.count == 0 && ws3.opened.isEmpty && hides == 0 && pm.section == .spotify)
+            pm.searchSpotify()
+            check("edge spotify play: the \"Search Spotify for …\" row opens Spotify's search once", opener.count == 1 && ws3.opened.isEmpty)
+            pm.tapOpenSpotify()
+            check("edge spotify play: the arrow (\"Open Spotify\") opens Spotify once", opener.count == 1 && ws3.opened.count == 1)
+        }
         closed.tapSpotifyCommand(.playPause)
         closed.tapSpotifyCommand(.stop)
         EdgeDockFixtures.waitUntil(0.2) { !closedBackend.sent.isEmpty }
@@ -820,10 +927,140 @@ extension FeatureTests {
         }
     }
 
+    /// The vivid backdrop: large smooth bands (deep blue, white, near black, bright blue) with sharp edges, so the lens
+    /// bend at the glass edge shows. Drawn with CoreGraphics, the same every run.
+    private static func vividBackdrop(size: CGSize) -> NSImage? {
+        let w = Int(size.width), h = Int(size.height)
+        guard w > 0, h > 0, let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        let colours: [CGColor] = [CGColor(srgbRed: 0.05, green: 0.18, blue: 0.62, alpha: 1), CGColor(srgbRed: 0.95, green: 0.97, blue: 1, alpha: 1),
+                                  CGColor(srgbRed: 0.03, green: 0.04, blue: 0.08, alpha: 1), CGColor(srgbRed: 0.2, green: 0.55, blue: 1, alpha: 1)]
+        ctx.setFillColor(colours[2]); ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        // Bands between swirling sine curves, each filled flat (sharp edges).
+        let bands = 14
+        for b in 0..<bands {
+            let path = CGMutablePath()
+            func y(_ x: CGFloat, _ k: Int) -> CGFloat {
+                let base = CGFloat(k) / CGFloat(bands) * CGFloat(h) * 1.4 - CGFloat(h) * 0.2
+                return base + 70 * sin(x / 140 + CGFloat(k) * 0.7) + 35 * sin(x / 53 + CGFloat(k) * 1.9)
+            }
+            path.move(to: CGPoint(x: 0, y: y(0, b)))
+            for x in stride(from: 0, through: CGFloat(w), by: 4) { path.addLine(to: CGPoint(x: x, y: y(x, b))) }
+            for x in stride(from: CGFloat(w), through: 0, by: -4) { path.addLine(to: CGPoint(x: x, y: y(x, b + 1))) }
+            path.closeSubpath()
+            ctx.addPath(path)
+            ctx.setFillColor(colours[b % colours.count])
+            ctx.fillPath()
+        }
+        // A grid of thin straight lines over the bands (a white line with a black one beside it, seen on every band),
+        // so the lens's bend at a glass edge shows as a curved line.
+        let step = 28
+        for (colour, shift) in [(CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.9), 0), (CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.9), 2)] {
+            ctx.setFillColor(colour)
+            for x in stride(from: shift, to: w, by: step) { ctx.fill(CGRect(x: x, y: 0, width: 2, height: h)) }
+            for y in stride(from: shift, to: h, by: step) { ctx.fill(CGRect(x: 0, y: y, width: w, height: 2)) }
+        }
+        guard let cg = ctx.makeImage() else { return nil }
+        return NSImage(cgImage: cg, size: size)
+    }
+
+    /// `sheet.png`: the vivid backdrop's eight pictures in a 4 × 2 grid (rows: rest, card; columns: A regular, B
+    /// clearTinted, C clear, D lens), all at one scale, each with its label above. CoreGraphics only.
+    private static func composeSheet(_ out: URL) {
+        let styles = EdgeGlassStyle.allCases
+        let images: [[CGImage?]] = ["rest", "card"].map { state in
+            styles.map { s in
+                let url = out.appendingPathComponent("\(s.rawValue)-vivid-\(state).png")
+                guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+                return CGImageSourceCreateImageAtIndex(src, 0, nil)
+            }
+        }
+        guard let first = images.joined().compactMap({ $0 }).first else { return print("edgeglasscheck: no pictures for sheet.png") }
+        let cw = first.width, ch = first.height, label = 44, pad = 16
+        let w = pad + styles.count * (cw + pad), h = pad + 2 * (ch + label + pad)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.setFillColor(CGColor(srgbRed: 0.1, green: 0.1, blue: 0.11, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        for (row, state) in ["rest", "card"].enumerated() {
+            for (col, s) in styles.enumerated() {
+                let x = pad + col * (cw + pad)
+                let top = h - pad - row * (ch + label + pad) // CoreGraphics: y up
+                if let img = images[row][col] {
+                    ctx.draw(img, in: CGRect(x: x, y: top - label - ch, width: cw, height: ch)) // same scale: 1:1
+                }
+                let text = "\(s.letter) · \(s.rawValue) · \(state)" as CFString
+                let attrs = [kCTFontAttributeName: CTFontCreateWithName("Helvetica-Bold" as CFString, 26, nil),
+                             kCTForegroundColorAttributeName: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)] as CFDictionary
+                let line = CTLineCreateWithAttributedString(CFAttributedStringCreate(nil, text, attrs))
+                ctx.textPosition = CGPoint(x: x + 4, y: top - label + 12)
+                CTLineDraw(line, ctx)
+            }
+        }
+        let path = out.appendingPathComponent("sheet.png")
+        guard let img = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(path as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, img, nil)
+        if CGImageDestinationFinalize(dest) { print("saved \(path.path)") } else { print("edgeglasscheck: sheet.png not written") }
+    }
+
+    /// `lens-compare.png`: the lens card over the vivid backdrop (cut from `lens-vivid-card.png` at `card`, window points
+    /// y down), the reference picture and the Stitch card picture, side by side, each scaled to the card's height.
+    private static func composeLensCompare(_ out: URL, card: CGRect, windowWidth: CGFloat) {
+        func load(_ url: URL) -> CGImage? {
+            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+            return CGImageSourceCreateImageAtIndex(src, 0, nil)
+        }
+        let scratch = "/private/tmp/claude-502/-Users-Kien-Claude-Code-Projects/8f603bb8-4cee-4de3-9663-efbbb4b50222/scratchpad"
+        guard let shot = load(out.appendingPathComponent("lens-vivid-card.png")) else { return print("edgeglasscheck: no lens card for lens-compare.png") }
+        let k = CGFloat(shot.width) / windowWidth
+        let crop = CGRect(x: (card.minX - 12) * k, y: (card.minY - 12) * k, width: (card.width + 24) * k, height: (card.height + 24) * k).integral
+        guard let lensCard = shot.cropping(to: crop) else { return print("edgeglasscheck: lens card crop failed") }
+        let pictures: [(String, CGImage?)] = [
+            ("D lens (vivid)", lensCard),
+            // The repository's design folder, found from this source file (the run's directory may be anywhere).
+            ("reference", load(URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("design/round-five/3-glass-reference-zoom.png"))),
+            ("Stitch card", load(URL(fileURLWithPath: scratch + "/r5/1-stitch-dock-with-spotify-card.png"))),
+        ]
+        let ch = lensCard.height, label = 44, pad = 16
+        let widths = pictures.map { p in p.1.map { Int((CGFloat($0.width) * CGFloat(ch) / CGFloat($0.height)).rounded()) } ?? 0 }
+        let w = pad + widths.reduce(0) { $0 + $1 + pad }, h = pad + label + ch + pad
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return }
+        ctx.setFillColor(CGColor(srgbRed: 0.1, green: 0.1, blue: 0.11, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+        ctx.interpolationQuality = .high
+        var x = pad
+        for (i, (name, img)) in pictures.enumerated() {
+            if let img { ctx.draw(img, in: CGRect(x: x, y: pad, width: widths[i], height: ch)) }
+            else { print("edgeglasscheck: lens-compare.png: \(name) missing") }
+            let attrs = [kCTFontAttributeName: CTFontCreateWithName("Helvetica-Bold" as CFString, 26, nil),
+                         kCTForegroundColorAttributeName: CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)] as CFDictionary
+            ctx.textPosition = CGPoint(x: x + 4, y: pad + ch + 12)
+            CTLineDraw(CTLineCreateWithAttributedString(CFAttributedStringCreate(nil, name as CFString, attrs)), ctx)
+            x += widths[i] + pad
+        }
+        let path = out.appendingPathComponent("lens-compare.png")
+        guard let img = ctx.makeImage(),
+              let dest = CGImageDestinationCreateWithURL(path as CFURL, "public.png" as CFString, 1, nil) else { return }
+        CGImageDestinationAddImage(dest, img, nil)
+        if CGImageDestinationFinalize(dest) { print("saved \(path.path)") } else { print("edgeglasscheck: lens-compare.png not written") }
+    }
+
     /// `Merlin --edgeglasscheck <dir>`: the real panel with real Liquid Glass at full alpha on the main screen, fixtures only
-    /// (no Apple Event, no network, no app launch, memory defaults, a throwaway library). Six states, 0.6 s each, saved as
-    /// `1-ring.png` … `6-search.png` in `<dir>`; then five over a white backdrop window (`w*`, each with a printed
-    /// `CONTRAST` line measured from the picture) and two over mid grey (`g*`); then the panel goes away and the run exits 0. States are reached through
+    /// (no Apple Event, no network, no app launch, memory defaults, a throwaway library). Four states in the launch style
+    /// (`2-chats`, `3-apps`, `5-songs-list`, `6-search`); then, for each glass style (`regular`, `clearTinted`, `clear`,
+    /// `lens`, set in code) over the tool's own backdrop window (vivid bands under a grid of thin lines, white, near
+    /// black), the dock at rest (7 ring items, a playing fixture song) and the Spotify card: `<style>-<backdrop>-rest.png`
+    /// / `-card.png`, each with a printed `CONTRAST` line (the lens: also ink against its scrim); each lens picture waits
+    /// for a lens frame of the new backdrop (2 s at most). Then the `LENS` line, `sheet.png` (the vivid eight, 4 × 2) and
+    /// `lens-compare.png`; 0.6 s after each change; then the panel goes away and the run exits 0 (about 30 s). Without
+    /// Screen Recording permission the lens is never asked for: `LENS permission=false` and the fallback is pictured.
+    /// States are reached through
     /// the model, never a click; the window ignores the pointer, so a real mouse cannot change a state.
     @MainActor
     static func edgeGlassCheck(directory: String) -> Never {
@@ -879,8 +1116,8 @@ extension FeatureTests {
             .init(id: UUID(), title: "Macro essay plan", detail: "Changed yesterday"),
         ]
         edge.debugWindow?.alphaValue = 1 // full alpha; it still ignores the pointer
-        shot("1-ring.png", model.items.count == 8 && model.section == nil)
-
+        // Three cards and the disc search in the launch style (the comparison sheet below covers the rest and the
+        // Spotify card in all three styles).
         model.toggle(.chats)
         shot("2-chats.png", model.section == .chats)
 
@@ -892,21 +1129,19 @@ extension FeatureTests {
         backend.state = .track(track)
         service.refresh()
         _ = EdgeDockFixtures.waitUntil(1.5) { service.state == .track(track) && service.cover != nil && service.palette != .emerald }
-        shot("4-spotify-playing.png", model.section == .spotify && service.cover != nil)
-
         model.songsQuery = "mint"
-        shot("5-songs-list.png", model.songsListShown)
+        shot("5-songs-list.png", model.songsListShown && service.cover != nil)
 
         model.songsQuery = ""
         model.openSearch()
         model.query = "cal"
         shot("6-search.png", model.searchOpen && model.searchMatch?.name == "Calendar")
+        model.closeSearch()
 
-        // The same states over the tool's own plain backdrop window (white, then mid grey), right behind the panel.
         let local = NSRect(origin: .zero, size: EdgePanelLayout.windowSize)
         /// The text sample, in window coordinates (AppKit, bottom-left origin), from the `EdgePanelLayout` constants:
-        /// the song title (Spotify), the first row's title (Chats, the songs list), the "App Customization" title (apps),
-        /// and the "+" glyph on the ring picture (the disc has no text).
+        /// the caption line's text (Spotify), the first row's title (Chats, the songs list), the "App Customization" title
+        /// (apps), and the "+" glyph on the rest picture (the disc has no text).
         func textSpot() -> (NSRect, String) {
             let L = EdgePanelLayout.self
             if let section = model.section {
@@ -915,12 +1150,13 @@ extension FeatureTests {
                 case .apps:
                     return (NSRect(x: card.midX - 55, y: card.maxY - 26, width: 110, height: 12), "apps title")
                 case .spotify where model.songsListShown:
-                    // Row 0 of the list (pad, field, spacing): its name, right of the 28 pt cover well.
-                    let top = L.spotifyPad + L.spotifySearchHeight + L.spotifySpacing
+                    // Row 0 of the list (pad, field, 8 pt): its name, right of the 28 pt cover well.
+                    let top = L.spotifyPad + L.spotifySearchHeight + 8
                     return (NSRect(x: card.minX + L.spotifyPad + 42, y: card.maxY - top - 18, width: 74, height: 10), "row 1 title")
                 case .spotify:
-                    let top = L.spotifyPad + L.spotifySearchHeight + L.spotifySpacing + L.spotifyOrbRadius * 2 + L.spotifySpacing
-                    return (NSRect(x: card.midX - 40, y: card.maxY - top - 19, width: 80, height: 11), "song title")
+                    // The caption "Midnight City — M83": its left 90 pt, the middle 10 pt of the 14 pt line.
+                    let top = L.spotifyCaptionTop + 2
+                    return (NSRect(x: card.minX + L.spotifyPad, y: card.maxY - top - 10, width: 90, height: 10), "caption")
                 case .chats, .notes:
                     // Row 0: under the header and the pad, right of the 20 pt mark; the title is the row's upper line.
                     let top = L.headerHeight + L.pad
@@ -942,9 +1178,9 @@ extension FeatureTests {
                 // (clear of the edge's lensing; right of the row text, the waves and the songs list's empty middle).
                 return NSRect(x: card.maxX - 30, y: card.midY - 10, width: 16, height: 20)
             }
-            // The disc at 135° (up-left), 0.945 of its radius from the centre: between the track hairline (0.89) and the
-            // rim, clear of the "+" button.
-            let r = EdgePanelLayout.discRadius * 0.945, a = CGFloat.pi * 3 / 4
+            // The disc at 135° (up-left), 0.75 of its radius (81 pt) from the centre: outside the record's waves (59.5 pt),
+            // inside the clear styles' rim and dark band, clear of the "+" button.
+            let r = EdgePanelLayout.discRadius * 0.75, a = CGFloat.pi * 3 / 4
             return NSRect(x: local.maxX + r * cos(a) - 2, y: local.midY + r * sin(a) - 2, width: 4, height: 4)
         }
         /// The sRGB pixels of `spot` (window points) in a saved picture.
@@ -984,43 +1220,131 @@ extension FeatureTests {
             func lum(_ c: NSColor) -> CGFloat { 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent }
             let g = lum(glass)
             let core = mean(Array(textPixels.sorted { abs(lum($0) - g) > abs(lum($1) - g) }.prefix(max(1, textPixels.count * 15 / 100))))
-            print(String(format: "CONTRAST %@ glass %@ (%@ %.0f,%.0f pt) text %@ %@ (%@ %.0f,%.0f pt) ratio=%.2f core %@ ratio=%.2f",
-                         name, hex(glass),
-                         model.section == nil ? "disc 135°" : model.section == .apps ? "apps title bar" : "card right side",
-                         spot.midX, spot.midY, what, hex(sample), "mean", text.midX, text.midY,
-                         DockPalette.contrast(sample, glass), hex(core), DockPalette.contrast(core, glass)))
+            print(String(format: "CONTRAST %@ glass=%@ text=%@ ratio=%.2f core=%.2f", name, hex(glass), hex(sample),
+                         DockPalette.contrast(sample, glass), DockPalette.contrast(core, glass)))
+            guard name.hasPrefix("lens-") else { return }
+            // The lens: the ink (the brightest 15% of the spot) against its own scrim (the darker half: the ground
+            // between the letters), the number the 4.5:1 goal is judged by.
+            let drawn = EdgeLensCapture.shared.live ? "" : " (fallback clearTinted: its own 0.32 scrim)"
+            func inkLine(_ pixels: [NSColor], _ what: String) {
+                // The ink (the brightest 15%) against the pixels right beside the glyphs (the darker half of the spot:
+                // the body under the glyph shadows).
+                let byLum = pixels.sorted { lum($0) > lum($1) }
+                let ink = mean(Array(byLum.prefix(max(1, byLum.count * 15 / 100))))
+                let ground = mean(Array(byLum.suffix(max(1, byLum.count / 2))))
+                print(String(format: "CONTRAST %@ %@ ink=%@ beside=%@ ratio=%.2f%@", name, what, hex(ink), hex(ground),
+                             DockPalette.contrast(ink, ground), drawn))
+            }
+            inkLine(textPixels, what)
+            guard name.hasPrefix("lens-white-") else { return }
+            if model.section == .spotify {
+                // Small secondary text: the songs field's placeholder ("Search songs or artists…"), right of its glyph.
+                let L = EdgePanelLayout.self, card = L.listFrame(window: local, card: model.cardSize)
+                let spot = NSRect(x: card.minX + L.spotifyPad + 26, y: card.maxY - L.spotifyPad - L.spotifySearchHeight / 2 - 5,
+                                  width: 80, height: 10)
+                inkLine(pixels(rep, spot), "secondary (songs field placeholder)")
+            } else {
+                print("CONTRAST \(name) secondary: none drawn at rest (the disc shows glyphs only)")
+            }
         }
+
+        // The comparison: the three glass styles over the tool's own backdrop window, right behind the whole panel.
         let backdrop = NSWindow(contentRect: edge.debugWindow?.frame ?? .zero, styleMask: .borderless, backing: .buffered, defer: false)
         backdrop.isReleasedWhenClosed = false
         backdrop.isOpaque = true
         backdrop.hasShadow = false
         backdrop.ignoresMouseEvents = true
-        backdrop.backgroundColor = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        // A layer-backed container with its own colour (white, near black), the vivid pattern as a subview over it.
+        let container = NSView(frame: NSRect(origin: .zero, size: backdrop.frame.size))
+        container.wantsLayer = true
+        let pattern = NSImageView(frame: container.bounds)
+        pattern.imageScaling = .scaleAxesIndependently
+        pattern.image = vividBackdrop(size: backdrop.frame.size)
+        container.addSubview(pattern)
+        backdrop.contentView = container
         if let panel = edge.debugWindow {
             backdrop.level = NSWindow.Level(rawValue: panel.level.rawValue - 1)
             backdrop.order(.below, relativeTo: panel.windowNumber)
         }
-
-        model.closeSearch()
-        model.toggle(.chats)
-        shot("w2-chats.png", model.section == .chats); measure("w2-chats.png")
-        model.tapManageApps()
-        shot("w3-apps.png", model.section == .apps); measure("w3-apps.png")
-        model.tapSpotify()
-        shot("w4-spotify-playing.png", model.section == .spotify); measure("w4-spotify-playing.png")
-        model.songsQuery = "mint"
-        shot("w5-songs-list.png", model.songsListShown); measure("w5-songs-list.png")
-        model.songsQuery = ""
-        model.section = nil
-        shot("w1-ring.png", model.section == nil && !model.searchOpen); measure("w1-ring.png")
-
-        backdrop.backgroundColor = NSColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1)
-        model.tapManageApps()
-        shot("g3-apps.png", model.section == .apps); measure("g3-apps.png")
-        model.tapSpotify()
-        shot("g4-spotify-playing.png", model.section == .spotify); measure("g4-spotify-playing.png")
+        print("edgeglasscheck samples: rest: text = the \"+\" glyph (10 × 10 pt), glass = the disc at 135°, 81 pt from its "
+              + "centre; card: text = the caption's left 90 pt, glass = the card's right side at mid height (14 to 30 pt in); "
+              + "core = the 15% of text pixels furthest from the glass (on white it may pick scrim pixels, not letters)")
+        // 7 ring items (Chats, Notes, five apps) and the playing fixture song.
+        if let last = model.apps.pinned.last, model.items.count > 7 { model.apps.unpin(last.bundleID) }
+        let backdrops: [(String, NSColor?)] = [("vivid", nil), ("white", NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)),
+                                               ("black", NSColor(srgbRed: 0.04, green: 0.04, blue: 0.05, alpha: 1))]
+        let lens = EdgeLensCapture.shared
+        // The mixed backdrop's white half (shown for `split` only).
+        let splitHalf = NSView(frame: NSRect(x: 0, y: 0, width: container.bounds.width / 2, height: container.bounds.height))
+        splitHalf.wantsLayer = true
+        splitHalf.layer?.backgroundColor = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1).cgColor
+        splitHalf.isHidden = true
+        container.addSubview(splitHalf)
+        /// The ink each lens surface chose for a lens picture (the card's or else the disc's smoothed body luminance).
+        func inkLine(_ file: String) {
+            guard file.hasPrefix("lens-") else { return }
+            let ink = EdgeLensInk.shared
+            func word(_ r: EdgeLensRegion) -> String { ink.dark[r] == nil ? "none" : (ink.dark[r] == true ? "dark" : "light") }
+            let luma = ink.smoothed[model.section == nil ? .disc : .card] ?? -1
+            print(String(format: "INK %@ disc=%@ card=%@ luma=%.3f", file, word(.disc), model.section == nil ? "none" : word(.card), luma))
+        }
+        /// Before a lens picture: a lens frame newer than `mark` (the backdrop just changed), or any frame (it did not).
+        func waitLens(_ label: String, newerThan mark: CFTimeInterval?) {
+            guard model.glassStyle == .lens, lens.permission else { return }
+            let ok = EdgeDockFixtures.waitUntil(2) { lens.frames > 0 && (mark.map { lens.lastFrameTime > $0 } ?? true) }
+            if !ok { print("edgeglasscheck \(label): no lens frame within 2 s (\(lens.decision))") }
+        }
+        for style in EdgeGlassStyle.allCases {
+            EdgeDockArt.glassStyle = style
+            model.glassStyle = style
+            model.objectWillChange.send()
+            if style == .lens {
+                spin(0.05) // the controller starts the stream on the next turn of the run loop
+                if !CGPreflightScreenCaptureAccess() {
+                    print("LENS permission=false (the tool never asks; the pictures show the fallback, clearTinted)")
+                }
+            }
+            // The lens also over a mixed backdrop: the left half white, the right half black.
+            let these = style == .lens ? backdrops + [("split", nil)] : backdrops
+            for (name, colour) in these {
+                splitHalf.isHidden = name != "split"
+                if name == "split" {
+                    pattern.isHidden = true
+                    container.layer?.backgroundColor = NSColor(srgbRed: 0.04, green: 0.04, blue: 0.05, alpha: 1).cgColor
+                } else if let colour {
+                    pattern.isHidden = true
+                    container.layer?.backgroundColor = colour.cgColor
+                } else {
+                    pattern.isHidden = false
+                }
+                let mark = CACurrentMediaTime()
+                model.section = nil
+                let rest = "\(style.rawValue)-\(name)-rest.png"
+                waitLens(rest, newerThan: mark)
+                if style == .lens { spin(0.3) } // the ink settles (5 samples a second, smoothed over 0.3; `shot` waits 0.6 s more)
+                shot(rest, model.section == nil && model.items.count == 7 && model.track?.isPlaying == true); measure(rest)
+                inkLine(rest)
+                model.tapSpotify()
+                let card = "\(style.rawValue)-\(name)-card.png"
+                waitLens(card, newerThan: nil)
+                if style == .lens { spin(0.3) }
+                shot(card, model.section == .spotify); measure(card)
+                inkLine(card)
+            }
+        }
+        func ms(_ t: TimeInterval?) -> String { t.map { String(format: "%.1f", $0 * 1000) } ?? "none" }
+        print("LENS shader=\(EdgeLensRenderer.shared.compileError ?? (EdgeLensRenderer.shared.device == nil ? "no Metal device" : "ok")) "
+              + "frames=\(lens.frames) firstFrameDelay=\(ms(lens.firstPresentDelay)) meanDelay=\(ms(lens.meanPresentDelay)) "
+              + "permission=\(CGPreflightScreenCaptureAccess()) split=\(EdgeLensCapture.rimOnly ? "rim-only" : "full") "
+              + "startToFirstFrame=\(ms(lens.startToFirstFrame)) decision=\(lens.decision)")
         backdrop.close()
+        model.section = nil
+        composeSheet(out)
+        let cardFrame = EdgePanelLayout.listFrame(window: local, card: EdgePanelLayout.spotifySize)
+        composeLensCompare(out, card: CGRect(x: cardFrame.minX, y: local.height - cardFrame.maxY, width: cardFrame.width,
+                                             height: cardFrame.height), windowWidth: local.width)
 
+        EdgeLensCapture.shared.stop()
         edge.hide(leaveZoneFirst: true)
         spin(0.2)
         withExtendedLifetime(owners) {}
@@ -1029,4 +1353,10 @@ extension FeatureTests {
         print(String(format: "EDGEGLASSCHECK %@ in %.1f s", missing.isEmpty ? "DONE" : "MISSING \(missing)", Date().timeIntervalSince(started)))
         exit(0)
     }
+}
+
+/// Counts URL opens (Spotify's search) for the mini window's play tests.
+private final class CountingURLOpener: URLOpening {
+    private(set) var count = 0
+    func open(_ url: URL) { count += 1 }
 }

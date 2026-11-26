@@ -168,25 +168,8 @@ extension FeatureTests {
         let refused = bad.run(A(type: "routine_run", title: "morning"))
         check("routine: one unknown step means nothing runs", !refused.ok && refused.line.contains("step 2 “dance wildly”") && log.isEmpty)
 
-        // MARK: Haiku fallback
-        func gate(_ t: String) -> Bool { ActionCommand.looksLikeAction(t, context: ctx) }
-        check("fallback: only an action verb plus a target may call the model",
-              gate("add the note taking app to the dock thing") && gate("play some calm music") && gate("open the notion thing")
-              && gate("start the study time thing") && gate("set an alarm for 5 minutes"))
-        check("fallback: questions and chat follow-ups never wait for the model",
-              !gate("what is a dock") && !gate("explain supply and demand") && !gate("how do I add an app to the dock")
-              && !gate("put this in simpler words") && !gate("add an example") && !gate("start over") && !gate("add 5 and 7"))
         check("actions: 'add Notion to my doc' (dictation) is the dock, 'add this to my doc' is not",
               act("add Notion to my doc") == A(type: "dock_add", title: "notion") && act("add this to my doc") == nil)
-        check("fallback: a fixed command line in the reply becomes the action",
-              ActionCommand.fromFallback("add Notion to the dock", context: ctx) == A(type: "dock_add", title: "notion")
-              && ActionCommand.fromFallback("open Safari\n", context: ctx)?.key == "com.apple.Safari")
-        check("fallback: NONE, a script or anything else is refused",
-              ActionCommand.fromFallback("NONE", context: ctx) == nil && ActionCommand.fromFallback("do shell script \"rm -rf ~\"", context: ctx) == nil
-              && ActionCommand.fromFallback("tell application \"Safari\" to quit", context: ctx) == nil && ActionCommand.fromFallback("", context: ctx) == nil
-              && ActionCommand.fromFallback("open Photoshop", context: ctx) == nil)
-        check("fallback: the prompt lists the apps and the request", ActionCommand.fallbackPrompt("open my notes app", context: ctx).contains("APPS: Notion, Calendar")
-              && ActionCommand.fallbackPrompt("open my notes app", context: ctx).hasSuffix("REQUEST: open my notes app"))
 
         // MARK: Library Assistant (the same list)
         check("assistant: quit needs one confirmation; the other actions are safe",

@@ -304,13 +304,28 @@ final class SpotifyService: ObservableObject {
     private var observer: NSObjectProtocol?
     private var coverURL: URL?
     private var coverPalette: DockPalette?
+    /// The beat behind the strings round the record (one for the disc and the mini window).
+    let beat: SpotifyBeat
+    /// The dock shows (between `start` and `stop`).
+    private(set) var shown = false
+    private var motionObserver: NSObjectProtocol?
 
-    init(backend: SpotifyBackend = LiveSpotifyBackend(), loader: DockImageLoader = LiveDockImageLoader()) {
+    init(backend: SpotifyBackend = LiveSpotifyBackend(), loader: DockImageLoader = LiveDockImageLoader(),
+         beat: SpotifyBeat = SpotifyBeat()) {
         self.backend = backend
         self.loader = loader
+        self.beat = beat
     }
 
     func start() {
+        shown = true
+        updateBeat()
+        if motionObserver == nil {
+            motionObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.updateBeat() // Reduce Motion on: the tap stops; off: it may start
+            }
+        }
         refresh()
         if observer == nil {
             observer = DistributedNotificationCenter.default().addObserver(
@@ -325,6 +340,20 @@ final class SpotifyService: ObservableObject {
         timer?.invalidate(); timer = nil
         if let observer { DistributedNotificationCenter.default().removeObserver(observer) }
         observer = nil
+        if let motionObserver { NSWorkspace.shared.notificationCenter.removeObserver(motionObserver) }
+        motionObserver = nil
+        shown = false
+        updateBeat()
+    }
+
+    /// The beat listens only while the dock shows, Spotify runs and a song plays (and motion is on).
+    private func updateBeat() {
+        var playing = false, song: String?
+        if case .track(let t) = state {
+            playing = t.isPlaying
+            song = t.uri ?? (t.title + "\u{1F}" + t.artist)
+        }
+        beat.update(shown: shown, running: state != .notRunning, playing: playing, song: song)
     }
 
     func refresh() {
@@ -353,6 +382,7 @@ final class SpotifyService: ObservableObject {
 
     private func apply(_ new: SpotifyState) {
         if state != new { state = new }
+        updateBeat()
         var url: URL?
         if case .track(let t) = new { url = t.artworkURL }
         if url != coverURL {

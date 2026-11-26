@@ -162,24 +162,31 @@ enum EdgePanelLayout {
     static let pad: CGFloat = 6
     static let choiceHeight: CGFloat = 40
     static let boxWidth: CGFloat = 156
-    static let listWidth: CGFloat = 284
+    /// Every card's width (the Stitch card: 256 pt).
+    static let listWidth: CGFloat = 256
     static let headerHeight: CGFloat = 44
     static let rowHeight: CGFloat = 48
     static let lineHeight: CGFloat = 40
     static let maxRows = 8
+    /// Every card's corner radius (Stitch: 15.5 pt).
+    static let cardRadius: CGFloat = 15.5
+    /// The bridge: from a card's right edge to the dock's left edge (the leftmost point a ring item can reach, the middle
+    /// item's edge for an odd count). Stitch: 171 pt.
+    static let cardGap: CGFloat = 171
 
-    /// The glass half-disc: flush with the screen edge, its round side to the left.
-    static let discRadius: CGFloat = 110
+    /// The glass disc: its centre on the screen edge, its round side to the left (Stitch: 108 pt).
+    static let discRadius: CGFloat = 108
     static let itemSize: CGFloat = 44
-    /// From the disc's rim to each ring item's edge (the same for every item).
-    static let ringGap: CGFloat = 12
-    /// The thin ring outside the disc, concentric with it. The round items sit on it: disc + gap + half an item.
-    static var ringRadius: CGFloat { discRadius + ringGap + itemSize / 2 }
+    /// The ring items sit on a circle of this radius whose centre is `ringOffset` LEFT of the disc's centre (Stitch).
+    static let ringRadius: CGFloat = 179.5
+    static let ringOffset: CGFloat = 13
+    /// The thin ring line: the same radius, centred on the disc's centre.
+    static var ringLineRadius: CGFloat { ringRadius }
     /// The least clear space between two neighbouring items' edges.
     static let minItemGap: CGFloat = 8
-    /// The angle between two neighbouring items on the ring, in degrees (a 55.0 pt chord on 144 pt: 11 pt clear between
-    /// 44 pt items; 20.8° is the least for `minItemGap`, and 8 items at 22° keep the end ones clear of the screen edge).
-    static let itemStep: CGFloat = 22
+    /// The angle between two neighbouring items on the ring, in degrees (a 66.0 pt chord on 179.5 pt: 22 pt clear
+    /// between 44 pt items, as in Stitch).
+    static let itemStep: CGFloat = 21.2
     /// An item under the pointer grows to 1.08 and rises 2 pt (the dock keeps room for it).
     static let liftScale: CGFloat = 1.08
     static let liftRise: CGFloat = 2
@@ -187,23 +194,26 @@ enum EdgePanelLayout {
     static let glassBlend: CGFloat = 6
     /// Chats, Notes and up to `DockAppStore.maxPinned` apps.
     static let maxItems = 2 + DockAppStore.maxPinned
-    /// The Spotify cover inside the disc (half of it behind the screen edge) and the small "+" button.
-    static let coverSize: CGFloat = 72
-    static let plusSize: CGFloat = 28
+    /// The record inside the disc at rest, centred on the disc's centre (half of it behind the screen edge; Stitch 76.6 pt),
+    /// and the disc's three small round buttons (Stitch 30 pt).
+    static let coverSize: CGFloat = 76.6
+    /// The calm waves' outer edge round the resting record (Stitch: about 119 pt across).
+    static let discWavesRadius: CGFloat = 59.5
+    static let plusSize: CGFloat = 30
     /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included).
     static let appIconSize: CGFloat = 40
-    /// From the list card's right side to the screen edge: the ring, half an item and the gap.
-    static var listInset: CGFloat { ringRadius + itemSize / 2 + gap }
+    /// From the card's right side to the screen edge: the dock and the bridge.
+    static var listInset: CGFloat { dockSize.width + cardGap }
 
     /// The dock: the disc, the ring and every item on it, lifted ones included (fixed, sized for `maxItems`). The
-    /// circles' centre is the middle of its right side.
+    /// disc's centre is the middle of its right side.
     static var dockSize: CGSize {
         let half = (CGFloat(maxItems - 1) / 2 * itemStep) * .pi / 180
         let lifted = itemSize / 2 * liftScale
         let h = max(discRadius, ringRadius * sin(half) + lifted + liftRise)
-        // The width stops at the leftmost item's edge, so a card sits `gap` from it (a lifted item's 1.76 pt more is in
-        // the window's slack and in `hoverFrame`).
-        return CGSize(width: ringRadius + itemSize / 2, height: h.rounded(.up) * 2)
+        // The width stops at the leftmost item's edge (the ring's leftmost point and half an item; a lifted item's
+        // 1.76 pt more is in the window's slack and in `hoverFrame`).
+        return CGSize(width: ringOffset + ringRadius + itemSize / 2, height: h.rounded(.up) * 2)
     }
 
     /// Stage one, the dock (the name is from when it was a box).
@@ -214,7 +224,7 @@ enum EdgePanelLayout {
     static func itemCentre(_ index: Int, of count: Int) -> CGPoint {
         let s = dockSize
         let a = (CGFloat(index) - CGFloat(count - 1) / 2) * itemStep * .pi / 180
-        return CGPoint(x: s.width - ringRadius * cos(a), y: s.height / 2 + ringRadius * sin(a))
+        return CGPoint(x: s.width - ringOffset - ringRadius * cos(a), y: s.height / 2 + ringRadius * sin(a))
     }
 
     /// Every item's centre for `count` items.
@@ -234,50 +244,68 @@ enum EdgePanelLayout {
     /// The cover's centre (on the screen edge, in the middle) and the "+" button's centre, from the dock's top-left (y down).
     static var coverCentre: CGPoint { CGPoint(x: dockSize.width, y: dockSize.height / 2) }
 
-    /// The disc's three small buttons ("+", search, collapse): one column with `discButtonGap` between their edges, centred
-    /// on the disc's vertical centre, the top and bottom ones `discButtonRim` in from the disc's rim (left of the record).
-    static let discButtonGap: CGFloat = 12
-    static let discButtonRim: CGFloat = 14
-    static var discButtonPitch: CGFloat { plusSize + discButtonGap }
-    /// From the screen edge to the column: the outer buttons' centres sit on a circle `discButtonRim` + half a button
-    /// inside the rim (about 71.6 pt).
-    static var discButtonInset: CGFloat {
-        let r = discRadius - discButtonRim - plusSize / 2
-        return (r * r - discButtonPitch * discButtonPitch).squareRoot()
-    }
+    /// The disc's three small buttons ("+", search, collapse): on a circle of `discButtonRadius` about the disc's centre,
+    /// so they straddle the rim (centres 9 pt outside it), `discButtonPitch` apart centre to centre, the middle one on the
+    /// horizontal centre line (Stitch).
+    static let discButtonRadius: CGFloat = 117
+    static let discButtonPitch: CGFloat = 41.5
+    /// The angle between two neighbouring buttons about the disc's centre (radians; the pitch is the chord).
+    static var discButtonStep: CGFloat { 2 * asin(discButtonPitch / (2 * discButtonRadius)) }
     static func discButtonCentre(_ row: Int) -> CGPoint {
-        CGPoint(x: dockSize.width - discButtonInset, y: dockSize.height / 2 + CGFloat(row - 1) * discButtonPitch)
+        let a = CGFloat(row - 1) * discButtonStep
+        return CGPoint(x: dockSize.width - discButtonRadius * cos(a), y: dockSize.height / 2 + discButtonRadius * sin(a))
     }
     static var plusCentre: CGPoint { discButtonCentre(0) }
     static var searchCentre: CGPoint { discButtonCentre(1) }
     static var collapseCentre: CGPoint { discButtonCentre(2) }
-    /// The search field in the disc (it takes the search button's row; the record hides while it shows).
+    /// The search field in the disc: on the centre line, from 6 pt right of the search button to 8 pt from the screen
+    /// edge (the record hides while it shows).
     static var searchFieldFrame: CGRect {
-        CGRect(x: dockSize.width - 100, y: dockSize.height / 2 - 14, width: 92, height: 28)
+        let left = searchCentre.x + plusSize / 2 + 6
+        return CGRect(x: left, y: dockSize.height / 2 - 14, width: dockSize.width - 8 - left, height: 28)
     }
     /// The "No app" line under the field.
     static var noMatchCentre: CGPoint { CGPoint(x: searchFieldFrame.midX, y: dockSize.height / 2 + 30) }
+    /// The timer chip (22 pt high, about 60 pt wide): low in the disc by the screen edge, below the record's waves and
+    /// right of the bottom button.
+    static let timerChipHeight: CGFloat = 22
+    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 32, y: dockSize.height / 2 + 77) }
+    /// The chip's frame (about 60 pt wide), from the dock's top-left (y down).
+    static var timerChipFrame: CGRect {
+        CGRect(x: timerChipCentre.x - 30, y: timerChipCentre.y - timerChipHeight / 2, width: 60, height: timerChipHeight)
+    }
     /// The small Spotify glyph button (Spotify open, but Merlin may not control it), in the cover's place.
-    /// The timer chip: low in the disc, by the screen edge, below the button column and the record.
-    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 38, y: dockSize.height / 2 + discRadius - 36) }
     static var glyphCentre: CGPoint { CGPoint(x: dockSize.width - 26, y: dockSize.height / 2) }
 
-    /// The Spotify mini player, one size in every state, top to bottom with `spotifySpacing` between rows and
-    /// `spotifyPad` around: the search row, the record in its wave orb, the title and artist (or the status line), the
-    /// five round buttons and "Open Spotify".
-    static let spotifyPad: CGFloat = 14
-    static let spotifySpacing: CGFloat = 10
-    static let spotifySearchHeight: CGFloat = 30
-    static let spotifyRecord: CGFloat = 100
-    /// The orb the card's three waves are drawn in (the outer wave at 0.84 of it, about 1.45 × the record's radius).
-    static let spotifyOrbRadius: CGFloat = 86
-    static let spotifyTextHeight: CGFloat = 46
-    static let spotifyButtonsHeight: CGFloat = 44
-    static let spotifyOpenHeight: CGFloat = 22
-    static var spotifySize: CGSize {
-        let rows = spotifySearchHeight + spotifyOrbRadius * 2 + spotifyTextHeight + spotifyButtonsHeight + spotifyOpenHeight
-        return CGSize(width: listWidth, height: rows + spotifySpacing * 4 + spotifyPad * 2)
-    }
+    /// The Spotify mini player (Stitch), one size in every state, top to bottom: `spotifyPad`, the search field
+    /// (`spotifySearchWidth` × `spotifySearchHeight`) with the round star button `spotifyStarGap` to its right,
+    /// `spotifyRecordGap`, the record (`spotifyRecord`, its waves out to `spotifyOrbRadius` - 1), the caption line
+    /// (`spotifyCaptionHeight`, `spotifyCaptionToButtons` above the buttons), the five round buttons (the play button
+    /// `spotifyPlaySize`) and `spotifyPad`. The record-to-buttons gap is what is left (38.9 pt; Stitch "about 40").
+    static let spotifyPad: CGFloat = 19.7
+    static let spotifySearchHeight: CGFloat = 33
+    static let spotifySearchWidth: CGFloat = 184
+    static let spotifyStarSize: CGFloat = 29
+    static let spotifyStarGap: CGFloat = 3.7
+    static let spotifyRecordGap: CGFloat = 39
+    static let spotifyRecord: CGFloat = 115
+    /// The orb the card's three beat strings are drawn in (`BeatStrings.Place.card` keeps them inside it).
+    static let spotifyOrbRadius: CGFloat = 77
+    static let spotifyButtonSize: CGFloat = 32.3
+    static let spotifyPlaySize: CGFloat = 38.7
+    static let spotifyButtonGap: CGFloat = 6.2
+    /// The caption line sits low (2 pt above the buttons), so the strings have room to jump on a beat.
+    static let spotifyCaptionHeight: CGFloat = 12
+    static let spotifyCaptionToButtons: CGFloat = 2
+    static let spotifyHeight: CGFloat = 304
+    static var spotifySize: CGSize { CGSize(width: listWidth, height: spotifyHeight) }
+    /// From the card's top: the record's centre, the buttons' top (the play button's), the caption's top.
+    static var spotifyRecordCentreY: CGFloat { spotifyPad + spotifySearchHeight + spotifyRecordGap + spotifyRecord / 2 }
+    static var spotifyButtonsTop: CGFloat { spotifyHeight - spotifyPad - spotifyPlaySize }
+    static var spotifyRecordToButtons: CGFloat { spotifyButtonsTop - spotifyRecordCentreY - spotifyRecord / 2 }
+    static var spotifyCaptionTop: CGFloat { spotifyButtonsTop - spotifyCaptionToButtons - spotifyCaptionHeight }
+    /// The five buttons' row width: four small, the play one, four gaps.
+    static var spotifyButtonsWidth: CGFloat { 4 * spotifyButtonSize + spotifyPlaySize + 4 * spotifyButtonGap }
     /// The add/remove card: the header and a scrolling list of `appsRows` visible rows.
     static let appsRowHeight: CGFloat = 44
     static let appsRows = 7
@@ -294,7 +322,8 @@ enum EdgePanelLayout {
     static var maxCardHeight: CGFloat { listSize(rows: maxRows, newNoteRow: true).height }
 
     static var windowSize: CGSize {
-        CGSize(width: listWidth + listInset + slack, height: max(maxCardHeight, dockSize.height) + slack * 2)
+        // Whole points: a 1x screen cannot place half a point (the content is trailing-aligned, so the extra is slack).
+        CGSize(width: (listWidth + listInset + slack).rounded(.up), height: (max(maxCardHeight, dockSize.height) + slack * 2).rounded(.up))
     }
 
     /// The window: right edge on the screen's right edge, centred on the hot zone.
@@ -590,21 +619,33 @@ final class EdgePanelModel: ObservableObject {
         urlOpener.open(url)
     }
 
-    /// Return in the songs field: plays the first result; with no song match, opens Spotify's search for the query.
+    /// The line above the "Search Spotify for …" row after Return with no song match.
+    static let notInSongs = "Not in your songs yet."
+
+    /// Return in the songs field: plays the first result. With no song match it only says so (never opens Spotify:
+    /// only a click on the "Search Spotify for …" row or on the arrow may bring Spotify forward).
     func submitSongsSearch() {
         guard songsListShown else { return }
-        if let first = songsVisible.first { tapSong(first) } else { searchSpotify() }
+        if let first = songsVisible.first {
+            tapSong(first)
+        } else if SpotifySearch.url(for: songsQuery) != nil {
+            songsNotice = Self.notInSongs
+        }
     }
 
-    /// A row: plays that song, only while Spotify is open (never launches it). The query and the filter stay.
+    /// A row: plays that song in the background (`play track` through Apple Events, no `activate`), only while Spotify
+    /// is open (never launches it). The dock and the card stay; the query and the star filter clear, so the player shows
+    /// the new song.
     func tapSong(_ song: SpotifySong) {
         guard SpotifyTrackURI.isValid(song.uri) else { return }
         guard spotify.state != .notRunning else {
             songsNotice = "Spotify is not open."
             return
         }
-        songsNotice = nil
         spotify.play(song.uri)
+        songsQuery = ""
+        songsStarredOnly = false
+        songsNotice = nil
     }
 
     func tapSongsStarFilter() { songsStarredOnly.toggle() }
@@ -663,6 +704,8 @@ final class EdgePanelModel: ObservableObject {
     @Published var notes: [NoteRow] = []
     /// Drives the slide in and out.
     @Published var shown = false
+    /// The glass look (from `EdgeDockArt.glassStyle`, set once at launch; the capture tool changes both).
+    @Published var glassStyle: EdgeGlassStyle = EdgeDockArt.glassStyle
     /// The pointer is over the box (it rises a little).
     @Published var hoveringBox = false
 
@@ -772,11 +815,19 @@ final class EdgePanelModel: ObservableObject {
 struct EdgePanelView: View {
     @ObservedObject var model: EdgePanelModel
     var framed = true
+    /// Whether the lens can draw now (its fallback is `clearTinted`).
+    @ObservedObject private var lens = EdgeLensCapture.shared
 
-    private var radius: CGFloat { Theme.Radius.container }
+    private var radius: CGFloat { EdgePanelLayout.cardRadius }
+
+    /// The style drawn: the chosen one, or `clearTinted` while the lens falls back.
+    private var style: EdgeGlassStyle {
+        model.glassStyle == .lens && !lens.live ? .clearTinted : model.glassStyle
+    }
 
     var body: some View {
-        let stack = HStack(alignment: .center, spacing: EdgePanelLayout.gap) {
+        // The card's right edge is `cardGap` from the dock's left edge: the same number `listFrame` uses.
+        let stack = HStack(alignment: .center, spacing: EdgePanelLayout.cardGap) {
             if let section = model.section {
                 listCard(section)
                     .transition(Motion.reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .trailing).combined(with: .opacity))
@@ -789,14 +840,17 @@ struct EdgePanelView: View {
         // The flat path (pictures, Reduce Transparency, `Motion.still`) draws no glass and needs none.
         // Every surface's content is its glass view's own content (`edgeGlass`), so the container blends shapes only.
         let panel = Group {
-            if EdgeDockArt.flat || !EdgeDockArt.glassContainer {
-                stack
+            if EdgeDockArt.flat || !EdgeDockArt.glassContainer || style == .lens {
+                stack // the lens draws no system glass, so no container
             } else {
                 GlassEffectContainer(spacing: EdgePanelLayout.glassBlend) { stack }
             }
         }
         .offset(x: model.shown || Motion.reduceMotion ? 0 : 16)
         .opacity(model.shown ? 1 : 0)
+        // The glass look (`EdgeGlassStyle`): read here and passed down, and a new style redraws the whole panel.
+        .environment(\.edgeGlassStyle, style)
+        .id(style)
 
         if framed {
             let w = EdgePanelLayout.windowSize
@@ -878,6 +932,7 @@ private struct EdgeListView: View {
             Text(title)
                 .font(.geist(13, on ? .semibold : .medium))
                 .foregroundStyle(on ? HierarchicalShapeStyle.primary : .secondary)
+                .edgeScrim(2, lensOnly: true)
                 .padding(.horizontal, 8)
                 .frame(height: 28)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.chip, style: .continuous)
@@ -942,6 +997,7 @@ struct EdgeQuietLine: View {
     let text: String
     var body: some View {
         Text(text).font(.geist(13)).foregroundStyle(.secondary)
+            .edgeScrim(3, lensOnly: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, EdgePanelLayout.pad + 10)
             .frame(height: EdgePanelLayout.lineHeight)
@@ -972,6 +1028,7 @@ private struct EdgeChatRowView: View {
                         Text(row.title).font(.geist(13, .medium)).foregroundStyle(.primary).lineLimit(1)
                         Text(row.subtitle).font(.geist(12)).foregroundStyle(statusColor).lineLimit(1)
                     }
+                    .edgeScrim(3, lensOnly: true)
                     Spacer(minLength: trailingRoom)
                 }
                 .padding(.leading, 8)
@@ -1022,6 +1079,7 @@ private struct EdgeNoteRowView: View {
                     Text(row.title).font(.geist(13, .medium)).foregroundStyle(.primary).lineLimit(1)
                     Text(row.detail).font(.geist(12)).foregroundStyle(.secondary).lineLimit(1)
                 }
+                .edgeScrim(3, lensOnly: true)
                 Spacer(minLength: 8)
             }
             .padding(.leading, 8)
@@ -1046,6 +1104,7 @@ private struct EdgeNewNoteRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "plus").font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).frame(width: 20)
                 Text("New note").font(.geist(13, .medium)).foregroundStyle(.secondary)
+                    .edgeScrim(3, lensOnly: true)
                 Spacer()
             }
             .padding(.leading, 8)
@@ -1305,6 +1364,8 @@ final class EdgePanelController {
     /// The screen the panel is on (its frame).
     private var screen: NSRect = .zero
     private var dotState: EdgeDotState = .absent
+    /// A style change on a shown panel starts or stops the lens stream.
+    private var lensStyleWatch: AnyCancellable?
 
     /// Point to ask (and anything else the app knows about) stops the panel from showing.
     var isBlocked: () -> Bool = { false }
@@ -1327,6 +1388,9 @@ final class EdgePanelController {
         }
         model.onStar = { [weak self] id in self?.onStar?(id) }
         model.onDelete = { [weak self] id in self?.onDelete?(id) }
+        lensStyleWatch = model.$glassStyle.dropFirst().removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.syncLens() } // after the new value has landed
+        }
         model.onOpenNote = { [weak self] id in
             self?.hide(leaveZoneFirst: true)
             self?.openNote(id)
@@ -1487,6 +1551,13 @@ final class EdgePanelController {
         installMonitors()
         dotWindow?.hide()
         if drivesSpotify { model.spotify.start() }
+        syncLens()
+    }
+
+    /// The lens stream runs only while the dock shows in the `lens` style (`EdgeLensPolicy.mayRun`); a new screen or
+    /// rectangle restarts it.
+    private func syncLens() {
+        EdgeLensCapture.shared.sync(requested: model.glassStyle, shown: reveal.visible && window?.isVisible == true, window: window)
     }
 
     /// The music is read only while the panel shows, and the live service only in the app (never in a test).
@@ -1501,6 +1572,7 @@ final class EdgePanelController {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.reveal.visible else { return }
             self.window?.orderOut(nil)
+            self.syncLens() // stops the stream (after the fade, so the lens keeps its look while it fades)
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) { self.model.section = nil; self.model.hoveringBox = false }

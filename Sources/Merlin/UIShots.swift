@@ -179,6 +179,27 @@ enum UIShots {
                                   ("edge-17-cover-blue", EdgeDockFixtures.coverBlue())] {
                 shot(name, margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.spotify, music: true, apps: 6, cover: image)).clipped(), pad: 0))
             }
+            // The beat strings at their widest: the mini window (and the disc) pinned to a strong kick (level 0.9, bass
+            // 0.9, kick 1), one fixed frame from a fixed seed. No tap: the live source is blocked in picture runs.
+            let kick = edgeModel(.spotify, music: true)
+            kick.spotify.beat.pinned = BeatSample(level: 0.9, bass: 0.9, kick: 1)
+            shot("edge-18-strings-kick", margin: 0, edgeWall(mode, EdgePanelView(model: kick).clipped(), pad: 0))
+
+            // Round five, against the Stitch pictures: the whole window, 7 ring items (Chats, Notes, five apps with their
+            // real icons). At rest with the fixture song PAUSED (the strings are three still circles); the Spotify card
+            // open with the song playing (the disc is empty, the record is in the card); and at rest playing, pinned to a
+            // kick (one fixed frame).
+            if mode.dark {
+                var paused = EdgeDockFixtures.track
+                paused.isPlaying = false
+                shot("edge-19-stitch-rest", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(nil, music: true,
+                    spotify: .track(paused), apps: 5)).clipped(), pad: 0))
+                shot("edge-20-stitch-card", margin: 0, edgeWall(mode, EdgePanelView(model: edgeModel(.spotify, music: true,
+                    apps: 5)).clipped(), pad: 0))
+                let restKick = edgeModel(nil, music: true, apps: 5)
+                restKick.spotify.beat.pinned = BeatSample(level: 0.6, bass: 0.6, kick: 1)
+                shot("edge-21-stitch-rest-kick", margin: 0, edgeWall(mode, EdgePanelView(model: restKick).clipped(), pad: 0))
+            }
 
             // The Assistant's button up close: in the Library's sidebar (resting, open, working) and in the settings list.
             shot("assistant-button", margin: 20, HStack(alignment: .top, spacing: 20) {
