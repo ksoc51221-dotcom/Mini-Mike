@@ -728,6 +728,8 @@ final class EdgePanelModel: ObservableObject {
     var onNewNote: (() -> Void)?
     /// After an app on the ring opened (the controller hides the panel).
     var onOpenApp: ((DockApp) -> Void)?
+    /// A messaging app's icon (set by `MessagingCardController`; nil in tests).
+    var onChat: ((MessagingService) -> Void)?
     /// The collapse button in the disc (the controller hides the panel).
     var onCollapse: (() -> Void)?
 
@@ -778,6 +780,7 @@ final class EdgePanelModel: ObservableObject {
     func tapApp(_ app: DockApp) {
         releaseKeyboard()
         if app.bundleID == LiveSpotifyBackend.bundleID { return tapSpotify() }
+        if let chat = MessagingService.of(bundleID: app.bundleID), let onChat { return onChat(chat) }
         apps.open(app)
         onOpenApp?(app)
     }
@@ -1442,6 +1445,7 @@ final class EdgePanelController {
     func start() {
         guard !started else { return }
         started = true
+        MessagingCardController.shared.attach(model) { [weak self] in EdgePanelLayout.windowFrame(screen: self?.screen ?? .zero) }
         refreshZones()
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                 object: nil, queue: .main) { [weak self] _ in
@@ -1524,7 +1528,7 @@ final class EdgePanelController {
         let screens = NSScreen.screens.map(\.frame)
         let inZone = EdgeGeometry.inZone(p, screens: screens)
         // While search is open the dock stays, wherever the pointer goes (it may leave mid-typing).
-        let over = reveal.visible && (model.wantsKeyboard || hoverFrame.insetBy(dx: -6, dy: -6).contains(p))
+        let over = reveal.visible && (model.wantsKeyboard || MessagingCardController.shared.holdsDock || hoverFrame.insetBy(dx: -6, dy: -6).contains(p))
         let blocked = !reveal.visible && inZone && liveBlocked(at: p, screens: screens)
         let stop = reveal.visible && interrupted
         let now = ProcessInfo.processInfo.systemUptime
@@ -1689,6 +1693,7 @@ final class EdgePanelController {
     }
 
     private func outside(_ e: NSEvent) {
+        if MessagingCardController.shared.keeps(e) { return }
         if e.type == .keyDown {
             if e.keyCode == 53, reveal.escape() == .hide { dismiss() }
         } else if !hoverFrame.contains(NSEvent.mouseLocation), reveal.clickOutside() == .hide {

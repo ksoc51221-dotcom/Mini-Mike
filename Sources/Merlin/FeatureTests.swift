@@ -26,6 +26,7 @@ enum FeatureTests {
         starChecks(check)
         mathChecks(check)
         dockAppsChecks(check)
+        messagingChecks(check)
         migrationChecks(check)
         assistantChecks(check)
         keybindChecks(check)
