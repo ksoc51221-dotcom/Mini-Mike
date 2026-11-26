@@ -25,8 +25,8 @@ enum TeachBriefs {
     # Look (dark, 3Blue1Brown style)
     - Canvas: <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540" role="img" \
     aria-labelledby="v-title v-desc">. First child <title id="v-title">, then <desc id="v-desc"> (one sentence about the content).
-    - First drawn element: a full-size background <rect width="960" height="540" fill="#0f1117"/>.
-    - Colours (only these): background #0f1117; main strokes and key shapes blue #58C4DD; the 1–2 focal elements \
+    - First drawn element: a full-size background <rect width="960" height="540" fill="#17181B"/>.
+    - Colours (only these): background #17181B; main strokes and key shapes blue #58C4DD; the 1–2 focal elements \
     yellow #FFFF00 or #F4D03F; text white #FFFFFF; secondary text and default arrows grey #A0A7B4; a second category \
     green #83C167; a warning or opposing force red #FC6255. Fills: the same colours at fill-opacity 0.12–0.2, never solid bright fills.
     - Font: font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif" on the root <svg>. \
@@ -42,7 +42,7 @@ enum TeachBriefs {
     (diagonal is fine for physical vectors such as forces or velocities).
     - Arrowheads: define one <marker> per colour in <defs> with id like "arrow-blue"; reference with \
     marker-end="url(#arrow-blue)". Only "#…" references are allowed anywhere.
-    - Arrow labels: 1–3 words, on an opaque rect filled #0f1117, 6–10 px clear of the stroke, never on top of the line.
+    - Arrow labels: 1–3 words, on an opaque rect filled #17181B, 6–10 px clear of the stroke, never on top of the line.
     - Never overlap two strokes; offset parallel routes by at least 12 px. No text over shapes unless it is the shape's own label.
     - Maths: write plain Unicode (x², Δv, θ, ∫, ≈, →, ½). No LaTeX, no MathML.
     - A legend, if needed, goes as one horizontal strip along the bottom, not inside the drawing.
@@ -71,9 +71,9 @@ enum TeachBriefs {
         <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
           <path d="M0 0 L10 5 L0 10 z" fill="#58C4DD"/></marker>
       </defs>
-      <rect width="960" height="540" fill="#0f1117"/>
+      <rect width="960" height="540" fill="#17181B"/>
       <line x1="300" y1="270" x2="560" y2="270" stroke="#58C4DD" stroke-width="3" marker-end="url(#arrow-blue)"/>
-      <rect x="388" y="250" width="84" height="24" fill="#0f1117"/>
+      <rect x="388" y="250" width="84" height="24" fill="#17181B"/>
       <text x="430" y="267" fill="#A0A7B4" font-size="14" text-anchor="middle">ADDS SPEED</text>
       <rect x="120" y="224" width="180" height="92" rx="8" fill="#58C4DD" fill-opacity="0.15" stroke="#58C4DD" stroke-width="2"/>
       <text x="210" y="276" fill="#FFFFFF" font-size="20" font-weight="600" text-anchor="middle">Gravity</text>
@@ -120,7 +120,7 @@ enum TeachBriefs {
         - Total length 15–40 seconds (sum of run_time and wait). Keep it simple enough to render in under a minute at low quality.
 
         # Look (3Blue1Brown)
-        - Background: the default dark background (or self.camera.background_color = "#0f1117").
+        - Background: the default dark background (or self.camera.background_color = "#17181B").
         - Colours: BLUE_C or "#58C4DD" for the main objects; YELLOW ("#FFFF00") or "#F4D03F" for the one thing to watch; \
         WHITE text; GREY_B for secondary parts; GREEN_C and RED_C only for a second category or an opposing quantity.
         - Text: Text("...", font_size=36) for labels (28–44), font_size 48 for a title. Always pass font="Helvetica Neue" to every Text (the default is a serif font).
@@ -158,7 +158,7 @@ enum TeachBriefs {
 
         class TeachScene(Scene):
             def construct(self):
-                self.camera.background_color = "#0f1117"
+                self.camera.background_color = "#17181B"
                 title = Text("Why the ball speeds up", font_size=44, font="Helvetica Neue").to_edge(UP)
                 self.play(Write(title))
                 ground = Line(LEFT * 6, RIGHT * 6, color=GREY_B).shift(DOWN * 2.5)

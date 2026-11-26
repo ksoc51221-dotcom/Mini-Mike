@@ -168,7 +168,7 @@ extension FeatureTests {
               && EdgePanelLayout.boxSize == EdgePanelLayout.dockSize)
         m.chats = (0..<3).map { _ in .init(id: ObjectIdentifier(token), title: "t", subtitle: "s", phase: .idle, isOpen: false) }
         m.choose(.chats)
-        check("edge sizes: choosing Chats opens the list card", m.section == .chats && m.cardSize.width > EdgePanelLayout.boxSize.width
+        check("edge sizes: choosing Chats opens the list card", m.section == .chats && m.cardSize.width == EdgePanelLayout.listWidth
               && m.cardSize.height == EdgePanelLayout.listSize(rows: 3, newNoteRow: false).height)
         check("edge sizes: an empty list keeps room for its one quiet line; past 8 rows it scrolls",
               EdgePanelLayout.listSize(rows: 0, newNoteRow: false).height == EdgePanelLayout.headerHeight + EdgePanelLayout.pad * 2 + EdgePanelLayout.lineHeight
@@ -212,15 +212,24 @@ extension FeatureTests {
         typealias L = EdgePanelLayout
         // Geometry: the numbers.
         // Round five (Stitch): these replace the 110 pt disc, the 144 pt ring concentric with it and the 22° step.
-        check("edge dock: a 108 pt disc, a 179.5 pt ring 13 pt left of the disc's centre, 44 pt items 21.2° apart",
-              L.discRadius == 108 && L.ringRadius == 179.5 && L.ringOffset == 13 && L.itemSize == 44 && L.itemStep == 21.2
+        // 2026-11-26: the disc 30 % larger (108 -> 140), the items 25 % larger (44 -> 55), the ring moved out to keep
+        // Stitch's 62.5 pt from the rim to an item's inner edge, 22 pt between neighbours.
+        check("edge dock: a 140 pt disc, a 217 pt ring 13 pt left of the disc's centre, 55 pt items 20.44° apart",
+              L.discRadius == 140 && L.ringRadius == 217 && L.ringOffset == 13 && L.itemSize == 55 && L.itemStep == 20.44
               && L.maxItems == 8 && L.ringLineRadius == L.ringRadius)
-        check("edge dock: an app icon is 40 pt inside a 44 pt target", L.appIconSize == 40 && L.itemSize == 44)
+        check("edge dock: an app icon image is 62 pt (its visible body about 50 pt) on a 55 pt target", L.appIconSize == 62 && L.itemSize == 55)
         check("edge dock: the card is 256 pt wide, corner 15.5, 171 pt from the dock (the leftmost item edge)",
-              L.listWidth == 256 && L.cardRadius == 15.5 && L.cardGap == 171 && L.listInset == 214.5 + 171)
-        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 214.5, height: 398))
+              L.listWidth == 256 && L.cardRadius == 15.5 && L.cardGap == 171 && L.listInset == 257.5 + 171)
+        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 257.5, height: 476))
         check("edge dock: the window holds the card, the bridge and the dock",
-              L.windowSize == CGSize(width: (256 + 385.5 + 56).rounded(.up), height: 481 + 112))
+              L.windowSize == CGSize(width: (256 + 428.5 + 56).rounded(.up), height: max(481, 476) + 112))
+        // The ring line runs through the middle of every item: each centre is on the line's circle, for every count.
+        let lineCentre = L.ringCentre
+        let onLine = (1...L.maxItems).allSatisfy { n in
+            L.itemCentres(count: n).allSatisfy { abs(hypot($0.x - lineCentre.x, $0.y - lineCentre.y) - L.ringLineRadius) < 0.001 }
+        }
+        check("edge dock: the ring line passes through every item's centre (1 to 8 items)", onLine)
+        check("edge dock: the ring line is 3 pt, solid accent (more prominent than the old hairline)", EdgeDockArt.ringLineWidth == 3)
         // The angle step: Stitch's 22 pt between neighbours' edges (66 pt chord).
         let chord = 2 * L.ringRadius * sin(L.itemStep / 2 * .pi / 180)
         check("edge dock: 22 pt between neighbours' edges (chord \(String(format: "%.2f", chord)))",
@@ -296,22 +305,22 @@ extension FeatureTests {
         // 41.5 pt centre to centre, the middle one on the centre line.
         let buttons = [L.plusCentre, L.searchCentre, L.collapseCentre]
         let disc = BeatStrings.Place.disc
-        let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - 117) < 0.001 }
+        let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - 149) < 0.001 }
         let straddle = buttons.allSatisfy { b in
             let d = hypot(b.x - mid.x, b.y - mid.y)
             return d - L.plusSize / 2 < L.discRadius && d + L.plusSize / 2 > L.discRadius && abs(d - L.discRadius - 9) < 0.01
         }
-        check("edge dock: \"+\", search and collapse: 30 pt, on the 117 pt circle, straddling the rim",
-              L.plusSize == 30 && onCircle && straddle)
+        check("edge dock: \"+\", search and collapse: 39 pt, on the 149 pt circle, straddling the rim",
+              L.plusSize == 39 && onCircle && straddle)
         let pitch1 = hypot(buttons[1].x - buttons[0].x, buttons[1].y - buttons[0].y)
         let pitch2 = hypot(buttons[2].x - buttons[1].x, buttons[2].y - buttons[1].y)
-        check("edge dock: the buttons are 41.5 pt apart centre to centre, the middle one on the centre line, in order",
-              abs(pitch1 - 41.5) < 0.001 && abs(pitch2 - 41.5) < 0.001 && abs(buttons[1].y - mid.y) < 0.001
+        check("edge dock: the buttons are 54 pt apart centre to centre, the middle one on the centre line, in order",
+              abs(pitch1 - 54) < 0.001 && abs(pitch2 - 54) < 0.001 && abs(buttons[1].y - mid.y) < 0.001
               && buttons[0].y < buttons[1].y && buttons[1].y < buttons[2].y)
         check("edge dock: the buttons are clear of the record's waves",
               buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > Double(disc.outer) })
-        check("edge dock: the record at rest is 76.6 pt on the disc's centre; its waves reach 114 to 123 pt across",
-              L.coverSize == 76.6 && cover == mid && (114...123).contains(disc.outer * 2)
+        check("edge dock: the record at rest is 99.6 pt on the disc's centre; its waves reach 148 to 160 pt across",
+              L.coverSize == 99.6 && cover == mid && (148...160).contains(disc.outer * 2)
               && disc.outer <= EdgeDockArt.orbRadius)
         let field = L.searchFieldFrame
         let fieldCorners = [CGPoint(x: field.minX, y: field.minY), CGPoint(x: field.minX, y: field.maxY)]
@@ -336,7 +345,7 @@ extension FeatureTests {
         // only `--edgeglasscheck` on a real screen. What stays pure: the flat path's ink on its solid base, and the record
         // title on its band, for every base `DockPalette` makes (emerald, the grey cover's, every hue at 0.4 to 0.6).
         let white = NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 1), black = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-        var palettes: [(base: NSColor, ink: NSColor)] = [(DockPalette.emerald.base, DockPalette.emerald.ink),
+        var palettes: [(base: NSColor, ink: NSColor)] = [(DockPalette.standard.base, DockPalette.standard.ink),
             (NSColor(hue: 0, saturation: 0, brightness: 0.15, alpha: 1), NSColor(hue: 0, saturation: 0, brightness: 0.97, alpha: 1))]
         for h in 0..<12 { for s in [0.4, 0.6] {
             let hue = CGFloat(h) / 12
@@ -401,7 +410,7 @@ extension FeatureTests {
         check("edge dock: the ring holds Chats, Notes, then the pinned apps",
               m.items == [.chats, .notes, .app(FixtureDockWorkspace.sample[0]), .app(FixtureDockWorkspace.sample[2])])
         m.tapSpotify()
-        check("edge cards: the cover opens the Spotify mini player (256 × 304)", m.section == .spotify && m.cardSize == CGSize(width: 256, height: 304))
+        check("edge cards: the cover opens the Spotify mini player (256 × 310)", m.section == .spotify && m.cardSize == CGSize(width: 256, height: 310))
         m.tapSpotify()
         check("edge cards: ...and a second click closes it", m.section == nil)
         m.tapManageApps()
@@ -412,8 +421,8 @@ extension FeatureTests {
         // record, 38.9 pt (Stitch "about 40") to the buttons, five buttons (32.3 pt, play 38.7 pt, 6.2 pt gaps), pad 19.7.
         let rows = L.spotifyPad + L.spotifySearchHeight + L.spotifyRecordGap + L.spotifyRecord + L.spotifyRecordToButtons
             + L.spotifyPlaySize + L.spotifyPad
-        check("edge cards: the mini player's rows add up to 304 pt; the gap under the record is 38.9 pt",
-              abs(rows - 304) < 0.001 && abs(L.spotifyRecordToButtons - 38.9) < 0.01 && L.spotifyRecordGap == 39)
+        check("edge cards: the mini player's rows add up to 310 pt; the gap under the record is 44.9 pt (8 pt above the buttons for the caption)",
+              abs(rows - 310) < 0.001 && abs(L.spotifyRecordToButtons - 44.9) < 0.01 && L.spotifyRecordGap == 39)
         check("edge cards: the search row fills the padded width (184 + 3.7 + 29)",
               abs(L.spotifySearchWidth + L.spotifyStarGap + L.spotifyStarSize - (L.listWidth - 2 * L.spotifyPad)) < 0.1
               && L.spotifySearchHeight == 33)
@@ -433,7 +442,7 @@ extension FeatureTests {
         m.tapSpotifyCommand(.next)
         EdgeDockFixtures.waitUntil { backend.sent.count == 3 }
         check("edge spotify: previous, play-pause and next reach Spotify in order", backend.sent == [.previous, .playPause, .next])
-        check("edge spotify: a playing song with a cover takes the cover's colours", music.palette != .emerald)
+        check("edge spotify: a playing song with a cover takes the cover's colours", music.palette != .standard)
         m.tapSpotifyCommand(.stop)
         EdgeDockFixtures.waitUntil { backend.sent.count == 4 }
         let stopScript = "tell application id \"com.spotify.client\"\n    pause\n    set player position to 0\nend tell"
@@ -517,7 +526,7 @@ extension FeatureTests {
         closed.tapOpenSpotify()
         check("edge spotify: \"Open Spotify\" opens Spotify through the workspace exactly once",
               ws2.opened.count == 2 && ws2.opened.last == URL(fileURLWithPath: "/fixture/\(LiveSpotifyBackend.bundleID).app"))
-        check("edge spotify: the service starts in emerald", SpotifyService(backend: FixtureSpotifyBackend(.notRunning)).palette == .emerald)
+        check("edge spotify: the service starts in emerald", SpotifyService(backend: FixtureSpotifyBackend(.notRunning)).palette == .standard)
 
         // The add/remove card: installed apps load, pinned first, and the cap holds.
         EdgeDockFixtures.waitUntil { !apps.installed.isEmpty }
@@ -854,17 +863,17 @@ extension FeatureTests {
         // 4. The Spotify mini window: playing, a palette change, paused, not running.
         model.tapSpotify()
         setSpotify(.track(trackA))
-        _ = EdgeDockFixtures.waitUntil { service.cover != nil && service.palette != .emerald }
+        _ = EdgeDockFixtures.waitUntil { service.cover != nil && service.palette != .standard }
         spin()
         let paletteA = service.palette
         check("edge glass 4a: the Spotify mini window with a playing song and its cover's palette",
-              model.section == .spotify && service.state == .track(trackA) && paletteA != .emerald && ordered())
+              model.section == .spotify && service.state == .track(trackA) && paletteA != .standard && ordered())
         capture(4)
         setSpotify(.track(trackB))
         _ = EdgeDockFixtures.waitUntil { service.palette != paletteA }
         spin(0.6) // the 0.4 s palette animation runs with the window on screen
         check("edge glass 4b: a second song with a different cover changes the palette",
-              service.state == .track(trackB) && service.palette != paletteA && service.palette != .emerald && ordered())
+              service.state == .track(trackB) && service.palette != paletteA && service.palette != .standard && ordered())
         setSpotify(.track(paused))
         spin()
         check("edge glass 4c: the song paused", service.state == .track(paused) && model.section == .spotify && ordered())
@@ -1128,7 +1137,7 @@ extension FeatureTests {
         model.tapSpotify()
         backend.state = .track(track)
         service.refresh()
-        _ = EdgeDockFixtures.waitUntil(1.5) { service.state == .track(track) && service.cover != nil && service.palette != .emerald }
+        _ = EdgeDockFixtures.waitUntil(1.5) { service.state == .track(track) && service.cover != nil && service.palette != .standard }
         model.songsQuery = "mint"
         shot("5-songs-list.png", model.songsListShown && service.cover != nil)
 

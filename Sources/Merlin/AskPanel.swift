@@ -222,7 +222,7 @@ final class AskPanelController {
     }
 
     private let panel: ChatPanel
-    /// The light-orange glow around the chat (its own window, which follows this one).
+    /// The soft shadow around the chat (its own window, which follows this one).
     private let glow: PanelGlow
     private let hosting: NSHostingView<ThemedRoot<AskView>>
     private let model: AskModel

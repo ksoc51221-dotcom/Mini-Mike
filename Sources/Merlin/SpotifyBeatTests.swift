@@ -112,6 +112,8 @@ extension FeatureTests {
             fake.heard = true
             _ = beat.sample(now: t + 0.02)
             check("beat source: sound again returns to live", beat.mode == .live(2))
+            check("beat sync: one output-delay line per live start", lines.filter { $0.hasPrefix("beat sync: output delay ") }.count == 1)
+            lines.removeAll { $0.hasPrefix("beat sync: ") }
             check("beat source: one log line per change", lines == ["beat source: starting (live allowed: true)",
                                                                    "beat source: live (2 process objects)",
                                                                    "beat source: simulated (no sound from Spotify for 3 s; audio capture may be denied)",
@@ -146,6 +148,24 @@ extension FeatureTests {
                   && !SpotifyBeat.shouldListen(shown: true, running: true, playing: true, motionOff: true))
         }
         do {
+            // Paused (2026-11-26): a softer pulse at the song's tempo, then the live source again on play.
+            let fake = FakeBeatSource()
+            let beat = SpotifyBeat(live: { fake }, blocked: false, seed: 3, motionOff: { false })
+            beat.log = { _ in }
+            beat.update(shown: true, running: true, playing: true, song: "p")
+            beat.update(shown: true, running: true, playing: false, paused: true, song: "p")
+            var peak = 0.0
+            for k in 0..<120 { peak = max(peak, beat.sample(now: 100 + Double(k) / 60).kick) }
+            check("beat paused: the strings keep a pulse (peak kick \(String(format: "%.2f", peak)), at most 0.6)",
+                  beat.isPaused && beat.mode == .simulated(SpotifyBeat.pausedWhy) && peak > 0.1 && peak <= SpotifyBeat.pausedStrength + 1e-9)
+            beat.update(shown: true, running: true, playing: true, song: "p")
+            check("beat paused: play again restarts the live source", !beat.isPaused && fake.starts == 2)
+            SpotifyBeat.pausedPulse = false
+            beat.update(shown: true, running: true, playing: false, paused: true, song: "p")
+            check("beat paused: with the switch off a paused song stops the beat", beat.sample(now: 200) == .zero)
+            SpotifyBeat.pausedPulse = true
+        }
+        do {
             let fake = FakeBeatSource()
             fake.scripted = .failed("no Spotify audio process")
             var lines: [String] = []
@@ -154,7 +174,8 @@ extension FeatureTests {
             beat.update(shown: true, running: true, playing: true, song: "y")
             let s = beat.sample(now: 50)
             check("beat source: the first start attempt logs first, unconditionally; a tap that cannot be made falls back to simulated",
-                  lines == ["beat source: starting (live allowed: true)", "beat source: simulated (no Spotify audio process)"] && s.isInRange)
+                  lines.filter { !$0.hasPrefix("beat sync: ") } == ["beat source: starting (live allowed: true)",
+                                                                    "beat source: simulated (no Spotify audio process)"] && s.isInRange)
             beat.update(shown: false, running: true, playing: true, song: "y")
             beat.update(shown: true, running: true, playing: true, song: "y")
             check("beat source: the starting line is logged once per run", lines.filter { $0.hasPrefix("beat source: starting") }.count == 1)
@@ -338,15 +359,35 @@ extension FeatureTests {
             }
             let disc = BeatStrings.Place.disc, card = BeatStrings.Place.card
             let outer = jump(disc, 2), cardOuter = jump(card, 2)
-            check("strings kick: the disc's outer ring jumps \(String(format: "%.2f", outer)) pt at kick = 1 (at least 6 pt)", outer >= 6)
+            check("strings kick: the disc's outer ring jumps \(String(format: "%.2f", outer)) pt at kick = 1 (at least 15 pt; it was 6.3 before 2026-11-26)", outer >= 15)
             // The card's caption line blocks 8 pt: the largest that fits (90% of the room is the soft ceiling's reach).
             check("strings kick: the card's outer ring jumps \(String(format: "%.2f", cardOuter)) pt, the most its room allows (\(String(format: "%.2f", card.jump(2))) pt)",
                   cardOuter >= 0.9 * card.jump(2) && cardOuter > 2.36)
             let r1 = jump(disc, 1) / outer, r0 = jump(disc, 0) / outer
-            check("strings kick: middle about 60 %, inner about 35 % of the outer ring (\(String(format: "%.2f / %.2f", r1, r0)))",
-                  abs(r1 - 0.6) < 0.06 && abs(r0 - 0.35) < 0.05)
+            check("strings kick: the inner rings jump less than the outer one, so the gaps widen on a beat (\(String(format: "%.2f / %.2f", r1, r0)))",
+                  r0 < r1 && r1 < 1 && r0 > 0.3)
+            // The rings never cross or touch: at full drive (springs overshooting to 1.15), with and without a kick
+            // shove, at 720 angles, each ring's outer stroke edge stays under the next ring's inner stroke edge.
+            var crossGap = Double.infinity
+            for place in [disc, card] {
+                for seed: UInt64 in [1, 7, 42, 99, 1234] {
+                    for shove in [0.0, 1.0] {
+                        let m = BeatStringsMotion(place: place, seed: seed)
+                        m.force(1.15, shove: shove)
+                        let rings = (0..<3).map { m.ring($0) }
+                        for k in 0..<720 {
+                            let th = Double(k) * .pi / 360
+                            for i in 0..<2 {
+                                let gap = (rings[i + 1].radius(th).r - place.halfWidth(i + 1)) - (rings[i].radius(th).r + place.halfWidth(i))
+                                crossGap = min(crossGap, gap)
+                            }
+                        }
+                    }
+                }
+            }
+            check("strings: the rings never cross at full drive (closest \(String(format: "%.2f", crossGap)) pt)", crossGap > 0.5)
             let quiet = jump(disc, 2, level: 0.1)
-            check("strings kick: soft music gives small jumps (\(String(format: "%.2f", quiet)) pt at level 0.1)", quiet < 0.45 * outer)
+            check("strings kick: soft music gives small jumps (\(String(format: "%.2f", quiet)) pt at level 0.1)", quiet < 0.65 * outer)
             var up = BeatSpring(), t = 0.0
             while up.x < 0.85 && t < 1 { up.step(to: 1, dt: 1.0 / 240); t += 1.0 / 240 }
             check("strings kick: a fast attack (0.85 in \(String(format: "%.0f", t * 1000)) ms)", t <= 0.07)

@@ -148,8 +148,13 @@ struct DockPalette: Equatable {
         return contrast(black, fill) >= contrast(white, fill) ? black : white
     }
 
-    static let emerald = DockPalette(base: rgb(0x0B2B22), rim: rgb(0x10B981), accent: rgb(0xFF6B4A),
-                                     accent2: rgb(0xF0509A), ink: rgb(0xF5FFFA))
+    /// The default (no song; 2026-11-26): 60 % light grey (`rim`: the rims, the ring's light and the glass lines),
+    /// 30 % dark charcoal (`base`: the wells and fills), 10 % electric cyan #00E5FF (`accent`: the ring line, the strings,
+    /// the play button, an open item). `accent2` is a mid grey (the stop button, the breathing dot). No orange.
+    static let standard = DockPalette(base: rgb(0x232529), rim: rgb(0xC9CED4), accent: rgb(0x00E5FF),
+                                      accent2: rgb(0x8C939B), ink: rgb(0xF4F5F2))
+    /// The electric cyan: the default accent everywhere in Merlin.
+    static let cyan = rgb(0x00E5FF)
 
     // WCAG relative luminance and contrast ratio.
     private static func luminance(_ c: NSColor) -> CGFloat {
@@ -232,7 +237,7 @@ struct DockPalette: Equatable {
                                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
               let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              let data = ctx.data else { return .emerald }
+              let data = ctx.data else { return .standard }
         ctx.interpolationQuality = .medium
         ctx.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
         let px = data.bindMemory(to: UInt8.self, capacity: side * side * 4)
@@ -278,11 +283,28 @@ struct DockPalette: Equatable {
         }
         let h2 = second.map(hue) ?? (h1 + 0.12)
 
+        // The same 60-30-10 as `standard`, from the cover: a light grey with a touch of the cover's hue (60 %), a
+        // charcoal with a little more of it (30 %), and the cover's dominant colour as the accent (10 %).
         let ink = hsb(h1, 0.04, 0.98)
-        let base = hsb(h1, min(0.6, max(0.4, s1 * 0.7)), 0.16)
-        let rim = ensure(hsb(h1, s1, 0.85), on: base, ratio: 3)
-        let accent = ensure(hsb(h1, s1, 0.9), on: base, ratio: 3)
-        let accent2 = distinct(ensure(hsb(h2, max(0.55, s1), 0.9), on: base, ratio: 3), from: accent, on: base, hue: h1, sat: s1)
+        let base = hsb(h1, min(0.35, s1 * 0.4), 0.17)
+        let rim = ensure(hsb(h1, 0.14, 0.86), on: base, ratio: 3)
+        // The accent is light enough to read on the dark base (4.5:1, so a deep crimson cover still gives a visible line).
+        let accent = ensure(hsb(h1, s1, 0.9), on: base, ratio: 4.5)
+        // One accent per cover: the second colour is a neutral grey with a touch of the same hue (no second hue).
+        _ = h2
+        // Tone only, never another hue: the darkest near-grey that still reads on the base (3:1) and stays 1.6:1 from
+        // the accent; lighter if the accent is dark.
+        var accent2 = hsb(h1, 0.06, 0.6)
+        for b in stride(from: 0.62, through: 0.98, by: 0.02) {
+            let g = hsb(h1, 0.06, CGFloat(b))
+            if contrast(g, base) >= 3 { accent2 = g; break }
+        }
+        if contrast(accent, accent2) < minToneContrast {
+            for b in stride(from: 0.98, through: 0.6, by: -0.02) {
+                let g = hsb(h1, 0.06, CGFloat(b))
+                if contrast(g, base) >= 3 && contrast(accent, g) >= minToneContrast { accent2 = g; break }
+            }
+        }
         return DockPalette(base: base, rim: rim, accent: accent, accent2: accent2, ink: ink)
     }
 }
@@ -295,7 +317,7 @@ final class SpotifyService: ObservableObject {
 
     @Published private(set) var state: SpotifyState = .notRunning
     @Published private(set) var cover: NSImage?
-    @Published private(set) var palette: DockPalette = .emerald
+    @Published private(set) var palette: DockPalette = .standard
 
     private let backend: SpotifyBackend
     private let loader: DockImageLoader
@@ -348,12 +370,13 @@ final class SpotifyService: ObservableObject {
 
     /// The beat listens only while the dock shows, Spotify runs and a song plays (and motion is on).
     private func updateBeat() {
-        var playing = false, song: String?
+        var playing = false, paused = false, song: String?
         if case .track(let t) = state {
             playing = t.isPlaying
+            paused = !t.isPlaying
             song = t.uri ?? (t.title + "\u{1F}" + t.artist)
         }
-        beat.update(shown: shown, running: state != .notRunning, playing: playing, song: song)
+        beat.update(shown: shown, running: state != .notRunning, playing: playing, paused: paused, song: song)
     }
 
     func refresh() {
@@ -401,11 +424,15 @@ final class SpotifyService: ObservableObject {
         updatePalette()
     }
 
-    /// Emerald unless a song plays. While one plays, the cover's palette once it exists; until then (or if the cover never
-    /// loads) the palette already shown stays, so two songs never pass through emerald.
+    /// The default (off-white, charcoal, cyan) unless a song is loaded. With a song, playing OR paused, the cover's palette
+    /// once it exists; until then (or if the cover never loads) the palette already shown stays, so two songs never pass
+    /// through the default. Spotify closed, or open with no song: the default.
     private func updatePalette() {
-        var target = DockPalette.emerald
-        if case .track(let t) = state, t.isPlaying { target = coverPalette ?? palette }
+        var target = DockPalette.standard
+        if case .track = state { target = coverPalette ?? palette }
         if target != palette { palette = target }
+        // The theme follows the music in the lens glass and in the rest of Merlin (its accent).
+        EdgeLensRenderer.shared.setTint(palette.accent)
+        ThemeStore.shared.setMusicAccent(palette == .standard ? nil : palette.accent)
     }
 }

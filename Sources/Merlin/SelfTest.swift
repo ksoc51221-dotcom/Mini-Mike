@@ -610,6 +610,7 @@ enum SelfTest {
         UsageLog.url = FileManager.default.temporaryDirectory.appendingPathComponent("merlin-unittest-usage-\(UUID().uuidString).jsonl")
         LocalTests.unit(check)
         GlowTests.run(check)
+        OrbTests.run(check)
 
         // Context window trimming
         let doc = "Para one is about setup.\nPara two says closures capture variables by reference here.\nPara three wraps up."

@@ -21,7 +21,7 @@ extension FeatureTests {
           <defs><marker id="arrow-blue"><path d="M0 0 L10 5 L0 10z" fill="#58C4DD"/></marker></defs>
           <script>alert(1)</script>
           <foreignObject width="10" height="10"><div xmlns="http://www.w3.org/1999/xhtml">hi</div></foreignObject>
-          <rect width="960" height="540" fill="#0f1117" onclick="x()"/>
+          <rect width="960" height="540" fill="#17181B" onclick="x()"/>
           <use href="#arrow-blue"/>
           <use xlink:href="https://evil.example/x.svg#a"/>
           <a href="https://evil.example">link</a>
@@ -68,7 +68,7 @@ extension FeatureTests {
                 c = math.cos(0.5)
                 cos = c
                 print(cos.real, pos.x)  # evaluate the camera
-                self.camera.background_color = "#0f1117"
+                self.camera.background_color = "#17181B"
                 self.add(Text("open the door"), Text("Watch the videos."), Text('eval and exec are just words'))
         """
         check("visual python: pos., cos., evaluate, self.camera and words in labels pass (\(TeachVisuals.checkScene(harmless) ?? "ok"))",
@@ -176,7 +176,7 @@ extension FeatureTests {
         let svgFile = folder.appendingPathComponent("9.svg")
         try? Data(svg.utf8).write(to: svgFile)
         if let png = TeachVisualActions.pngData(svg: svgFile), let rep = NSBitmapImageRep(data: png) {
-            // The background rect is #0f1117; the blue line and white text are not. Look for any brighter pixel.
+            // The background rect is #17181B; the blue line and white text are not. Look for any brighter pixel.
             var bright = false
             for y in stride(from: 0, to: rep.pixelsHigh, by: 4) where !bright {
                 for x in stride(from: 0, to: rep.pixelsWide, by: 4) {

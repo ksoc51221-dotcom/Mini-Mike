@@ -165,7 +165,7 @@ extension FeatureTests {
         check(String(format: "lens: body dim and glyph shadows give .primary text 4.5:1 over pure white (model; label alpha %.2f: %.2f:1)",
                      label.alphaComponent, DockPalette.contrast(ink, ground)),
               DockPalette.contrast(ink, ground) >= 4.5)
-        check("lens: the uniforms are five float4s (the MSL layout)", MemoryLayout<EdgeLensUniforms>.stride == 80)
+        check("lens: the uniforms are six float4s (the MSL layout)", MemoryLayout<EdgeLensUniforms>.stride == 96)
         check("lens: cards and the disc bend over 20 pt, controls get the stronger dim, the limit is 1.2 s, full is the default",
               P.band(minHalf: 128) == 20 && P.dim(minHalf: 128) == P.bodyDim && P.dim(minHalf: 15) == P.controlDim
                 && EdgeLensPolicy.firstFrameTimeout == 1.2 && !EdgeLensCapture.rimOnly

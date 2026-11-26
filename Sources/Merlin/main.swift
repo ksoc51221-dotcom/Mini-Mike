@@ -373,6 +373,7 @@ if let i = arguments.firstIndex(of: "--livecheck"), i + 1 < arguments.count { Ma
 if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])); LibrarySettingsView.renderShortcutShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
 if arguments.contains("--agenttest") { FeatureTests.agentLiveTest() }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
+if let i = arguments.firstIndex(of: "--orbtest") { OrbTests.golden(path: argument(after: i) ?? "third_party/thinking-orbs/orbs-golden.json") }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }
 if arguments.contains("--capturetest") { SelfTest.captureTest() }
 if let i = arguments.firstIndex(of: "--calendardemo") {
@@ -420,6 +421,7 @@ if let i = arguments.firstIndex(of: "--uishots"), i + 1 < arguments.count { Main
 // The edge dock's real Liquid Glass on the real screen, fixtures only: six pictures into the folder, then exit.
 if let i = arguments.firstIndex(of: "--edgeglasscheck"), i + 1 < arguments.count { MainActor.assumeIsolated { FeatureTests.edgeGlassCheck(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--chromeshots"), i + 1 < arguments.count { MainActor.assumeIsolated { ChromeShots.run(directory: arguments[i + 1]) } }
+if let i = arguments.firstIndex(of: "--orbshots"), i + 1 < arguments.count { MainActor.assumeIsolated { ThinkingOrb.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)) } }
 if let i = arguments.firstIndex(of: "--glyphshots"), i + 1 < arguments.count { MainActor.assumeIsolated { GlyphGallery.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--sectorshots"), i + 1 < arguments.count { MainActor.assumeIsolated { SectorEditorView.renderShots(to: URL(fileURLWithPath: arguments[i + 1], isDirectory: true)); exit(0) } }
 if let i = arguments.firstIndex(of: "--libdemo") {

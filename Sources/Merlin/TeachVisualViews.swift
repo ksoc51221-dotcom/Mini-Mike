@@ -18,7 +18,8 @@ extension EnvironmentValues {
 }
 
 /// The dark 3Blue1Brown background used only inside a visual.
-let teachVisualBackground = Color(red: 0x0f / 255, green: 0x11 / 255, blue: 0x17 / 255)
+/// The visual window's dark charcoal (the app's dark canvas, 60-30-10 since 2026-11-26).
+let teachVisualBackground = Color(nsColor: Theme.canvas.dark)
 
 /// A diagram or video from an answer's <visual> tag, full chat width.
 struct TeachVisualView: View {
@@ -122,7 +123,7 @@ enum DiagramWindow {
                               styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "Diagram"
         window.isReleasedWhenClosed = false
-        window.backgroundColor = NSColor(red: 0x0f / 255, green: 0x11 / 255, blue: 0x17 / 255, alpha: 1)
+        window.backgroundColor = Theme.canvas.dark
         window.contentView = NSHostingView(rootView: SVGWebView(url: url, readAccess: folder).background(teachVisualBackground))
         window.center()
         open.append(window)
@@ -269,7 +270,7 @@ enum TeachVisualActions {
                                          colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
-        NSColor(red: 0x0f / 255, green: 0x11 / 255, blue: 0x17 / 255, alpha: 1).setFill()
+        Theme.canvas.dark.setFill()
         NSRect(origin: .zero, size: size).fill()
         image.draw(in: NSRect(origin: .zero, size: size))
         NSGraphicsContext.restoreGraphicsState()

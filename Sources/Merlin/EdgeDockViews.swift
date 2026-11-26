@@ -28,7 +28,7 @@ extension DockPalette {
     var selectedFill: Color { rimTintColor.opacity(0.20) }
 }
 
-private struct EdgePaletteKey: EnvironmentKey { static let defaultValue = DockPalette.emerald }
+private struct EdgePaletteKey: EnvironmentKey { static let defaultValue = DockPalette.standard }
 
 extension EnvironmentValues {
     /// The dock's current palette, for the card rows that don't take it as a parameter.
@@ -42,7 +42,9 @@ extension EnvironmentValues {
 enum EdgeDockArt {
     /// The frame the three beat strings are drawn in, around the record (their band is `BeatStrings.Place.disc`, clear of
     /// the disc buttons' column, 14 pt in from the rim).
-    static let orbRadius: CGFloat = 66
+    static let orbRadius: CGFloat = 104
+    /// The ring line's width (2026-11-26: more prominent than the 1 pt hairline).
+    static let ringLineWidth: CGFloat = 3
     /// The black under the mini player's record title (on the cover art), so the ink keeps 4.5:1 on a white cover.
     static let titleBand: CGFloat = 0.66
     /// CSS 155°: from the top (a little left) to the bottom (a little right).
@@ -413,14 +415,20 @@ struct EdgeDockView: View {
     }
 }
 
-/// The ring the items sit on: one accent hairline, concentric with the disc (no glow).
+/// The ring the items sit on: the accent line on a soft dark casing (so it reads on a white page too), on the SAME
+/// circle as the items' centres (`EdgePanelLayout.ringCentre`), out to the screen edge.
 private struct EdgeHalo: View {
     let palette: DockPalette
 
     var body: some View {
-        EdgeHalfDisc(radius: EdgePanelLayout.ringLineRadius)
-            .stroke(palette.accentColor.opacity(0.18), lineWidth: 1)
-            .allowsHitTesting(false)
+        let c = EdgePanelLayout.ringCentre, r = EdgePanelLayout.ringLineRadius
+        let ring = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+        ZStack {
+            ring.stroke(Color.black.opacity(0.16), lineWidth: EdgeDockArt.ringLineWidth + 1.5) // a faint edge on white pages
+            ring.stroke(palette.accentColor, lineWidth: EdgeDockArt.ringLineWidth)
+        }
+        .clipped() // the circle's right half lies past the screen edge
+        .allowsHitTesting(false)
     }
 }
 
@@ -551,7 +559,7 @@ private struct EdgeDockDisc: View {
             EmptyView()
         case .track(let t):
             let c = EdgePanelLayout.coverCentre
-            EdgeWaves(palette: p, beat: model.spotify.beat, moving: t.isPlaying && model.shown)
+            EdgeWaves(palette: p, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
                 .frame(width: EdgeDockArt.orbRadius * 2, height: EdgeDockArt.orbRadius * 2)
                 .position(x: c.x, y: c.y)
             EdgeCoverDisc(image: model.spotify.cover, spinning: t.isPlaying && model.shown && !Motion.still && !Motion.reduceMotion,
@@ -1432,7 +1440,7 @@ struct EdgeSpotifyCard: View {
             .frame(width: L.spotifyRecord, height: L.spotifyRecord)
             .background {
                 if let t {
-                    EdgeWaves(palette: p, place: .card, beat: model.spotify.beat, moving: t.isPlaying && model.shown)
+                    EdgeWaves(palette: p, place: .card, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
                         .frame(width: orb, height: orb)
                 }
             }

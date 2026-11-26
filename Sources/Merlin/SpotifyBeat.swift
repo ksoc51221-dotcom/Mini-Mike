@@ -136,8 +136,9 @@ struct BeatAnalyzer {
         kick *= exp(-dt / Self.kickDecay)
         sinceKick += dt
         let rise = bass - mean
-        if rise > 0.2, bass - previousBass > 0.05, sinceKick > 0.12 {
-            kick = max(kick, BeatMath.clamp01(rise * 1.6))
+        // A lower bar and a stronger answer (2026-11-26: "much more dramatic"): most beats now give a full jump.
+        if rise > 0.15, bass - previousBass > 0.04, sinceKick > 0.12 {
+            kick = max(kick, BeatMath.clamp01(rise * 2.4))
             sinceKick = 0
         }
         mean += (bass - mean) * (1 - exp(-dt / Self.meanTime))
@@ -152,9 +153,10 @@ struct SimulatedBeat {
     let seed: UInt64
     let bpm: Double
 
-    init(seed: UInt64) {
+    /// `bpm`: a measured tempo (a paused song keeps the tempo it played at); nil picks 110 to 128 from the seed.
+    init(seed: UInt64, bpm: Double? = nil) {
         self.seed = seed
-        bpm = 110 + 18 * BeatMath.hash(seed, 1)
+        if let bpm, bpm.isFinite, bpm >= 60, bpm <= 200 { self.bpm = bpm } else { self.bpm = 110 + 18 * BeatMath.hash(seed, 1) }
     }
 
     func sample(at time: Double) -> BeatSample {
@@ -211,12 +213,79 @@ final class SimulatedSpotifyBeatSource: SpotifyBeatSource {
         origin = nil
     }
 
+    /// The same pattern at a measured tempo (the paused pulse).
+    func tempo(_ bpm: Double) {
+        beat = SimulatedBeat(seed: beat.seed, bpm: bpm)
+        origin = nil
+    }
+
     func start() { status = .live(0) }
     func stop() { status = .idle; origin = nil }
 
     func read(now: TimeInterval, dt: Double) -> (sample: BeatSample, heard: Bool) {
         if origin == nil { origin = now }
         return (beat.sample(at: now - (origin ?? now)), true)
+    }
+}
+
+/// The song's tempo from the live kicks: the median gap between kick onsets (the last 16), folded into 80...170 BPM.
+struct BeatTempo {
+    private var lastOnset: Double?
+    private var previous = 0.0
+    private var gaps: [Double] = []
+
+    mutating func reset() { lastOnset = nil; previous = 0; gaps.removeAll() }
+
+    mutating func observe(_ kick: Double, now: Double) {
+        defer { previous = kick }
+        guard kick > 0.5, previous <= 0.5 else { return }
+        if let l = lastOnset, now - l >= 0.25, now - l <= 1.5 {
+            gaps.append(now - l)
+            if gaps.count > 16 { gaps.removeFirst() }
+        }
+        lastOnset = now
+    }
+
+    /// Nil until four gaps are known.
+    var bpm: Double? {
+        guard gaps.count >= 4 else { return nil }
+        let g = gaps.sorted()[gaps.count / 2]
+        var bpm = 60 / g
+        while bpm < 80 { bpm *= 2 }
+        while bpm > 170 { bpm /= 2 }
+        return bpm
+    }
+}
+
+/// Seconds from Spotify's sound at the tap to the speakers: the default output device's latency, safety offset and
+/// buffer, and its first output stream's latency. 0 when a read fails.
+enum OutputLatency {
+    static func current() -> Double {
+        func read<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, _ scope: AudioObjectPropertyScope,
+                     _ zero: T) -> T? {
+            var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+            var value = zero
+            var size = UInt32(MemoryLayout<T>.size)
+            return AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr ? value : nil
+        }
+        let output = kAudioObjectPropertyScopeOutput, global = kAudioObjectPropertyScopeGlobal
+        guard let device = read(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice, global,
+                                AudioObjectID(0)), device != 0,
+              let rate = read(device, kAudioDevicePropertyNominalSampleRate, global, Float64(0)), rate > 0 else { return 0 }
+        var frames = Double(read(device, kAudioDevicePropertyLatency, output, UInt32(0)) ?? 0)
+        frames += Double(read(device, kAudioDevicePropertySafetyOffset, output, UInt32(0)) ?? 0)
+        frames += Double(read(device, kAudioDevicePropertyBufferFrameSize, global, UInt32(0)) ?? 0)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: output,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        if AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr, size >= UInt32(MemoryLayout<AudioStreamID>.size) {
+            var streams = [AudioStreamID](repeating: 0, count: Int(size) / MemoryLayout<AudioStreamID>.size)
+            if AudioObjectGetPropertyData(device, &address, 0, nil, &size, &streams) == noErr, let first = streams.first {
+                frames += Double(read(first, kAudioStreamPropertyLatency, global, UInt32(0)) ?? 0)
+            }
+        }
+        let seconds = frames / rate
+        return seconds.isFinite ? seconds : 0
     }
 }
 
@@ -502,6 +571,15 @@ final class SpotifyBeat {
     /// The tap gave only zeros (or nothing) for this long while a song played: use the simulated beat.
     static let silenceLimit: TimeInterval = 3
 
+    /// The switch for the paused pulse (the user's choice, 2026-11-26: "Song paused: keep the beat effect"). Off: a
+    /// paused song's strings settle to still circles.
+    nonisolated(unsafe) static var pausedPulse = true
+    static let pausedWhy = "paused: a softer pulse at the song's tempo"
+    /// The paused pulse's strength (of a playing song's).
+    static let pausedStrength = 0.6
+    /// What the picture already adds after the sound (the attack spring and one frame), taken off the output delay.
+    static let pictureLag: TimeInterval = 0.03
+
     static func shouldListen(shown: Bool, running: Bool, playing: Bool, motionOff: Bool) -> Bool {
         shown && running && playing && !motionOff
     }
@@ -517,9 +595,11 @@ final class SpotifyBeat {
     }
 
     static func startDecision(shown: Bool, running: Bool, playing: Bool, motionOff: Bool, blocked: Bool,
-                              hasLive: Bool) -> StartDecision {
-        guard shown && running && playing else { return .none }
+                              hasLive: Bool, paused: Bool = false) -> StartDecision {
+        guard shown && running && (playing || (paused && pausedPulse)) else { return .none }
         if motionOff { return .motionOff }
+        // A paused song has no sound: the strings keep a softer pulse at the tempo the song played at.
+        if !playing { return .simulated(pausedWhy) }
         if blocked { return .simulated("live tap blocked in a test or picture run") }
         return hasLive ? .live : .simulated("no live source")
     }
@@ -543,6 +623,15 @@ final class SpotifyBeat {
     private var lastStatus: BeatSourceStatus = .idle
     private var loggedStart = false
     private var loggedMotionOff = false
+    private var current: StartDecision = .none
+    /// The paused pulse runs (simulated, softer, at the measured tempo).
+    private(set) var isPaused = false
+    /// The song's tempo, measured from the live kicks.
+    private(set) var tempo = BeatTempo()
+    /// How long the sound takes from the tap to the speakers (less `pictureLag`): the live samples wait this long, so the
+    /// strings move when you hear the beat, not before (Bluetooth headphones add 0.1 to 0.3 s).
+    private(set) var outputDelay: TimeInterval = 0
+    private var delayed: [(time: TimeInterval, sample: BeatSample)] = []
 
     init(live: (() -> SpotifyBeatSource)? = { LiveSpotifyBeatSource() }, blocked: Bool = LiveSpotifyBeatSource.blocked,
          seed: UInt64? = nil, motionOff: @escaping () -> Bool = { Motion.still || Motion.reduceMotion }) {
@@ -558,25 +647,38 @@ final class SpotifyBeat {
 
     /// Called by `SpotifyService` when the dock shows or hides, the song or its play state changes, or Reduce Motion
     /// changes.
-    func update(shown: Bool, running: Bool, playing: Bool, song: String?) {
+    func update(shown: Bool, running: Bool, playing: Bool, paused: Bool = false, song: String?) {
         if song != self.song {
             self.song = song
             simulated.song(song)
+            tempo.reset()
         }
         let decision = Self.startDecision(shown: shown, running: running, playing: playing, motionOff: motionOff(),
-                                          blocked: liveBlocked, hasLive: makeLive != nil)
+                                          blocked: liveBlocked, hasLive: makeLive != nil, paused: paused)
         if decision == .motionOff, !loggedMotionOff {
             loggedMotionOff = true
             log("beat source: not starting (Reduce Motion or still pictures: the strings stay still circles)")
         }
         let want = decision != .none && decision != .motionOff
-        guard want != active else { return }
+        // A new decision (play to pause, pause to play) restarts the sources; the same one changes nothing.
+        guard want != active || (want && decision != current) else { return }
+        if active && want { // a restart (the stop below handles a plain stop)
+            live?.stop()
+            simulated.stop()
+        }
         active = want
+        current = want ? decision : .none
+        isPaused = want && decision == .simulated(Self.pausedWhy)
         lastNow = nil
         last = .zero
         liveSince = nil
         lastHeard = nil
         lastStatus = .idle
+        delayed.removeAll()
+        if isPaused, let bpm = tempo.bpm { simulated.tempo(bpm) }
+        if want, decision == .live {
+            outputDelay = max(0, min(0.4, OutputLatency.current() - Self.pictureLag))
+        }
         if want {
             // Unconditional, before anything can fail: the first sign in the log that a start was tried.
             if !loggedStart {
@@ -589,6 +691,9 @@ final class SpotifyBeat {
             } else {
                 if live == nil { live = makeLive?() }
                 live?.start()
+            }
+            if decision == .live {
+                log(String(format: "beat sync: output delay %.0f ms (the strings wait this long after the tap)", outputDelay * 1000))
             }
         } else {
             live?.stop()
@@ -623,12 +728,29 @@ final class SpotifyBeat {
                     next = .live(n)
                 }
             }
-            if case .live = next { out = reading.sample }
+            if case .live = next {
+                tempo.observe(reading.sample.kick, now: now)
+                out = delay(reading.sample, now: now)
+            }
         }
         if case .simulated = next { out = simulated.read(now: now, dt: dt).sample }
+        if isPaused {
+            let k = Self.pausedStrength
+            out = BeatSample(level: out.level * k, bass: out.bass * k, kick: out.kick * k)
+        }
         setMode(next)
         last = out
         return out
+    }
+
+    /// The live sample from `outputDelay` ago (the newest one when no delay is needed).
+    private func delay(_ s: BeatSample, now: TimeInterval) -> BeatSample {
+        guard outputDelay > 0.005 else { return s }
+        delayed.append((now, s))
+        let due = now - outputDelay
+        // The first entry stays the newest sample that is due (so a frame between two samples never drops to zero).
+        while delayed.count > 1, delayed[1].time <= due { delayed.removeFirst() }
+        return delayed[0].time <= due ? delayed[0].sample : .zero
     }
 
     private func setMode(_ m: Mode) {
@@ -652,7 +774,7 @@ enum BeatStrings {
     struct Place: Equatable {
         /// Nearest the stroke may come to the centre (clear of the record and its rim).
         let inner: CGFloat
-        /// The calm look's outer edge (the Stitch wave extent): the three rings rest on the quarter points of
+        /// The calm look's outer edge (the Stitch wave extent): the three rings rest at 10, 46 and 82 % of
         /// `inner`...`outer`.
         let outer: CGFloat
         /// How far a stroke's edge may travel on a beat: `clearance` short of the nearest neighbour (the disc's rim
@@ -665,7 +787,7 @@ enum BeatStrings {
         /// The strings keep at least this from every neighbour, even at full drive with springs overshooting.
         static let clearance: CGFloat = 4
         /// Each ring's share of the outer ring's jump (inner, middle, outer).
-        static let jumpShares: SIMD3<Double> = [0.35, 0.6, 1]
+        static let jumpShares: SIMD3<Double> = [0.45, 0.7, 1]
 
         /// The dock's disc: the record (`coverSize`), the three rim buttons (`discButtonCentre`, `plusSize`), the timer
         /// chip's nearest point. (The disc's search field never shows with the record: the strings hide while it does.)
@@ -699,8 +821,14 @@ enum BeatStrings {
         }
 
         func halfWidth(_ i: Int) -> Double { Place.lineWidths[i] / 2 }
-        /// Ring `i`'s centre line: on the quarter points of the band.
-        func base(_ i: Int) -> Double { Double(inner) + Double(outer - inner) * Double(i + 1) / 4 }
+        /// The most a ring's lobes may swing either way: under half the gap at rest (less the stroke and 1 pt), so two
+        /// neighbours swinging toward each other never meet. The outward beat jump (the pulse) is not capped by this.
+        var lobeCap: Double { max(0, (Double(outer - inner) * Place.gapShare - Place.lineWidth - 1) / 2) }
+        /// The gap between neighbouring rings at rest, as a share of the band: 0.36 (2026-11-26: 20 % more than 0.30).
+        static let gapShare = 0.36
+        /// Ring `i`'s centre line: at 10 %, 46 % and 82 % of the band. On a beat the outer rings move further than the
+        /// inner ones (`jumpShares`), so the gaps only grow.
+        func base(_ i: Int) -> Double { Double(inner) + Double(outer - inner) * (0.10 + Place.gapShare * Double(i)) }
         /// How far ring `i`'s centre line may move on a beat (its jump: outward past the calm extent, toward `limit`).
         func excursion(_ i: Int) -> Double { jump(i) }
     }
@@ -712,15 +840,16 @@ enum BeatStrings {
     static let gain: SIMD3<Double> = [1, 0.85, 0.72]
     /// The kick's weight per ring (the rings' sizes come from `Place.jumpShares`, outer most).
     static let kickGain: SIMD3<Double> = [1, 1, 1]
-    static let delayFrames = [0, 2, 4]
+    /// The lobes' delay per ring. The kick's radius pulse has NO delay on any ring, so the jump lands on the beat.
+    static let delayFrames = [0, 1, 2]
     /// Of a ring's jump (`Place.jump`): the lobe burst's share and the radius pulse's share (they add to 1).
     static let waveShare = 0.4
     static let pulseShare = 0.6
     /// The kick's share of the lobes' drive (the ragged edge of a thump).
-    static let kickDrive = 0.6
+    static let kickDrive = 0.85
 
     /// A kick scaled by the loudness: soft music gives small jumps, loud music full ones.
-    static func kick(_ s: BeatSample) -> Double { s.kick * (0.3 + 0.7 * s.level) }
+    static func kick(_ s: BeatSample) -> Double { s.kick * (0.55 + 0.45 * s.level) }
 
     /// What ring `i`'s lobes follow: the level, lifted by the bass, plus a share of the kick (the soft ceiling caps it).
     /// Zero in silence, so the rings are circles then.
@@ -855,7 +984,7 @@ final class BeatStringsMotion {
         if moving, s0.kick > 0.6, previousKick <= 0.6 || s0.kick - previousKick > 0.3, sinceShove > 0.15 {
             for i in 0..<BeatStrings.rings {
                 let sign: Double = rng.unit() < 0.5 ? -1 : 1
-                shoveSpeed[i] += sign * (2 + 3 * rng.unit()) * (1 - 0.2 * Double(i)) * s0.kick
+                shoveSpeed[i] += sign * (3 + 4.5 * rng.unit()) * (1 - 0.2 * Double(i)) * s0.kick
             }
             sinceShove = 0
         }
@@ -864,7 +993,7 @@ final class BeatStringsMotion {
         for i in 0..<BeatStrings.rings {
             let s = history[(head - BeatStrings.delayFrames[i] + history.count) % history.count]
             amp[i].step(to: BeatStrings.drive(s, ring: i), dt: dt)
-            pulse[i].step(to: BeatStrings.kick(s) * BeatStrings.kickGain[i], dt: dt)
+            pulse[i].step(to: BeatStrings.kick(s0) * BeatStrings.kickGain[i], dt: dt)
             shoveAngle[i] += shoveSpeed[i] * dt
             shoveSpeed[i] *= exp(-dt / 0.25)
         }
@@ -931,7 +1060,7 @@ final class BeatStringsMotion {
         // (outward) and the lobe burst (the ragged edge) together reach at most the ring's jump.
         return BeatStrings.Ring(
             base: place.base(i),
-            amplitude: e * BeatStrings.waveShare * drive,
+            amplitude: min(e * BeatStrings.waveShare * drive, place.lobeCap * max(drive, 0) / 0.8),
             pulse: e * BeatStrings.pulseShare * kick,
             weights: w, lobes: BeatStrings.lobes[i], phases: phases,
             low: Double(place.inner) + place.halfWidth(i), high: Double(place.limit) - place.halfWidth(i))

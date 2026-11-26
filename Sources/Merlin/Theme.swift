@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
 
-/// Instrument: near-black and off-white, hairline structure, one electric accent used rarely (design-refs/REDESIGN-3-INSTRUMENT.md).
-/// Every colour in the UI comes from here.
+/// 60-30-10 (2026-11-26): light grey and off-white surfaces (60 %), dark charcoal ink and dark surfaces (30 %), one
+/// electric accent (10 %): cyan #00E5FF, or the playing song's cover colour (`AccentTheme.music`). Dark mode swaps the
+/// first two (charcoal surfaces, off-white ink). Every colour in the UI comes from here. (The contrast table below is from
+/// the earlier Instrument tokens; `ThemeTests` measures the current ones.)
 ///
 /// Each token is a light/dark pair, exposed as a dynamic `NSColor` (`.ns`), a SwiftUI `Color` (`.color`) and the two fixed
 /// values (`.light`, `.dark`) for surfaces that are always dark (the sidebar).
@@ -62,24 +64,24 @@ enum Theme {
 
     // Surfaces
     /// Panel tint over the blur.
-    static let surfaceTint = token(0xF6F6F3, 0x0B0B0C, lightAlpha: 0.80, darkAlpha: 0.82)
+    static let surfaceTint = token(0xF2F3F5, 0x17181B, lightAlpha: 0.80, darkAlpha: 0.82)
     /// Solid canvas: for windows that are not frosted (the library).
-    static let canvas = token(0xF6F6F3, 0x0B0B0C)
+    static let canvas = token(0xF2F3F5, 0x17181B)
     /// Sidebars, cards.
-    static let surface = token(0xFFFFFF, 0x131315)
+    static let surface = token(0xFAFAFB, 0x1F2124)
     /// Input field, hover.
-    static let surfaceRaised = token(0xEDEDE9, 0x1B1B1E)
+    static let surfaceRaised = token(0xE6E8EB, 0x2A2C30)
     /// A selected row (inkTertiary falls to 4.1 on it: use inkSecondary for meta).
-    static let surfaceSelected = token(0xE3E3DE, 0x242428)
+    static let surfaceSelected = token(0xDCDFE3, 0x33363B)
     /// Dividers.
     static let hairline = Token(light: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.09), dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.08))
     /// Focused / active borders, grid ticks.
     static let hairlineStrong = Token(light: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 0.18), dark: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.16))
 
     // Text
-    static let ink = token(0x0B0B0C, 0xF2F2EE)
-    static let inkSecondary = token(0x52525A, 0xA3A3A8)
-    static let inkTertiary = token(0x6A6A71, 0x838389)
+    static let ink = token(0x1F2124, 0xF4F5F2)
+    static let inkSecondary = token(0x4E5157, 0xB0B3B8)
+    static let inkTertiary = token(0x62656B, 0x93969C)
 
     // The accent: used rarely (focus ring, the live indicator, one primary button). Fills/marks only in light.
     // All four follow the colour chosen in Settings → Appearance (lime unless changed).

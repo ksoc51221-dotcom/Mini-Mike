@@ -174,19 +174,26 @@ enum EdgePanelLayout {
     /// item's edge for an odd count). Stitch: 171 pt.
     static let cardGap: CGFloat = 171
 
-    /// The glass disc: its centre on the screen edge, its round side to the left (Stitch: 108 pt).
-    static let discRadius: CGFloat = 108
-    static let itemSize: CGFloat = 44
+    /// The glass disc: its centre on the screen edge, its round side to the left (Stitch 108 pt; 30 % larger since
+    /// 2026-11-26, so the playing song is easier to see).
+    static let discRadius: CGFloat = 140
+    /// A ring item (25 % larger than Stitch's 44 pt since 2026-11-26).
+    static let itemSize: CGFloat = 55
     /// The ring items sit on a circle of this radius whose centre is `ringOffset` LEFT of the disc's centre (Stitch).
-    static let ringRadius: CGFloat = 179.5
+    /// (Stitch 179.5; now the same 62.5 pt clear from the disc's rim to an item's inner edge as Stitch, with the larger
+    /// disc and items.)
+    static let ringRadius: CGFloat = 217
     static let ringOffset: CGFloat = 13
-    /// The thin ring line: the same radius, centred on the disc's centre.
+    /// The ring line: the SAME circle as the items' centres (radius `ringRadius`, centre `ringOffset` left of the disc's
+    /// centre), so it runs through the middle of every item.
     static var ringLineRadius: CGFloat { ringRadius }
+    /// The ring line's centre, from the dock's top-left (y down).
+    static var ringCentre: CGPoint { CGPoint(x: dockSize.width - ringOffset, y: dockSize.height / 2) }
     /// The least clear space between two neighbouring items' edges.
     static let minItemGap: CGFloat = 8
-    /// The angle between two neighbouring items on the ring, in degrees (a 66.0 pt chord on 179.5 pt: 22 pt clear
-    /// between 44 pt items, as in Stitch).
-    static let itemStep: CGFloat = 21.2
+    /// The angle between two neighbouring items on the ring, in degrees (a 77.0 pt chord on 217 pt: 22 pt clear
+    /// between 55 pt items, as in Stitch).
+    static let itemStep: CGFloat = 20.44
     /// An item under the pointer grows to 1.08 and rises 2 pt (the dock keeps room for it).
     static let liftScale: CGFloat = 1.08
     static let liftRise: CGFloat = 2
@@ -196,12 +203,12 @@ enum EdgePanelLayout {
     static let maxItems = 2 + DockAppStore.maxPinned
     /// The record inside the disc at rest, centred on the disc's centre (half of it behind the screen edge; Stitch 76.6 pt),
     /// and the disc's three small round buttons (Stitch 30 pt).
-    static let coverSize: CGFloat = 76.6
-    /// The calm waves' outer edge round the resting record (Stitch: about 119 pt across).
-    static let discWavesRadius: CGFloat = 59.5
-    static let plusSize: CGFloat = 30
-    /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included).
-    static let appIconSize: CGFloat = 40
+    static let coverSize: CGFloat = 99.6
+    /// The calm waves' outer edge round the resting record (Stitch: about 119 pt across; x 1.3).
+    static let discWavesRadius: CGFloat = 77.4
+    static let plusSize: CGFloat = 39
+    /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included; 25 % larger).
+    static let appIconSize: CGFloat = 62
     /// From the card's right side to the screen edge: the dock and the bridge.
     static var listInset: CGFloat { dockSize.width + cardGap }
 
@@ -247,8 +254,8 @@ enum EdgePanelLayout {
     /// The disc's three small buttons ("+", search, collapse): on a circle of `discButtonRadius` about the disc's centre,
     /// so they straddle the rim (centres 9 pt outside it), `discButtonPitch` apart centre to centre, the middle one on the
     /// horizontal centre line (Stitch).
-    static let discButtonRadius: CGFloat = 117
-    static let discButtonPitch: CGFloat = 41.5
+    static let discButtonRadius: CGFloat = 149
+    static let discButtonPitch: CGFloat = 54
     /// The angle between two neighbouring buttons about the disc's centre (radians; the pitch is the chord).
     static var discButtonStep: CGFloat { 2 * asin(discButtonPitch / (2 * discButtonRadius)) }
     static func discButtonCentre(_ row: Int) -> CGPoint {
@@ -265,17 +272,18 @@ enum EdgePanelLayout {
         return CGRect(x: left, y: dockSize.height / 2 - 14, width: dockSize.width - 8 - left, height: 28)
     }
     /// The "No app" line under the field.
-    static var noMatchCentre: CGPoint { CGPoint(x: searchFieldFrame.midX, y: dockSize.height / 2 + 30) }
+    static var noMatchCentre: CGPoint { CGPoint(x: searchFieldFrame.midX, y: dockSize.height / 2 + 36) }
     /// The timer chip (22 pt high, about 60 pt wide): low in the disc by the screen edge, below the record's waves and
     /// right of the bottom button.
     static let timerChipHeight: CGFloat = 22
-    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 32, y: dockSize.height / 2 + 77) }
+    /// (Low in the disc, well below the strings' band, so it no longer cuts their beat room: 101 pt from the centre.)
+    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 32, y: dockSize.height / 2 + 112) }
     /// The chip's frame (about 60 pt wide), from the dock's top-left (y down).
     static var timerChipFrame: CGRect {
         CGRect(x: timerChipCentre.x - 30, y: timerChipCentre.y - timerChipHeight / 2, width: 60, height: timerChipHeight)
     }
     /// The small Spotify glyph button (Spotify open, but Merlin may not control it), in the cover's place.
-    static var glyphCentre: CGPoint { CGPoint(x: dockSize.width - 26, y: dockSize.height / 2) }
+    static var glyphCentre: CGPoint { CGPoint(x: dockSize.width - 34, y: dockSize.height / 2) }
 
     /// The Spotify mini player (Stitch), one size in every state, top to bottom: `spotifyPad`, the search field
     /// (`spotifySearchWidth` × `spotifySearchHeight`) with the round star button `spotifyStarGap` to its right,
@@ -296,8 +304,8 @@ enum EdgePanelLayout {
     static let spotifyButtonGap: CGFloat = 6.2
     /// The caption line sits low (2 pt above the buttons), so the strings have room to jump on a beat.
     static let spotifyCaptionHeight: CGFloat = 12
-    static let spotifyCaptionToButtons: CGFloat = 2
-    static let spotifyHeight: CGFloat = 304
+    static let spotifyCaptionToButtons: CGFloat = 8
+    static let spotifyHeight: CGFloat = 310
     static var spotifySize: CGSize { CGSize(width: listWidth, height: spotifyHeight) }
     /// From the card's top: the record's centre, the buttons' top (the play button's), the caption's top.
     static var spotifyRecordCentreY: CGFloat { spotifyPad + spotifySearchHeight + spotifyRecordGap + spotifyRecord / 2 }

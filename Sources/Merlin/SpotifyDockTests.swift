@@ -64,29 +64,30 @@ extension FeatureTests {
 
         let fake = FakeSpotify()
         let svc = SpotifyService(backend: fake, loader: FakeLoader(image: solid(.red)))
-        check("spotify: starts notRunning + emerald", svc.state == .notRunning && svc.palette == .emerald && svc.cover == nil)
+        check("spotify: starts notRunning + emerald", svc.state == .notRunning && svc.palette == .standard && svc.cover == nil)
 
         fake.result = .track(playing)
         svc.refresh()
         wait { svc.cover != nil }
         check("spotify: playing track maps through the service", svc.state == .track(playing))
-        check("spotify: cover loaded and palette changed", svc.cover != nil && svc.palette != .emerald)
+        check("spotify: cover loaded and palette changed", svc.cover != nil && svc.palette != .standard)
 
         var paused = playing; paused.isPlaying = false
         fake.result = .track(paused)
         svc.refresh()
         wait { svc.state == .track(paused) }
-        check("spotify: paused returns emerald", svc.state == .track(paused) && svc.palette == .emerald)
+        check("spotify: paused keeps the cover's palette", svc.state == .track(paused) && svc.palette != .standard
+              && svc.palette == DockPalette.from(image: solid(.red)))
 
         fake.result = .denied
         svc.refresh()
         wait { svc.state == .denied }
-        check("spotify: denied maps and has no cover", svc.state == .denied && svc.cover == nil && svc.palette == .emerald)
+        check("spotify: denied maps and has no cover", svc.state == .denied && svc.cover == nil && svc.palette == .standard)
 
         fake.running = false
         svc.refresh()
         wait { svc.state == .notRunning }
-        check("spotify: not running -> no cover, emerald", svc.state == .notRunning && svc.cover == nil && svc.palette == .emerald)
+        check("spotify: not running -> no cover, emerald", svc.state == .notRunning && svc.cover == nil && svc.palette == .standard)
 
         fake.running = true
         fake.result = .stopped
@@ -108,7 +109,7 @@ extension FeatureTests {
         check("spotify: red palette contrast", DockPalette.contrast(red.ink, red.base) >= 7 && DockPalette.contrast(red.accent, red.base) >= 3)
         let grey = DockPalette.from(image: solid(NSColor(srgbRed: 0.5, green: 0.5, blue: 0.5, alpha: 1)))
         check("spotify: grey palette contrast", DockPalette.contrast(grey.ink, grey.base) >= 7 && DockPalette.contrast(grey.accent, grey.base) >= 3)
-        let e = DockPalette.emerald
+        let e = DockPalette.standard
         check("spotify: emerald contrast", DockPalette.contrast(e.ink, e.base) >= 7 && DockPalette.contrast(e.accent, e.base) >= 3)
 
         // Guards: every kind of cover keeps the ink at 4.5:1 on the flat path's solid base, the accent at 3:1 on the base,
@@ -133,7 +134,7 @@ extension FeatureTests {
               failed.isEmpty)
         // Text on an accent fill (play-pause, Done, Add): emerald, every cover kind above, and solid covers at 12 hues x
         // 3 saturations x 3 brightnesses plus greys.
-        var fills: [(String, DockPalette)] = [("emerald", .emerald)] + covers.map { ($0.0, DockPalette.from(image: $0.1)) }
+        var fills: [(String, DockPalette)] = [("standard", .standard)] + covers.map { ($0.0, DockPalette.from(image: $0.1)) }
         for h in 0..<12 { for s in [0.3, 0.65, 1.0] { for b in [0.35, 0.7, 1.0] {
             fills.append(("h\(h) s\(s) b\(b)", DockPalette.from(image: solid(NSColor(hue: CGFloat(h) / 12, saturation: CGFloat(s),
                                                                                      brightness: CGFloat(b), alpha: 1)))))
@@ -152,8 +153,10 @@ extension FeatureTests {
         let blueP = DockPalette.from(image: EdgeDockFixtures.coverBlue())
         check("spotify: the grey cover gets a tone gap of \(String(format: "%.2f", DockPalette.contrast(greyP.accent, greyP.accent2))) between its accents",
               DockPalette.contrast(greyP.accent, greyP.accent2) >= DockPalette.minToneContrast)
-        check("spotify: the single colour cover gets a hue gap of \(String(format: "%.3f", DockPalette.hueGap(DockPalette.from(image: EdgeDockFixtures.coverSingle()).accent, DockPalette.from(image: EdgeDockFixtures.coverSingle()).accent2))) between its accents",
-              DockPalette.hueGap(DockPalette.from(image: EdgeDockFixtures.coverSingle()).accent, DockPalette.from(image: EdgeDockFixtures.coverSingle()).accent2) >= DockPalette.minHueGap)
+        // One accent per cover (2026-11-26): the second colour is a near-grey of the same hue, told apart by tone.
+        let single = DockPalette.from(image: EdgeDockFixtures.coverSingle())
+        check("spotify: the single colour cover's second colour is a grey told apart by tone (\(String(format: "%.2f", DockPalette.contrast(single.accent, single.accent2))):1)",
+              DockPalette.accentsDiffer(single.accent, single.accent2) && DockPalette.contrast(single.accent, single.accent2) >= DockPalette.minToneContrast)
         check("spotify: a blue cover gives a bluish palette, a grey cover a neutral one",
               blueP.base.usingColorSpace(.sRGB)!.blueComponent > blueP.base.usingColorSpace(.sRGB)!.redComponent
               && abs(greyP.base.usingColorSpace(.sRGB)!.redComponent - greyP.base.usingColorSpace(.sRGB)!.blueComponent) < 0.01)
@@ -179,22 +182,26 @@ extension FeatureTests {
         settle(songA, loads: 1)
         held.held[0].1(solid(NSColor(srgbRed: 0.9, green: 0.1, blue: 0.1, alpha: 1)))
         let paletteA = flip.palette
-        check("spotify: song A's cover sets its palette", paletteA != .emerald)
+        check("spotify: song A's cover sets its palette", paletteA != .standard)
         seen = []
         settle(songB, loads: 2)
-        check("spotify: while song B's cover loads the palette stays A's", flip.palette == paletteA && !seen.contains(.emerald))
+        check("spotify: while song B's cover loads the palette stays A's", flip.palette == paletteA && !seen.contains(.standard))
         held.held[1].1(solid(NSColor(srgbRed: 0.1, green: 0.2, blue: 0.9, alpha: 1)))
         let paletteB = flip.palette
         check("spotify: song B's cover then replaces it in one step, never through emerald",
-              paletteB != paletteA && paletteB != .emerald && !seen.contains(.emerald) && seen == [paletteB])
+              paletteB != paletteA && paletteB != .standard && !seen.contains(.standard) && seen == [paletteB])
         seen = []
         settle(songC, loads: 3)
         held.held[2].1(nil)
-        check("spotify: a cover that fails to load keeps the previous palette", flip.palette == paletteB && !seen.contains(.emerald))
+        check("spotify: a cover that fails to load keeps the previous palette", flip.palette == paletteB && !seen.contains(.standard))
         fb.result = .track(SpotifyTrack(title: "C", artist: "x", artworkURL: songC.artworkURL, isPlaying: false))
         flip.refresh()
-        wait { flip.palette == .emerald }
-        check("spotify: paused returns exactly emerald", flip.palette == .emerald)
+        wait { flip.state == .track(SpotifyTrack(title: "C", artist: "x", artworkURL: songC.artworkURL, isPlaying: false)) }
+        check("spotify: paused keeps the palette shown (no reset)", flip.palette == paletteB)
+        fb.running = false
+        flip.refresh()
+        wait { flip.palette == .standard }
+        check("spotify: Spotify closed returns exactly the default palette", flip.palette == .standard)
         watch.cancel()
         check("spotify: the palette crossfade is one 0.4 s token", Motion.edgePalette == Animation.easeInOut(duration: 0.4))
 

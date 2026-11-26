@@ -805,8 +805,8 @@ enum GlyphGallery {
         let dark: Bool
 
         var body: some View {
-            let bg = dark ? Color(red: 0x0B / 255, green: 0x0B / 255, blue: 0x0C / 255) : Color(red: 0xF6 / 255, green: 0xF6 / 255, blue: 0xF3 / 255)
-            let ink = dark ? Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xEE / 255) : Color(red: 0x0B / 255, green: 0x0B / 255, blue: 0x0C / 255)
+            let bg = Color(nsColor: Theme.canvas.resolved(dark: dark))
+            let ink = Color(nsColor: Theme.ink.resolved(dark: dark))
             let cols = 6
             let kinds = GlyphKind.allCases
             let rows = stride(from: 0, to: kinds.count, by: cols).map { Array(kinds[$0..<min($0 + cols, kinds.count)]) }
@@ -839,8 +839,8 @@ enum GlyphGallery {
         let kinds: [GlyphKind]
 
         var body: some View {
-            let bg = dark ? Color(red: 0x0B / 255, green: 0x0B / 255, blue: 0x0C / 255) : Color(red: 0xF6 / 255, green: 0xF6 / 255, blue: 0xF3 / 255)
-            let ink = dark ? Color(red: 0xF2 / 255, green: 0xF2 / 255, blue: 0xEE / 255) : Color(red: 0x0B / 255, green: 0x0B / 255, blue: 0x0C / 255)
+            let bg = Color(nsColor: Theme.canvas.resolved(dark: dark))
+            let ink = Color(nsColor: Theme.ink.resolved(dark: dark))
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(kinds, id: \.self) { k in
                     HStack(spacing: 12) {

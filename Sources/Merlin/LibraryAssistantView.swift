@@ -122,7 +122,7 @@ struct LibraryAssistantView: View {
                             MessageView(message: m, chat: chat).id(m.id)
                         }
                         if chat.busy {
-                            ThinkingIndicator(verbs: ["Thinking", "Looking through your Library", "Working it out", "Lining things up"])
+                            ThinkingIndicator(verbs: ["Thinking", "Looking through your Library", "Working it out", "Lining things up"], orb: .solving)
                                 .id("busy").transition(.opacity)
                         }
                     }

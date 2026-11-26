@@ -87,6 +87,8 @@ enum EdgeLensProfile {
     /// buttons, the rim buttons, the timer chip), a little stronger.
     static let bodyDim: CGFloat = 0.2
     static let controlDim: CGFloat = 0.35
+    /// How much of the theme's accent washes the glass body (the rim fringe takes it in full).
+    static let tintStrength: CGFloat = 0.14
     /// The picture's fade-in after the first frame.
     static let fadeIn: TimeInterval = 0.15
 
@@ -115,7 +117,7 @@ enum EdgeLensProfile {
     }
 }
 
-/// The shader's uniforms: five float4s, the same layout in Swift and MSL.
+/// The shader's uniforms: six float4s, the same layout in Swift and MSL.
 struct EdgeLensUniforms {
     /// (width pt, height pt, pixel scale, kind: 0 circle, 1 rounded rect)
     var a: SIMD4<Float>
@@ -128,11 +130,13 @@ struct EdgeLensUniforms {
     /// (body: colour, lift, inner shadow and left band on (1) or off (0, the geometry tests); frost radius pt; ink 0 light
     /// ... 1 dark; dark ink's lift)
     var e: SIMD4<Float>
+    /// (the theme tint: rgb, body wash)
+    var f: SIMD4<Float> = SIMD4(0, 0, 0, 0)
 
     /// `dim` nil: from the size (`EdgeLensProfile.dim`).
     static func make(kind: EdgeLensShape.Kind, size: CGSize, scale: CGFloat, offset: CGPoint, capture: CGSize,
                      hasPicture: Bool, rimOnly: Bool, dim: CGFloat? = nil, fade: CGFloat = 1, body: Bool = true,
-                     ink: CGFloat = 0) -> EdgeLensUniforms {
+                     ink: CGFloat = 0, tint: SIMD4<Float> = SIMD4(0, 0, 0, 0)) -> EdgeLensUniforms {
         let half = min(size.width, size.height) / 2
         let band = EdgeLensProfile.band(minHalf: half)
         let isCircle: Bool = { if case .circle = kind { return true } else { return false } }()
@@ -142,7 +146,8 @@ struct EdgeLensUniforms {
             c: SIMD4(Float(offset.x), Float(offset.y), Float(max(capture.width, 1)), Float(max(capture.height, 1))),
             d: SIMD4(rimOnly ? 1 : 0, Float(EdgeLensProfile.fringe), Float(dim ?? EdgeLensProfile.dim(minHalf: half)),
                      Float(min(max(fade, 0), 1))),
-            e: SIMD4(body ? 1 : 0, body ? Float(EdgeLensProfile.frost) : 0, Float(min(max(ink, 0), 1)), Float(EdgeLensInk.darkLift)))
+            e: SIMD4(body ? 1 : 0, body ? Float(EdgeLensProfile.frost) : 0, Float(min(max(ink, 0), 1)), Float(EdgeLensInk.darkLift)),
+            f: tint)
     }
 }
 
@@ -202,6 +207,17 @@ final class EdgeLensRenderer {
     func register(_ v: EdgeLensNSView) { views.add(v) }
     func unregister(_ v: EdgeLensNSView) { views.remove(v) }
 
+    /// The theme in the glass (2026-11-26: "make the theme more prominent through the liquid glass"): the dock palette's
+    /// accent (rgb) and how much of it washes the body (a). The rim's fringe takes the same colour.
+    private(set) var tint = SIMD4<Float>(0, 0.898, 1, Float(EdgeLensProfile.tintStrength))
+    func setTint(_ color: NSColor) {
+        let c = color.usingColorSpace(.sRGB) ?? color
+        let t = SIMD4(Float(c.redComponent), Float(c.greenComponent), Float(c.blueComponent), Float(EdgeLensProfile.tintStrength))
+        guard t != tint else { return }
+        tint = t
+        for v in views.allObjects { v.redraw(frameTime: nil, force: true) }
+    }
+
     /// The ink: every surface with its own region measures the frame under it.
     func sampleInk(_ pixels: CVPixelBuffer, capture: NSRect) {
         EdgeLensInk.shared.sample(pixels, capture: capture, views: views.allObjects)
@@ -224,7 +240,7 @@ final class EdgeLensRenderer {
     #include <metal_stdlib>
     using namespace metal;
 
-    struct U { float4 a; float4 b; float4 c; float4 d; float4 e; };
+    struct U { float4 a; float4 b; float4 c; float4 d; float4 e; float4 f; };
     struct V { float4 pos [[position]]; };
 
     vertex V lensVertex(uint vid [[vertex_id]]) {
@@ -299,6 +315,8 @@ final class EdgeLensRenderer {
         float4 dimmed = float4(o.rgb * (1.0 - dim), dim + o.a * (1.0 - dim));
         float4 lifted = float4(float3(lift) + o.rgb * (1.0 - lift), lift + o.a * (1.0 - lift));
         o = mix(dimmed, lifted, ink);
+        // The theme: a wash of the accent through the body (premultiplied, so the alpha stays).
+        o = float4(mix(o.rgb, u.f.rgb * o.a, u.f.a * body), o.a);
 
         // Thickness: a soft inner shadow along the bottom-right inside edge.
         float br = max(dot(n, float2(0.7071, 0.7071)), 0.0);
@@ -313,7 +331,9 @@ final class EdgeLensRenderer {
         // The crisp 1 pt rim: white 0.55 at the top-left fading to 0.15, a blue-to-pink fringe along the top and bottom.
         float line = 1.0 - smoothstep(0.7, 1.2, t);
         float lit = 0.15 + 0.40 * max(dot(n, float2(-0.7071, -0.7071)), 0.0);
-        float3 tint = mix(float3(0.4, 0.68, 1.0), float3(1.0, 0.5, 0.85), clamp(p.x / size.x, 0.0, 1.0));
+        // The fringe in the theme's accent: full at the left, lighter toward the right.
+        float3 accent = u.f.a > 0.0 ? u.f.rgb : float3(0.4, 0.68, 1.0);
+        float3 tint = mix(accent, mix(accent, float3(1.0), 0.45), clamp(p.x / size.x, 0.0, 1.0));
         float fr = abs(n.y) * abs(n.y);
         // Under dark ink the hairline turns a soft dark grey (white would vanish on a bright backdrop).
         float3 rim = mix(mix(float3(1.0), float3(0.3), ink), tint, 0.8 * fr);
@@ -412,7 +432,7 @@ final class EdgeLensNSView: NSView {
 
     /// Draws now (a new frame always; otherwise only when something changed and the window shows). `frameTime`: the
     /// frame's display time, to measure its delay to the screen.
-    func redraw(frameTime: CFTimeInterval?) {
+    func redraw(frameTime: CFTimeInterval?, force: Bool = false) {
         let renderer = EdgeLensRenderer.shared, capture = EdgeLensCapture.shared
         guard let window, window.isVisible, let metal, let queue = renderer.queue, bounds.width >= 1, bounds.height >= 1 else { return }
         let onScreen = window.convertToScreen(convert(bounds, to: nil))
@@ -421,7 +441,7 @@ final class EdgeLensNSView: NSView {
         let fade = capture.pictureFade
         let now = Drawn(onScreen: onScreen, kind: kind, picture: capture.texture.map { ObjectIdentifier($0) }, capture: cap, fade: fade,
                         ink: ink)
-        if frameTime == nil, now == drawn { return }
+        if frameTime == nil, !force, now == drawn { return }
         drawn = now
         let scale = window.backingScaleFactor
         if metal.device == nil { metal.device = renderer.device }
@@ -430,7 +450,7 @@ final class EdgeLensNSView: NSView {
         let u = EdgeLensUniforms.make(kind: kind, size: bounds.size, scale: scale,
                                       offset: CGPoint(x: onScreen.minX - cap.minX, y: cap.maxY - onScreen.maxY),
                                       capture: cap.size, hasPicture: capture.texture != nil, rimOnly: EdgeLensCapture.rimOnly,
-                                      fade: fade, ink: ink)
+                                      fade: fade, ink: ink, tint: renderer.tint)
         guard let drawable = metal.nextDrawable(), let commands = queue.makeCommandBuffer() else { return }
         renderer.encode(commands, target: drawable.texture, uniforms: u, picture: capture.texture)
         if let frameTime {

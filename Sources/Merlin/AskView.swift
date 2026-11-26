@@ -614,7 +614,7 @@ struct AskView: View {
                     ForEach(model.turns) { turn in
                         let isLive = turn.id == model.turns.last?.id && !turn.done
                         TurnView(turn: turn, status: isLive ? model.status : nil, speech: model.speech,
-                                 onMinimize: isLive ? { model.onMinimize?() } : nil)
+                                 onMinimize: isLive ? { model.onMinimize?() } : nil, local: isLive && model.engine.isLocal)
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)),
                                                     removal: .opacity))
                     }
@@ -1034,6 +1034,8 @@ private struct TurnView: View {
     let status: String?
     let speech: SpeechStore
     let onMinimize: (() -> Void)?
+    /// The live answer comes from the local model (Local mode).
+    var local = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -1043,7 +1045,7 @@ private struct TurnView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if turn.answer.isEmpty && !turn.done {
                 HStack(spacing: 7) {
-                    ThinkingIndicator(status: status)
+                    ThinkingIndicator(status: status, local: local || turn.localModel != nil)
                     Spacer(minLength: 6)
                     if let onMinimize {
                         Button(action: onMinimize) {

@@ -201,6 +201,9 @@ final class AgentLoop {
         - To play a song: WebSearch "open.spotify.com/track <title> <artist>", then call play_spotify_track with the track URL \
         and the title. If the request doesn't name the song, ask which song in your reply and do nothing.
         - A reminder or timer "in the dock" is Merlin's own: reminder_start / timer_start (not Apple Reminders).
+        - A request with a time and no other detail ("schedule something for three minutes later", "send me a reminder \
+        for 10 minutes") is a reminder: call reminder_start at once with the words given, or "Reminder" if there are none. \
+        Do not ask what it should say. Ask a question only when no tool can do any part of the request.
         - run_script only when no other tool fits. Merlin shows the user your summary and the script and asks first. Never \
         delete, send, or buy anything the request didn't ask for. Never type or ask for a password.
         - If the REQUEST is a question or a chat request, not a task for the Mac, reply exactly QUESTION and use no tool.

@@ -15,15 +15,21 @@ enum AppearanceMode: String, CaseIterable {
     }
 }
 
-/// Merlin's one accent colour, anywhere on the colour wheel. `nil` is Merlin's own lime.
+/// Merlin's one accent colour, anywhere on the colour wheel. `nil` is Merlin's own lime. `followsMusic`: electric cyan
+/// with no song, the playing song's cover colour with one (the default since 2026-11-26). `exact`: that resolved colour.
 struct AccentTheme: Equatable {
     var hue: Double?
+    var followsMusic = false
+    var exact: NSColor? = nil
 
     static let lime = AccentTheme(hue: nil)
+    /// The default: cyan #00E5FF, or the playing song's cover colour.
+    static let music = AccentTheme(hue: nil, followsMusic: true)
+    static let cyan = rgb(0x00E5FF)
     /// The lime's own position on the wheel (for the slider).
     static let limeHue = 0.2155
     static let presets: [(name: String, theme: AccentTheme)] = [
-        ("Lime", .lime), ("Mint", .init(hue: 0.40)), ("Aqua", .init(hue: 0.50)), ("Sky", .init(hue: 0.58)),
+        ("Music", .music), ("Lime", .lime), ("Mint", .init(hue: 0.40)), ("Aqua", .init(hue: 0.50)), ("Sky", .init(hue: 0.58)),
         ("Blue", .init(hue: 0.65)), ("Violet", .init(hue: 0.75)), ("Pink", .init(hue: 0.90)),
         ("Coral", .init(hue: 0.015)), ("Amber", .init(hue: 0.11)),
     ]
@@ -34,6 +40,8 @@ struct AccentTheme: Equatable {
 
     /// Fills and marks: the send button, the focus line, the live dot.
     var fill: NSColor {
+        if let exact { return exact }
+        if followsMusic { return Self.cyan }
         guard let hue else { return Self.rgb(0xC6FF3D) }
         return NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hsb(hue, 0.76, 1)
     }
@@ -47,7 +55,11 @@ struct AccentTheme: Equatable {
 
     /// The accent as text or a link on the canvas, nudged until it reads (4.5:1) in that appearance.
     func text(dark: Bool) -> NSColor {
-        guard let hue else { return dark ? Self.rgb(0xC6FF3D) : Self.rgb(0x4A6B00) }
+        if !followsMusic && exact == nil && hue == nil { return dark ? Self.rgb(0xC6FF3D) : Self.rgb(0x4A6B00) }
+        // A colour (cyan or a cover's): its own hue and saturation, darkened (light) or lightened (dark) until it reads.
+        var h: CGFloat = 0, sat: CGFloat = 0, v: CGFloat = 0, al: CGFloat = 0
+        (fill.usingColorSpace(.sRGB) ?? fill).getHue(&h, saturation: &sat, brightness: &v, alpha: &al)
+        let hue = self.hue ?? Double(h), s = exact != nil || followsMusic ? max(Double(sat), 0) : 0.95
         let canvas = dark ? Theme.canvas.dark : Theme.canvas.light
         var color = fill
         if dark {
@@ -55,8 +67,8 @@ struct AccentTheme: Equatable {
             while Self.contrast(color, canvas) < 4.5, step < 1 { step += 0.08; color = fill.mixed(with: .white, by: step) }
         } else {
             var b = 0.7
-            color = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hsb(hue, 0.95, b)
-            while Self.contrast(color, canvas) < 4.5, b > 0.1 { b -= 0.04; color = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hsb(hue, 0.95, b) }
+            color = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hsb(hue, s, b)
+            while Self.contrast(color, canvas) < 4.5, b > 0.1 { b -= 0.04; color = NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1).hsb(hue, s, b) }
         }
         return color
     }
@@ -104,20 +116,69 @@ final class ThemeStore: ObservableObject {
     private var _accent: AccentTheme
     private var _mode: AppearanceMode
     private static let hueKey = "accentHue", modeKey = "appearanceMode"
+    /// "music" (the default when unset) or "hue" (the saved `accentHue`, or lime). A saved hue from before 2026-11-26
+    /// stays in the defaults but is not used until a colour is picked again in Settings.
+    private static let choiceKey = "accentChoice"
+    /// The playing song's cover colour (nil: no song, so cyan). Never set in test or picture runs.
+    private var _music: NSColor?
+    private var pendingMusic = false
+    private var resignObserver: NSObjectProtocol?
 
     init(defaults: UserDefaults, appliesToApp: Bool = true) {
         self.defaults = defaults
         self.appliesToApp = appliesToApp
-        _accent = defaults.object(forKey: Self.hueKey) == nil ? .lime : AccentTheme(hue: defaults.double(forKey: Self.hueKey))
+        if defaults.string(forKey: Self.choiceKey) != "hue" {
+            _accent = .music
+        } else {
+            _accent = defaults.object(forKey: Self.hueKey) == nil ? .lime : AccentTheme(hue: defaults.double(forKey: Self.hueKey))
+        }
         _mode = AppearanceMode(rawValue: defaults.string(forKey: Self.modeKey) ?? "") ?? .system
     }
 
-    var accent: AccentTheme { lock.lock(); defer { lock.unlock() }; return _accent }
+    /// The accent to draw with: the choice, with "music" resolved to cyan or the cover's colour.
+    var accent: AccentTheme {
+        lock.lock(); defer { lock.unlock() }
+        guard _accent.followsMusic else { return _accent }
+        return AccentTheme(hue: nil, followsMusic: true, exact: _music)
+    }
+    /// What Settings shows as picked (".music" while the accent follows the music).
+    var choice: AccentTheme { lock.lock(); defer { lock.unlock() }; return _accent }
+
+    /// The cover's colour (nil: no song). The windows redraw at once while Merlin is in the background; while it is in
+    /// front the change waits until it is not, so a song change never rebuilds a window you are typing in.
+    func setMusicAccent(_ color: NSColor?) {
+        guard appliesToApp, !CommandLine.arguments.contains("--uishots") else { return }
+        lock.lock()
+        let changed = _music != color
+        _music = color
+        let follows = _accent.followsMusic
+        lock.unlock()
+        guard changed, follows else { return }
+        if NSApplication.shared.isActive {
+            guard !pendingMusic else { return }
+            pendingMusic = true
+            resignObserver = NotificationCenter.default.addObserver(forName: NSApplication.didResignActiveNotification,
+                                                                    object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                self.pendingMusic = false
+                if let o = self.resignObserver { NotificationCenter.default.removeObserver(o) }
+                self.resignObserver = nil
+                self.revision += 1
+            }
+        } else {
+            DispatchQueue.main.async { self.revision += 1 }
+        }
+    }
     var mode: AppearanceMode { lock.lock(); defer { lock.unlock() }; return _mode }
 
     func setAccent(_ theme: AccentTheme) {
+        var theme = theme
+        theme.exact = nil
         lock.lock(); _accent = theme; lock.unlock()
-        if let hue = theme.hue { defaults.set(hue, forKey: Self.hueKey) } else { defaults.removeObject(forKey: Self.hueKey) }
+        defaults.set(theme.followsMusic ? "music" : "hue", forKey: Self.choiceKey)
+        if !theme.followsMusic {
+            if let hue = theme.hue { defaults.set(hue, forKey: Self.hueKey) } else { defaults.removeObject(forKey: Self.hueKey) }
+        }
         DispatchQueue.main.async { self.revision += 1 }
     }
 

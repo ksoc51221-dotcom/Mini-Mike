@@ -1476,7 +1476,7 @@ extension LibrarySettingsView {
 /// Light or dark, and one accent colour anywhere on the wheel.
 private struct LSAppearance: View {
     @ObservedObject private var store = ThemeStore.shared
-    @State private var draft = ThemeStore.shared.accent
+    @State private var draft = ThemeStore.shared.choice
     @State private var dragging = false
     @Environment(\.colorScheme) private var scheme
 
@@ -1509,12 +1509,12 @@ private struct LSAppearance: View {
                 Text("Drag along the spectrum for any colour. Text and buttons adjust themselves to stay readable.")
                     .font(.geist(12)).foregroundStyle(Theme.inkTertiary.color).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 12)
-                LSButton("Reset", enabled: store.accent != .lime || store.mode != .system) {
-                    store.setAccent(.lime); store.setMode(.system); draft = .lime
+                LSButton("Reset", enabled: store.choice != .music || store.mode != .system) {
+                    store.setAccent(.music); store.setMode(.system); draft = .music
                 }
             }
         }
-        .onChange(of: store.accent) { _, new in draft = new }
+        .onChange(of: store.revision) { _, _ in draft = store.choice }
     }
 
     private func swatch(_ name: String, _ theme: AccentTheme) -> some View {
