@@ -42,7 +42,7 @@ extension EnvironmentValues {
 enum EdgeDockArt {
     /// The frame the three beat strings are drawn in, around the record (their band is `BeatStrings.Place.disc`, clear of
     /// the disc buttons' column, 14 pt in from the rim).
-    static let orbRadius: CGFloat = 104
+    static let orbRadius: CGFloat = 120
     /// The ring line's width (2026-11-26: more prominent than the 1 pt hairline).
     static let ringLineWidth: CGFloat = 3
     /// The black under the mini player's record title (on the cover art), so the ink keeps 4.5:1 on a white cover.
@@ -385,7 +385,7 @@ struct EdgeDockView: View {
         let centres = EdgePanelLayout.itemCentres(count: items.count)
         let calm = Motion.still || Motion.reduceMotion
         ZStack(alignment: .topLeading) {
-            EdgeHalo(palette: p)
+            EdgeHalo(palette: p, moving: model.shown && !calm)
                 .frame(width: s.width, height: s.height)
             EdgeDockDisc(model: model)
                 .frame(width: s.width, height: s.height)
@@ -415,20 +415,69 @@ struct EdgeDockView: View {
     }
 }
 
-/// The ring the items sit on: the accent line on a soft dark casing (so it reads on a white page too), on the SAME
-/// circle as the items' centres (`EdgePanelLayout.ringCentre`), out to the screen edge.
+/// The ring the items sit on: a row of tiny accent dots, each on a soft dark casing (so it reads on a white page too),
+/// on the SAME circle as the items' centres (`EdgePanelLayout.ringCentre`), out to the screen edge. While the dock shows
+/// (and motion is allowed) the dots drift slowly along the orbit, and a soft bright "comet" sweeps down the arc
+/// (motion.dev "Motion along a path", animate-ui "Shine"). Still: even dots, a whole number round the circle, one on the
+/// centre line.
 private struct EdgeHalo: View {
     let palette: DockPalette
+    var moving = false
+
+    /// Dots round the whole circle (even, so one sits on the centre line on each side): about 9 pt apart.
+    static let dots = 152
+    /// The dot and its casing.
+    static let dot: CGFloat = 3.2
+    static let casing: CGFloat = 1.4
+    /// One dot spacing every this many seconds (the drift); the comet's trip down the visible arc.
+    static let driftPeriod = 1.6
+    static let cometPeriod = 5.5
 
     var body: some View {
-        let c = EdgePanelLayout.ringCentre, r = EdgePanelLayout.ringLineRadius
-        let ring = Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
-        ZStack {
-            ring.stroke(Color.black.opacity(0.16), lineWidth: EdgeDockArt.ringLineWidth + 1.5) // a faint edge on white pages
-            ring.stroke(palette.accentColor, lineWidth: EdgeDockArt.ringLineWidth)
+        if moving {
+            TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+                dots(time: ctx.date.timeIntervalSinceReferenceDate)
+            }
+            .allowsHitTesting(false)
+        } else {
+            dots(time: nil).allowsHitTesting(false)
         }
-        .clipped() // the circle's right half lies past the screen edge
-        .allowsHitTesting(false)
+    }
+
+    private func dots(time: Double?) -> some View {
+        let accent = palette.accentColor
+        return Canvas { gc, size in
+            let c = EdgePanelLayout.ringCentre, r = EdgePanelLayout.ringLineRadius
+            let step = 2 * Double.pi / Double(Self.dots)
+            let drift = time.map { ($0 / Self.driftPeriod).truncatingRemainder(dividingBy: 1) * step } ?? 0
+            // The visible arc runs from the top of the frame to the bottom: angles (from the left axis) within ±span.
+            let span = asin(min(1, Double(size.height / 2) / Double(r)))
+            let comet: Double? = time.map {
+                let f = ($0 / Self.cometPeriod).truncatingRemainder(dividingBy: 1)
+                return -span * 1.3 + f * span * 2.6 // enters above the top, leaves below the bottom
+            }
+            for i in 0..<Self.dots {
+                // Angle 0 is the leftmost point of the circle (on the centre line); positive goes down.
+                var a = Double(i) * step + drift
+                if a > .pi { a -= 2 * .pi }
+                guard abs(a) <= span + step else { continue }
+                let p = CGPoint(x: c.x - r * CGFloat(cos(a)), y: c.y + r * CGFloat(sin(a)))
+                guard p.x < size.width + Self.dot else { continue }
+                var glow = 0.0
+                if let comet { let d = (a - comet) / 0.11; glow = exp(-d * d) }
+                let d = Self.dot * CGFloat(1 + 0.6 * glow)
+                let back = CGRect(x: p.x - d / 2 - Self.casing / 2, y: p.y - d / 2 - Self.casing / 2,
+                                  width: d + Self.casing, height: d + Self.casing)
+                gc.fill(Path(ellipseIn: back), with: .color(.black.opacity(0.18)))
+                gc.fill(Path(ellipseIn: CGRect(x: p.x - d / 2, y: p.y - d / 2, width: d, height: d)),
+                        with: .color(accent.opacity(0.7 + 0.3 * glow)))
+                if glow > 0.05 {
+                    let g = d * 2.6
+                    gc.fill(Path(ellipseIn: CGRect(x: p.x - g / 2, y: p.y - g / 2, width: g, height: g)),
+                            with: .color(accent.opacity(0.22 * glow)))
+                }
+            }
+        }
     }
 }
 
@@ -480,6 +529,7 @@ private struct EdgeDiscLines: View {
 /// The glass half-disc with the record (or the Spotify glyph), "+" and collapse.
 private struct EdgeDockDisc: View {
     @ObservedObject var model: EdgePanelModel
+    @ObservedObject private var timers = TimerStore.shared
 
     var body: some View {
         let p = model.palette
@@ -559,7 +609,8 @@ private struct EdgeDockDisc: View {
             EmptyView()
         case .track(let t):
             let c = EdgePanelLayout.coverCentre
-            EdgeWaves(palette: p, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
+            // While a timer shows, the beat room also stops short of its chip.
+            EdgeWaves(palette: p, place: timers.next == nil ? .disc : .discWithChip, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
                 .frame(width: EdgeDockArt.orbRadius * 2, height: EdgeDockArt.orbRadius * 2)
                 .position(x: c.x, y: c.y)
             EdgeCoverDisc(image: model.spotify.cover, spinning: t.isPlaying && model.shown && !Motion.still && !Motion.reduceMotion,
@@ -608,6 +659,13 @@ private struct EdgeRingItem: View {
     let index: Int
     var onHover: (Bool) -> Void = { _ in }
     @State private var hovering = false
+    /// The pointer's pull (apps only: motion.dev / animate-ui "Magnetic"), at most `EdgeRingItem.pull` points.
+    @State private var magnet: CGSize = .zero
+    /// Counts hover entries: each one plays the bobble (motion.dev "Bobble hover").
+    @State private var bobbles = 0
+
+    /// The magnetic pull's reach (well under `EdgePanelLayout.minItemGap`, so neighbours never touch).
+    static let pull: CGFloat = 3
 
     private var section: EdgePanelModel.Section? {
         switch item {
@@ -664,31 +722,64 @@ private struct EdgeRingItem: View {
             }
         }
         .buttonStyle(EdgePressStyle(scale: isApp ? 0.96 : Motion.pressScale))
+        // The bobble: a short springy wobble each time the pointer arrives.
+        .keyframeAnimator(initialValue: 0.0, trigger: bobbles) { view, turn in
+            view.rotationEffect(.degrees(turn))
+        } keyframes: { _ in
+            KeyframeTrack {
+                SpringKeyframe(-9, duration: 0.12, spring: .snappy)
+                SpringKeyframe(6, duration: 0.14, spring: .snappy)
+                SpringKeyframe(-3, duration: 0.12, spring: .snappy)
+                SpringKeyframe(0, duration: 0.3, spring: .bouncy)
+            }
+        }
+        .offset(magnet)
+        .animation(Motion.still ? nil : .spring(duration: 0.35, bounce: 0.35), value: magnet)
         .scaleEffect(lifted ? EdgePanelLayout.liftScale : 1)
         .offset(y: hovering && !Motion.reduceMotion ? -EdgePanelLayout.liftRise : 0)
         .animation(Motion.still ? nil : (isApp ? Motion.edgeRise : Motion.edgeState), value: lifted)
         .animation(Motion.still ? nil : (isApp ? Motion.edgeRise : Motion.edgeState), value: hovering)
         // The name, in a dark glass pill to the left (outside the layout, never takes the pointer).
         .overlay(alignment: .leading) {
+            // The name slides in from the item with a blur that clears (animate-ui "Blur" + "Slide").
             EdgeNameLabel(text: title, palette: p)
                 .fixedSize()
                 .alignmentGuide(.leading) { d in d[.trailing] + 10 }
                 .opacity(hovering ? 1 : 0)
-                .animation(Motion.still ? nil : .easeOut(duration: 0.12), value: hovering)
+                .offset(x: hovering || Motion.reduceMotion ? 0 : 8)
+                .blur(radius: hovering || Motion.reduceMotion ? 0 : 3)
+                .animation(Motion.still ? nil : (Motion.reduceMotion ? .easeOut(duration: 0.12)
+                                                 : .spring(duration: 0.3, bounce: 0.25)), value: hovering)
                 .allowsHitTesting(false)
         }
-        .edgeHover { h in
+        .edgeHover({ h in
             hovering = h
             onHover(h)
+            if h, !Motion.still, !Motion.reduceMotion { bobbles += 1 }
+            if !h { magnet = .zero }
             if let section { model.hoverChoice(section, h) } // only Chats and Notes open on hover
-        }
-        // The entrance: a fade and a scale from 0.95, one item after another.
+        }, moved: { at in
+            // Apps only (Chats and Notes are glass surfaces that keep their place).
+            guard isApp, !Motion.reduceMotion else { return }
+            magnet = CGSize(width: at.x * Self.pull, height: at.y * Self.pull)
+        })
+        // The entrance (motion.dev "Radial menu" + "Physical stagger"): each item springs out of the disc's centre along
+        // its own spoke, one after another; Chats and Notes (glass) pop in place with the same spring.
         .opacity(model.shown ? 1 : 0)
-        .scaleEffect(model.shown || Motion.reduceMotion ? 1 : 0.95)
-        .animation(Motion.still ? nil : Motion.animation(model.shown ? Motion.edgeIn : Motion.edgeOut)
+        .scaleEffect(model.shown || Motion.reduceMotion ? 1 : (isApp ? 0.5 : 0.8))
+        .offset(model.shown || Motion.reduceMotion || !isApp ? .zero : Self.spoke(index: index, count: model.ringItems.count))
+        .animation(Motion.still ? nil : Motion.animation(model.shown ? Motion.edgePop : Motion.edgeOut)
             .delay(model.shown ? Motion.edgeStagger(index) : 0), value: model.shown)
         .help(title)
         .accessibilityLabel(title)
+    }
+
+    /// Where a hidden item waits: 45 % of the way from its place back to the disc's centre.
+    static func spoke(index: Int, count: Int) -> CGSize {
+        let c = EdgePanelLayout.itemCentres(count: count)
+        guard c.indices.contains(index) else { return .zero }
+        let o = EdgePanelLayout.coverCentre
+        return CGSize(width: (o.x - c[index].x) * 0.45, height: (o.y - c[index].y) * 0.45)
     }
 
     private func tap() {
@@ -762,6 +853,10 @@ private struct EdgeCoverDisc: View {
     var action: (() -> Void)?
     @State private var angle: Double = 0
     @State private var since: Date?
+    /// When the record began to slow down (it coasts to a stop over `ramp` seconds; motion.dev "Spin blur").
+    @State private var stopping: Date?
+    /// The spin-up and the spin-down: the speed ramps over this many seconds, like a turntable.
+    static let ramp: Double = 0.9
 
     var body: some View {
         Group {
@@ -775,11 +870,20 @@ private struct EdgeCoverDisc: View {
         }
         .onAppear { if spinning { since = Date() } }
         .onChange(of: spinning) { _, on in
+            let now = Date()
+            angle = current(at: now)
             if on {
-                since = Date()
+                stopping = nil
+                since = now
             } else {
-                angle = current(at: Date())
                 since = nil
+                stopping = now
+                // Only this coast may end itself (a later pause starts its own).
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.ramp + 0.05) {
+                    guard stopping == now else { return }
+                    angle = current(at: now.addingTimeInterval(Self.ramp))
+                    stopping = nil
+                }
             }
         }
         .accessibilityLabel("Now playing: \(title)")
@@ -789,20 +893,29 @@ private struct EdgeCoverDisc: View {
         if Motion.still || Motion.reduceMotion {
             record
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !spinning)) { ctx in
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !spinning && stopping == nil)) { ctx in
                 record.rotationEffect(.degrees(current(at: ctx.date)))
             }
         }
     }
 
+    /// The angle now: from `angle`, speeding up from rest over `ramp` after `since`, or coasting down after `stopping`.
     private func current(at date: Date) -> Double {
-        guard let since else { return angle }
-        return angle + date.timeIntervalSince(since) * 360 / Motion.edgeSpinPeriod
+        let speed = 360 / Motion.edgeSpinPeriod, t = Self.ramp
+        if let since {
+            let x = max(0, date.timeIntervalSince(since))
+            return angle + speed * (x < t ? x * x / (2 * t) : x - t / 2)
+        }
+        if let stopping {
+            let x = min(t, max(0, date.timeIntervalSince(stopping)))
+            return angle + speed * (x - x * x / (2 * t))
+        }
+        return angle
     }
 
     /// The cover as a vinyl record: grooves, a soft specular light, a dark label with the title around the spindle.
     private var record: some View {
-        let k = size / EdgePanelLayout.coverSize
+        let k = size / EdgePanelLayout.recordArtBase
         return ZStack {
             if let image {
                 Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
@@ -983,11 +1096,16 @@ private struct EdgeSmallButton: View {
     var ownGlass = false
     let action: () -> Void
     @State private var hovering = false
+    /// Counts clicks: each one sends a ripple out of the button (animate-ui "Ripple Button").
+    @State private var ripples = 0
     @Environment(\.edgeGlassStyle) private var style
 
     var body: some View {
         let size = EdgePanelLayout.plusSize
-        Button(action: action) {
+        Button {
+            if !Motion.still, !Motion.reduceMotion { ripples += 1 }
+            action()
+        } label: {
             Image(systemName: symbol)
                 .font(.system(size: 16, weight: .regular))
                 .imageScale(.small)
@@ -1007,6 +1125,23 @@ private struct EdgeSmallButton: View {
                 }
                 .contentShape(Circle())
                 .modifier(EdgeOwnGlass(on: ownGlass, palette: palette, symbol: symbol))
+                .overlay {
+                    // The ripple: an accent ring that grows to twice the button and fades (outside the glass).
+                    Circle().strokeBorder(palette.accentColor, lineWidth: 2)
+                        .keyframeAnimator(initialValue: EdgeRipple(), trigger: ripples) { ring, r in
+                            ring.scaleEffect(r.scale).opacity(r.opacity)
+                        } keyframes: { _ in
+                            KeyframeTrack(\.scale) {
+                                LinearKeyframe(1, duration: 0.01)
+                                SpringKeyframe(2.1, duration: 0.55, spring: .smooth)
+                            }
+                            KeyframeTrack(\.opacity) {
+                                LinearKeyframe(0.85, duration: 0.01)
+                                CubicKeyframe(0, duration: 0.55)
+                            }
+                        }
+                        .allowsHitTesting(false)
+                }
         }
         .buttonStyle(EdgePressStyle())
         .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
@@ -1014,6 +1149,12 @@ private struct EdgeSmallButton: View {
         .help(help)
         .accessibilityLabel(help)
     }
+}
+
+/// One frame of a button's ripple (at rest: invisible).
+private struct EdgeRipple {
+    var scale: CGFloat = 1
+    var opacity: Double = 0
 }
 
 /// A small button's own glass circle (the flat path: the dark disc colour under it).
@@ -1043,9 +1184,12 @@ private struct EdgeTimerChip: View {
                 HStack(spacing: 4) {
                     Image(systemName: t.isReminder ? "bell.fill" : "timer")
                         .font(.system(size: 9, weight: .semibold))
+                    // The digits roll down as they change (animate-ui "Sliding Number").
                     Text(Self.clock(left))
                         .font(.geistMono(11, .medium))
                         .monospacedDigit()
+                        .contentTransition(.numericText(countsDown: true))
+                        .animation(Motion.still || Motion.reduceMotion ? nil : .snappy(duration: 0.3), value: left)
                 }
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 8)

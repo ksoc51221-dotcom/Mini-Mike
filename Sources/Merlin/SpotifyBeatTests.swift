@@ -262,14 +262,18 @@ extension FeatureTests {
             // The beat limits, as geometry: 4 pt short of every neighbour.
             let f = L.timerChipFrame
             let chip = hypot(min(max(c.x, f.minX), f.maxX) - c.x, min(max(c.y, f.minY), f.maxY) - c.y)
-            check("strings limit: disc 4 pt clear of the rim buttons' inner edges and the timer chip (limit \(disc.limit))",
-                  disc.limit <= buttonEdge - 4 + 1e-9 && disc.limit <= chip - 4 + 1e-9 && disc.limit > disc.outer)
+            check("strings limit: disc 4 pt clear of the rim buttons' inner edges (limit \(disc.limit))",
+                  disc.limit <= buttonEdge - 4 + 1e-9 && disc.limit > disc.outer + 15)
+            let timed = BeatStrings.Place.discWithChip
+            check("strings limit: with a timer, also 4 pt clear of the timer chip (limit \(timed.limit))",
+                  timed.limit <= chip - 4 + 1e-9 && timed.limit <= disc.limit && timed.limit > disc.outer
+                  && timed.inner == disc.inner && timed.outer == disc.outer)
             let y = L.spotifyRecordCentreY
             check("strings limit: card 4 pt clear of the search field, the caption line and the card's sides (limit \(card.limit))",
                   card.limit <= L.spotifyCaptionTop - y - 4 + 1e-9 && card.limit <= y - L.spotifyPad - L.spotifySearchHeight - 4 + 1e-9
                   && card.limit <= L.listWidth / 2 - 4 && card.limit > card.outer)
             var inside = true, reach = true
-            for place in [disc, card] {
+            for place in [disc, card, BeatStrings.Place.discWithChip] {
                 for (x, shove) in [(1.0, 0.0), (1.0, 2.5), (1.6, -3.0), (5.0, 1.0)] {
                     let m = BeatStringsMotion(place: place, seed: 7)
                     m.pin(BeatSample(level: 1, bass: 1, kick: 1), place: place)
@@ -323,7 +327,7 @@ extension FeatureTests {
                 }
                 return worst
             }
-            for (name, place) in [("disc", BeatStrings.Place.disc), ("card", BeatStrings.Place.card)] {
+            for (name, place) in [("disc", BeatStrings.Place.disc), ("card", BeatStrings.Place.card), ("disc with timer", BeatStrings.Place.discWithChip)] {
                 let m = BeatStringsMotion(place: place, seed: 9)
                 m.rest(place: place)
                 let calm = deviation(m, place)
@@ -369,7 +373,7 @@ extension FeatureTests {
             // The rings never cross or touch: at full drive (springs overshooting to 1.15), with and without a kick
             // shove, at 720 angles, each ring's outer stroke edge stays under the next ring's inner stroke edge.
             var crossGap = Double.infinity
-            for place in [disc, card] {
+            for place in [disc, card, BeatStrings.Place.discWithChip] {
                 for seed: UInt64 in [1, 7, 42, 99, 1234] {
                     for shove in [0.0, 1.0] {
                         let m = BeatStringsMotion(place: place, seed: seed)

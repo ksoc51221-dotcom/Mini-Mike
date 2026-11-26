@@ -798,9 +798,16 @@ enum BeatStrings {
                 let b = L.discButtonCentre(row)
                 return hypot(b.x - c.x, b.y - c.y) - L.plusSize / 2
             }.min() ?? 0
+            return Place(inner: L.coverSize / 2 + 3, outer: L.discWavesRadius, limit: buttons - clearance)
+        }
+
+        /// The disc while a timer or reminder shows: the beat room also stops `clearance` short of the timer chip.
+        static var discWithChip: Place {
+            typealias L = EdgePanelLayout
+            let c = L.coverCentre, d = disc
             let f = L.timerChipFrame
             let chip = hypot(min(max(c.x, f.minX), f.maxX) - c.x, min(max(c.y, f.minY), f.maxY) - c.y)
-            return Place(inner: L.coverSize / 2 + 3, outer: L.discWavesRadius, limit: min(buttons, chip) - clearance)
+            return Place(inner: d.inner, outer: d.outer, limit: min(d.limit, chip - clearance))
         }
 
         /// The mini window: the record (`spotifyRecord`); calm out to the orb's frame (`spotifyOrbRadius`); on a beat up to

@@ -203,12 +203,16 @@ enum EdgePanelLayout {
     static let maxItems = 2 + DockAppStore.maxPinned
     /// The record inside the disc at rest, centred on the disc's centre (half of it behind the screen edge; Stitch 76.6 pt),
     /// and the disc's three small round buttons (Stitch 30 pt).
-    static let coverSize: CGFloat = 99.6
-    /// The calm waves' outer edge round the resting record (Stitch: about 119 pt across; x 1.3).
-    static let discWavesRadius: CGFloat = 77.4
+    /// (2026-11-26: 130 pt, about 30 % bigger than 99.6.)
+    static let coverSize: CGFloat = 130
+    /// The record art's reference size: the title and glyph scale from it (the card's 115 pt record keeps its look).
+    static let recordArtBase: CGFloat = 99.6
+    /// The calm waves' outer edge round the resting record: the same 24.6 pt band as before, out from the bigger record.
+    static let discWavesRadius: CGFloat = 92.6
     static let plusSize: CGFloat = 39
-    /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included; 25 % larger).
-    static let appIconSize: CGFloat = 62
+    /// A pinned app's icon image on its ring item (the whole icon, its transparent margin included): 50 pt, inside the
+    /// 55 pt target (62 pt spilled past it and looked too big).
+    static let appIconSize: CGFloat = 50
     /// From the card's right side to the screen edge: the dock and the bridge.
     static var listInset: CGFloat { dockSize.width + cardGap }
 
@@ -252,9 +256,9 @@ enum EdgePanelLayout {
     static var coverCentre: CGPoint { CGPoint(x: dockSize.width, y: dockSize.height / 2) }
 
     /// The disc's three small buttons ("+", search, collapse): on a circle of `discButtonRadius` about the disc's centre,
-    /// so they straddle the rim (centres 9 pt outside it), `discButtonPitch` apart centre to centre, the middle one on the
-    /// horizontal centre line (Stitch).
-    static let discButtonRadius: CGFloat = 149
+    /// so their centres sit ON the rim (the semicircle's circumference), `discButtonPitch` apart centre to centre, the
+    /// middle one on the horizontal centre line.
+    static var discButtonRadius: CGFloat { discRadius }
     static let discButtonPitch: CGFloat = 54
     /// The angle between two neighbouring buttons about the disc's centre (radians; the pitch is the chord).
     static var discButtonStep: CGFloat { 2 * asin(discButtonPitch / (2 * discButtonRadius)) }
@@ -276,8 +280,8 @@ enum EdgePanelLayout {
     /// The timer chip (22 pt high, about 60 pt wide): low in the disc by the screen edge, below the record's waves and
     /// right of the bottom button.
     static let timerChipHeight: CGFloat = 22
-    /// (Low in the disc, well below the strings' band, so it no longer cuts their beat room: 101 pt from the centre.)
-    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 32, y: dockSize.height / 2 + 112) }
+    /// (Low in the disc, below the strings' band: its nearest point 103 pt from the centre, its corners inside the rim.)
+    static var timerChipCentre: CGPoint { CGPoint(x: dockSize.width - 32, y: dockSize.height / 2 + 114) }
     /// The chip's frame (about 60 pt wide), from the dock's top-left (y down).
     static var timerChipFrame: CGRect {
         CGRect(x: timerChipCentre.x - 30, y: timerChipCentre.y - timerChipHeight / 2, width: 60, height: timerChipHeight)
@@ -1206,22 +1210,40 @@ struct EdgeDotView: View {
 /// never takes the keyboard, in an app that usually isn't active. It never takes a click.
 struct EdgeHoverArea: NSViewRepresentable {
     let onChange: (Bool) -> Void
+    /// The pointer inside, as -1...1 on each axis from the centre (y down); nil: no move events.
+    var onMove: ((CGPoint) -> Void)?
     func makeNSView(context: Context) -> EdgeHoverView {
-        let v = EdgeHoverView()
+        let v = EdgeHoverView(moves: onMove != nil)
         v.onChange = onChange
+        v.onMove = onMove
         return v
     }
-    func updateNSView(_ view: EdgeHoverView, context: Context) { view.onChange = onChange }
+    func updateNSView(_ view: EdgeHoverView, context: Context) { view.onChange = onChange; view.onMove = onMove }
 }
 
 final class EdgeHoverView: NSView {
     var onChange: ((Bool) -> Void)?
+    var onMove: ((CGPoint) -> Void)?
     private var inside = false
+
+    init(moves: Bool = false) {
+        super.init(frame: .zero)
+        var options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways, .inVisibleRect]
+        if moves { options.insert(.mouseMoved) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: options, owner: self, userInfo: nil))
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
                                        owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard let onMove, bounds.width > 0, bounds.height > 0 else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let x = (p.x - bounds.midX) / (bounds.width / 2), y = (p.y - bounds.midY) / (bounds.height / 2)
+        onMove(CGPoint(x: max(-1, min(1, x)), y: max(-1, min(1, isFlipped ? y : -y))))
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -1244,6 +1266,11 @@ extension View {
     /// (Left out of the headless pictures: `ImageRenderer` can't draw an AppKit view and paints a placeholder.)
     func edgeHover(_ action: @escaping (Bool) -> Void) -> some View {
         background { if !Motion.still { EdgeHoverArea(onChange: action) } }
+    }
+
+    /// `edgeHover` that also reports where the pointer is (-1...1 from the centre on each axis, y down).
+    func edgeHover(_ action: @escaping (Bool) -> Void, moved: @escaping (CGPoint) -> Void) -> some View {
+        background { if !Motion.still { EdgeHoverArea(onChange: action, onMove: moved) } }
     }
 }
 

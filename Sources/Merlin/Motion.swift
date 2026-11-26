@@ -33,6 +33,8 @@ enum Motion {
     static let edgeRise = Animation.spring(duration: 0.25, bounce: 0)
     /// Rows fade in one after another, 30 ms apart, capped so the last starts within 0.12 s (the whole list stays under 0.3 s).
     static func edgeStagger(_ index: Int) -> Double { Double(min(index, 4)) * 0.03 }
+    /// The ring items' entrance: a springy pop with a little overshoot (motion.dev "Radial menu").
+    static let edgePop = Animation.spring(duration: 0.42, bounce: 0.32)
     /// The dock's colours following the song's cover (and back to emerald): one 0.4 s ease-in-out crossfade.
     static let edgePalette = Animation.easeInOut(duration: 0.4)
     /// `edgePalette`, or nil (an instant change) under `still` and Reduce Motion. The one place the palette animates from.

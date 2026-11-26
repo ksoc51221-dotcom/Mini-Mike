@@ -217,7 +217,7 @@ extension FeatureTests {
         check("edge dock: a 140 pt disc, a 217 pt ring 13 pt left of the disc's centre, 55 pt items 20.44° apart",
               L.discRadius == 140 && L.ringRadius == 217 && L.ringOffset == 13 && L.itemSize == 55 && L.itemStep == 20.44
               && L.maxItems == 8 && L.ringLineRadius == L.ringRadius)
-        check("edge dock: an app icon image is 62 pt (its visible body about 50 pt) on a 55 pt target", L.appIconSize == 62 && L.itemSize == 55)
+        check("edge dock: an app icon image is 50 pt, inside its 55 pt target", L.appIconSize == 50 && L.itemSize == 55)
         check("edge dock: the card is 256 pt wide, corner 15.5, 171 pt from the dock (the leftmost item edge)",
               L.listWidth == 256 && L.cardRadius == 15.5 && L.cardGap == 171 && L.listInset == 257.5 + 171)
         check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 257.5, height: 476))
@@ -305,12 +305,12 @@ extension FeatureTests {
         // 41.5 pt centre to centre, the middle one on the centre line.
         let buttons = [L.plusCentre, L.searchCentre, L.collapseCentre]
         let disc = BeatStrings.Place.disc
-        let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - 149) < 0.001 }
+        let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - L.discRadius) < 0.001 }
         let straddle = buttons.allSatisfy { b in
             let d = hypot(b.x - mid.x, b.y - mid.y)
-            return d - L.plusSize / 2 < L.discRadius && d + L.plusSize / 2 > L.discRadius && abs(d - L.discRadius - 9) < 0.01
+            return d - L.plusSize / 2 < L.discRadius && d + L.plusSize / 2 > L.discRadius && abs(d - L.discRadius) < 0.01
         }
-        check("edge dock: \"+\", search and collapse: 39 pt, on the 149 pt circle, straddling the rim",
+        check("edge dock: \"+\", search and collapse: 39 pt, centres on the rim (the semicircle's circumference)",
               L.plusSize == 39 && onCircle && straddle)
         let pitch1 = hypot(buttons[1].x - buttons[0].x, buttons[1].y - buttons[0].y)
         let pitch2 = hypot(buttons[2].x - buttons[1].x, buttons[2].y - buttons[1].y)
@@ -319,8 +319,8 @@ extension FeatureTests {
               && buttons[0].y < buttons[1].y && buttons[1].y < buttons[2].y)
         check("edge dock: the buttons are clear of the record's waves",
               buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > Double(disc.outer) })
-        check("edge dock: the record at rest is 99.6 pt on the disc's centre; its waves reach 148 to 160 pt across",
-              L.coverSize == 99.6 && cover == mid && (148...160).contains(disc.outer * 2)
+        check("edge dock: the record at rest is 130 pt on the disc's centre; its waves reach 180 to 190 pt across",
+              L.coverSize == 130 && cover == mid && (180...190).contains(disc.outer * 2)
               && disc.outer <= EdgeDockArt.orbRadius)
         let field = L.searchFieldFrame
         let fieldCorners = [CGPoint(x: field.minX, y: field.minY), CGPoint(x: field.minX, y: field.maxY)]
