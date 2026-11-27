@@ -425,12 +425,14 @@ final class EdgeLensNSView: NSView {
 
     /// What the last draw showed: a redraw with the same place, size, shape and picture is skipped.
     private struct Drawn: Equatable {
-        let onScreen: CGRect; let kind: EdgeLensShape.Kind; let picture: ObjectIdentifier?; let capture: CGRect; let fade: CGFloat
+        /// The picture under this surface (its fingerprint, not the frame: a new frame with the same pixels here draws nothing).
+        let onScreen: CGRect; let kind: EdgeLensShape.Kind; let picture: UInt64?; let capture: CGRect; let fade: CGFloat
         let ink: CGFloat
     }
     private var drawn: Drawn?
 
-    /// Draws now (a new frame always; otherwise only when something changed and the window shows). `frameTime`: the
+    /// Draws now, only when something it shows changed (a new frame counts only if the pixels under it changed) and the
+    /// window shows. `frameTime`: the
     /// frame's display time, to measure its delay to the screen.
     func redraw(frameTime: CFTimeInterval?, force: Bool = false) {
         let renderer = EdgeLensRenderer.shared, capture = EdgeLensCapture.shared
@@ -439,9 +441,9 @@ final class EdgeLensNSView: NSView {
         self.onScreen = onScreen
         let cap = capture.captureRect
         let fade = capture.pictureFade
-        let now = Drawn(onScreen: onScreen, kind: kind, picture: capture.texture.map { ObjectIdentifier($0) }, capture: cap, fade: fade,
-                        ink: ink)
-        if frameTime == nil, !force, now == drawn { return }
+        let sig = capture.texture == nil ? nil : (capture.fingerprint(under: onScreen) ?? UInt64(UInt(bitPattern: ObjectIdentifier(capture.texture!).hashValue)))
+        let now = Drawn(onScreen: onScreen, kind: kind, picture: sig, capture: cap, fade: fade, ink: ink)
+        if !force, now == drawn { return }
         drawn = now
         let scale = window.backingScaleFactor
         if metal.device == nil { metal.device = renderer.device }

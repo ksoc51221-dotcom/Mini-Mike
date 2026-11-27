@@ -116,6 +116,33 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
     /// What `texture` shows (AppKit screen coordinates, points).
     private(set) var captureRect: NSRect = .zero
 
+    /// A fingerprint of the latest frame under `on` (screen points, grown by the bend's `margin`): a 20 x 20 grid of pixels.
+    /// Equal fingerprints: the picture under that surface did not change, so it need not redraw (2026-11-27: every frame
+    /// redrew all six glass surfaces, 120 Metal frames a second, though the backdrop under most of them was still).
+    func fingerprint(under on: NSRect) -> UInt64? {
+        guard let pixels = latestPixels, captureRect.width > 0 else { return nil }
+        CVPixelBufferLockBaseAddress(pixels, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixels, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pixels) else { return nil }
+        let w = CVPixelBufferGetWidth(pixels), h = CVPixelBufferGetHeight(pixels), row = CVPixelBufferGetBytesPerRow(pixels)
+        let k = CGFloat(w) / captureRect.width
+        let r = on.insetBy(dx: -EdgeLensPolicy.margin, dy: -EdgeLensPolicy.margin)
+        let x0 = (r.minX - captureRect.minX) * k, y0 = (captureRect.maxY - r.maxY) * k
+        let n = 20
+        var hash: UInt64 = 0xcbf29ce484222325
+        for j in 0..<n {
+            let y = Int(y0 + (CGFloat(j) + 0.5) * r.height * k / CGFloat(n))
+            guard y >= 0, y < h else { continue }
+            let line = base.advanced(by: y * row).assumingMemoryBound(to: UInt32.self)
+            for i in 0..<n {
+                let x = Int(x0 + (CGFloat(i) + 0.5) * r.width * k / CGFloat(n))
+                guard x >= 0, x < w else { continue }
+                hash = (hash ^ UInt64(line[x])) &* 0x100000001b3
+            }
+        }
+        return hash
+    }
+
     // For the capture tool and the tests.
     private(set) var frames = 0
     /// The display time of the latest frame (`CACurrentMediaTime` seconds).
