@@ -197,10 +197,37 @@ extension FeatureTests {
         check("visual call: the prompt has the highlight, question and answer, trimmed",
               { let p = TeachVisuals.prompt(selection: String(repeating: "s", count: 5_000), question: "Why?", answer: "Because.")
                 return p.contains("Why?") && p.contains("Because.") && p.count < 2_500 }())
-        check("visual briefs: about 1.5–2.5k tokens, one fenced block, LaTeX only when installed",
-              (5_500...10_500).contains(TeachBriefs.diagram.count) && (5_500...10_500).contains(TeachBriefs.manim(latex: false).count)
-              && TeachBriefs.manim(latex: false).contains("LaTeX is NOT installed") && TeachBriefs.manim(latex: true).contains("LaTeX is installed")
-              && TeachBriefs.manim(latex: false).contains("TeachScene"))
+        let manimNoTeX = TeachBriefs.manim(latex: false), manimTeX = TeachBriefs.manim(latex: true)
+        check("visual briefs: short, one fenced block, LaTeX only when it really works",
+              (3_500...7_500).contains(TeachBriefs.diagram.count) && (4_500...9_000).contains(manimNoTeX.count)
+              && (4_500...9_000).contains(manimTeX.count) && manimTeX.count < manimNoTeX.count + 600
+              && manimNoTeX.contains("LaTeX is NOT installed") && manimTeX.contains("LaTeX works but is slow")
+              && !manimTeX.contains("LaTeX is NOT installed") && manimNoTeX.contains("TeachScene"))
+        check("visual brief (video): 8–12 s, at most 6 plays, safe updaters, still the fixed contract",
+              manimNoTeX.contains("8–12 seconds") && manimNoTeX.contains("At most 6 self.play calls")
+              && manimNoTeX.contains("must ALWAYS return a mobject") && !manimNoTeX.contains("15–40")
+              && manimNoTeX.contains("from manim import *") && manimNoTeX.contains("Exactly one scene class, named TeachScene")
+              && manimNoTeX.contains("Never read or write files"))
+        // The brief's own example scene is exactly the shape the checker accepts.
+        let example = TeachVisuals.fencedBlock(manimNoTeX, language: "python") ?? ""
+        check("visual brief (video): its example passes checkScene and is a short scene",
+              TeachVisuals.checkScene(example) == nil && example.components(separatedBy: "self.play").count - 1 <= 6)
+        check("visual brief (diagram): one idea, 640×360 canvas, text never below 16, at most 12 elements, no LaTeX",
+              TeachBriefs.diagram.contains("viewBox=\"0 0 640 360\"") && !TeachBriefs.diagram.contains("960") && !TeachBriefs.diagram.contains("0 0 960")
+              && TeachBriefs.diagram.contains("NEVER below 16") && TeachBriefs.diagram.contains("at most 12 labelled elements")
+              && TeachBriefs.diagram.contains("ONE idea") && TeachBriefs.diagram.contains("#17181B") && TeachBriefs.diagram.contains("No LaTeX"))
+        // The skeleton the brief shows survives the sanitizer whole (so the brief never asks for something it strips).
+        let skeleton = TeachVisuals.extractSVG("```svg\n" + (TeachVisuals.fencedBlock(TeachBriefs.diagram, language: "svg") ?? "") + "\n```") ?? ""
+        let skeletonSizes = skeleton.components(separatedBy: "font-size=\"").dropFirst().compactMap { Int($0.prefix(while: { $0.isNumber })) }
+        check("visual brief (diagram): its skeleton survives the cleaner and follows its own size rules",
+              skeleton.contains("marker-end=\"url(#arrow-blue)\"") && skeleton.contains("<marker") && skeleton.contains("<title")
+              && skeleton.contains("viewBox=\"0 0 640 360\"") && abs(TeachVisuals.svgAspect(skeleton) - 16.0 / 9.0) < 0.001
+              && !skeletonSizes.isEmpty && skeletonSizes.allSatisfy { $0 >= 16 })
+        let started = Date()
+        _ = TeachVisuals.latexAvailable()
+        check("visual latex check: answers fast (it probes kpsewhich, true only for a working LaTeX)", Date().timeIntervalSince(started) < 5)
+        check("visual fix request: asks for a simpler scene, one python block",
+              TeachBriefs.fixRequest.contains("simpler") && TeachBriefs.fixRequest.contains("```python"))
 
         // MARK: Render command
         let rArgs = TeachVisuals.renderArguments(.init(manim: "/x/manim", folder: folder, number: 3), jobPath: "/job", home: "/Users/x")
@@ -495,11 +522,12 @@ extension FeatureTests {
             }
         }
         print("     usage log: \(UsageLog.url.path)")
-        for kind in [TeachVisuals.Kind.diagram, .video] {
+        let only = ProcessInfo.processInfo.environment["VISUAL_KIND"]   // "diagram" or "video": one real call instead of two
+        for kind in [TeachVisuals.Kind.diagram, .video] where only == nil || only == kind.rawValue {
             var result: Result<String, TeachVisuals.Failure>?
             let start = Date()
             TeachVisuals.make(.init(kind: kind, chat: chat, library: dir, selection: "projectile motion", question: q, answer: a),
-                              stage: { print("     stage: \($0.text)") }, done: { result = $0 })
+                              stage: { print("     stage: \($0.text) (at \(String(format: "%.1f", Date().timeIntervalSince(start))) s)") }, done: { result = $0 })
             while result == nil { RunLoop.main.run(until: Date().addingTimeInterval(0.2)) }
             let secs = Int(Date().timeIntervalSince(start))
             switch result! {

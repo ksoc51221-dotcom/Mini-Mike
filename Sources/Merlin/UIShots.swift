@@ -171,11 +171,10 @@ enum UIShots {
             // saved song (the empty-list line). The query is set on the model (a text stand-in for the field).
             shot("edge-13-songs-list", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(query: "mi")).clipped(), pad: 0))
             shot("edge-13b-songs-spotify", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSpotifyHitsModel()).clipped(), pad: 0))
-            shot("edge-25-agents-orbs", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false)).clipped(), pad: 0))
+            shot("edge-25-agents-orbs", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel()).clipped(), pad: 0))
             shot("edge-27-orbit-20", margin: 0, edgeWall(mode, EdgePanelView(model: edgeOrbitModel()).clipped(), pad: 0))
-            shot("edge-28-agents-one", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false, jobs: 1)).clipped(), pad: 0))
-            shot("edge-29-agents-done", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false, jobs: 0, done: true)).clipped(), pad: 0))
-            shot("edge-26-agents-card", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: true)).clipped(), pad: 0))
+            shot("edge-28-agents-one", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(jobs: 1)).clipped(), pad: 0))
+            shot("edge-29-agents-done", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(jobs: 0, done: true)).clipped(), pad: 0))
             shot("edge-14-songs-empty", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(starred: true, empty: true)).clipped(), pad: 0))
 
             // The dock taking its colours from generated covers: very bright, grey, blue. The full dock (six apps) with the
@@ -538,9 +537,9 @@ enum UIShots {
         return m
     }
 
-    /// The dock with the agent fixtures (one job in each state): the orbs, or the Agents card open.
-    private static func edgeAgentsModel(card: Bool, jobs: Int = 3, done: Bool = false) -> EdgePanelModel {
-        let m = edgeModel(card ? .agents : nil, music: true, apps: 6)
+    /// The dock with the agent fixtures (one job in each state): the Agents orb and its moons.
+    private static func edgeAgentsModel(jobs: Int = 3, done: Bool = false) -> EdgePanelModel {
+        let m = edgeModel(nil, music: true, apps: 6)
         let sample = FixtureDockAgents.sample()
         if jobs < 3 || done {
             let ended = sample.history.map { j -> AgentJobView in var j = j; j.ended = Date().addingTimeInterval(-3); return j }

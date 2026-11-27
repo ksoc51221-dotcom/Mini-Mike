@@ -4,7 +4,7 @@ import SwiftUI
 
 // Merlin agents on the dock (2026-11-27, round nine): the Agents orb, the largest control after the record, sits on the
 // rim's middle place (the record stays in the centre); up to 3 small moons beside it show the running agents. A click
-// opens the Agents card: a task field, the running jobs (step, time, cost, Stop) and the last results ("Open note").
+// opens the Agents window (`AgentsWindow`, the Merlin assistant session's; a moon opens its agent's chat).
 // The jobs come from `AgentPool` (the Merlin assistant session's API); the dock only shows them and calls start/stop.
 
 /// What the dock needs from the agents (`AgentPool` in the app; a fixture in the tests and pictures).
@@ -54,8 +54,14 @@ final class FixtureDockAgents: DockAgentSource {
 
 enum DockAgents {
     /// The Agents window (2026-11-27 evening, Merlin: "that should be the same size as Merlin's library"). The app sets
-    /// it (the Merlin assistant session); nil keeps the small Agents card.
+    /// it (the Merlin assistant session) or the orb calls `AgentsWindow.open()` itself.
     nonisolated(unsafe) static var openWindow: (() -> Void)?
+
+    /// Opens the Agents window (on one agent's chat with `select`); never in the tests or pictures.
+    static func openAgentsWindow(select agent: UUID? = nil) {
+        guard live() != nil else { return }
+        AgentsWindow.open(select: agent)
+    }
 
     /// The app's pool (nil in the tests and pictures, which set a fixture themselves).
     static func live() -> DockAgentSource? {
@@ -91,8 +97,6 @@ extension EdgePanelLayout {
         let a = deg * .pi / 180, h = agentHubCentre
         return CGPoint(x: h.x - agentSatelliteRadius * cos(a), y: h.y + agentSatelliteRadius * sin(a))
     }
-    /// The Agents card: as tall as the add/remove card.
-    static var agentsSize: CGSize { CGSize(width: listWidth, height: appsSize.height) }
 }
 
 extension DockAgents {
@@ -119,7 +123,7 @@ extension DockAgents {
 // MARK: - The Agents orb on the rim
 
 /// The Agents orb (the largest control after the record) with its badge, its ring and its satellites. A click on it or
-/// on a satellite opens the Agents card. Hidden while the disc's search is open (as the rim buttons are).
+/// on a satellite opens the Agents window. Hidden while the disc's search is open (as the rim buttons are).
 struct EdgeAgentHub: View {
     @ObservedObject var model: EdgePanelModel
     @State private var hovering = false
@@ -138,7 +142,7 @@ struct EdgeAgentHub: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(sats.enumerated()), id: \.element.id) { i, job in
                 let at = EdgePanelLayout.agentSatelliteCentre(i, of: sats.count)
-                EdgeAgentSatellite(job: job, palette: p) { model.tapAgents() }
+                EdgeAgentSatellite(job: job, palette: p) { model.tapAgents(select: job.botID) }
                     .position(x: at.x, y: at.y)
                     // motion.dev "spring pop": a new agent's moon springs out of the orb; an ended one shrinks back in.
                     .transition(.scale(scale: 0.2, anchor: .center).combined(with: .opacity))
@@ -302,215 +306,5 @@ private struct EdgeAgentSatellite: View {
         case .done: Image(systemName: "checkmark").font(.system(size: 6, weight: .heavy)).foregroundStyle(palette.accentColor)
         case .stopped, .failed: Circle().fill(Color.gray.opacity(0.7)).frame(width: 4, height: 4)
         }
-    }
-}
-
-/// One orb. nil: the "+" (no job). Working: the accent core breathes; waiting (a yes/no dialog is open): an amber
-/// pulse; queued: a dim ring; done: a check; stopped or failed: grey.
-private struct EdgeAgentOrb: View {
-    let state: AgentJobView.State?
-    let palette: DockPalette
-    let help: String
-    /// The dock shows: only then does a working or waiting orb breathe (a hidden dock draws nothing).
-    var live = true
-    var size: CGFloat = 24
-    let action: () -> Void
-    @State private var hovering = false
-    @State private var pulse = false
-
-    private static let amber = Color(red: 1.0, green: 0.72, blue: 0.25)
-
-    var body: some View {
-        let moving = live && !Motion.still && !Motion.reduceMotion && (state == .working || state == .waiting)
-        let idle = state == nil && size > 24
-        Button(action: action) {
-            ZStack {
-                Circle().fill(palette.baseDarkColor.opacity(0.88))
-                    // The idle orb: a soft accent glow, still (no loop), so it reads as the place to start.
-                    .shadow(color: idle ? palette.accentColor.opacity(0.45) : .clear, radius: idle ? 6 : 0)
-                Circle().strokeBorder(idle ? palette.accentColor.opacity(0.75) : ring, lineWidth: idle ? 1.5 : 1)
-                core
-                    .scaleEffect(moving && pulse ? 1.18 : 1)
-                    .opacity(moving && pulse ? 0.75 : 1)
-            }
-            .frame(width: size, height: size)
-            .scaleEffect(hovering ? 1.12 : 1)
-            .contentShape(Circle())
-        }
-        .buttonStyle(EdgePressStyle(scale: 0.92))
-        .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
-        .animation(moving ? .easeInOut(duration: state == .waiting ? 0.6 : 1.1).repeatForever(autoreverses: true) : nil, value: pulse)
-        .onAppear { if moving { pulse = true } }
-        .onChange(of: moving) { _, on in pulse = on }
-        .edgeHover { hovering = $0 }
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    private var ring: Color {
-        switch state {
-        case .working?: return palette.accentColor.opacity(0.7)
-        case .waiting?: return Self.amber.opacity(0.8)
-        default: return palette.rimTintColor.opacity(0.3)
-        }
-    }
-
-    @ViewBuilder private var core: some View {
-        switch state {
-        case nil where size > 24:
-            Image(systemName: "sparkles").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.accentColor)
-        case nil:
-            Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary).opacity(0.8)
-        case .working?:
-            Circle().fill(RadialGradient(colors: [palette.accentColor, palette.accentColor.opacity(0.35)],
-                                         center: .center, startRadius: 0, endRadius: 7))
-                .frame(width: 12, height: 12)
-        case .waiting?:
-            Circle().fill(Self.amber).frame(width: 10, height: 10)
-        case .queued?:
-            Circle().strokeBorder(palette.accentColor.opacity(0.5), lineWidth: 1.5).frame(width: 10, height: 10)
-        case .done?:
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(palette.accentColor)
-        case .stopped?:
-            Image(systemName: "stop.fill").font(.system(size: 7, weight: .bold)).foregroundStyle(.secondary)
-        case .failed?:
-            Image(systemName: "exclamationmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-        }
-    }
-}
-
-// MARK: - The Agents card
-
-/// The task field, the running jobs and the last results.
-struct EdgeAgentsCard: View {
-    @ObservedObject var model: EdgePanelModel
-
-    var body: some View {
-        let p = model.palette
-        let jobs = model.agentJobs, history = model.agentHistory
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Agents").font(.geist(13, .semibold)).foregroundStyle(.primary)
-                Spacer()
-                Text(jobs.isEmpty ? "None running" : "\(jobs.count) running").font(.geist(11)).foregroundStyle(.secondary)
-            }
-            .frame(height: 20)
-            EdgeAgentTaskField(model: model, palette: p).frame(height: 32)
-            if let line = model.agentLine {
-                Text(line).font(.geist(11)).foregroundStyle(.secondary).lineLimit(2)
-            }
-            let content = VStack(alignment: .leading, spacing: 4) {
-                if jobs.isEmpty && history.isEmpty {
-                    EdgeQuietLine(text: "Type a task. An agent works on it in the background.")
-                }
-                ForEach(jobs) { job in EdgeAgentRow(job: job, palette: p, model: model) }
-                if !history.isEmpty {
-                    Text("Recent").font(.geist(11, .medium)).foregroundStyle(.secondary).padding(.top, 6).padding(.leading, 4)
-                    ForEach(history.prefix(AgentPool.historySize)) { job in EdgeAgentRow(job: job, palette: p, model: model) }
-                }
-            }
-            if Motion.still {
-                content.frame(maxHeight: .infinity, alignment: .top).clipped()
-            } else {
-                ScrollView(.vertical, showsIndicators: false) { content }
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-}
-
-/// "Ask an agent…": takes the keyboard as the card opens (or on a click); Return starts the task; Esc is the controller's.
-private struct EdgeAgentTaskField: View {
-    @ObservedObject var model: EdgePanelModel
-    let palette: DockPalette
-    @FocusState private var focused: Bool
-
-    private static let prompt = "Ask an agent…"
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            if Motion.still || !model.agentTaskActive {
-                Text(model.agentTask.isEmpty ? Self.prompt : model.agentTask)
-                    .foregroundStyle(model.agentTask.isEmpty ? HierarchicalShapeStyle.secondary : .primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                TextField("", text: $model.agentTask, prompt: Text(Self.prompt).foregroundStyle(.secondary))
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(.primary)
-                    .focused($focused)
-                    .onSubmit { model.submitAgentTask() }
-                    .accessibilityLabel("Ask an agent")
-                    .onAppear { DispatchQueue.main.async { focused = true } }
-            }
-        }
-        .font(.geist(12, .medium))
-        .lineLimit(1)
-        .padding(.horizontal, 11)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .edgeFieldWell(palette, shadow: false)
-        .overlay(Capsule().strokeBorder(model.agentTaskActive ? palette.accentColor.opacity(0.6) : palette.rimTintColor.opacity(0.3),
-                                        lineWidth: 1))
-        .overlay {
-            if !model.agentTaskActive && !Motion.still {
-                Capsule().fill(Color.clear).contentShape(Capsule()).onTapGesture { model.activateAgentTask() }
-                    .accessibilityElement()
-                    .accessibilityLabel("Ask an agent")
-                    .accessibilityAddTraits(.isButton)
-            }
-        }
-    }
-}
-
-/// A job: its state mark, name and step; a running one shows time, cost and Stop; an ended one with a note shows
-/// "Open note".
-private struct EdgeAgentRow: View {
-    let job: AgentJobView
-    let palette: DockPalette
-    @ObservedObject var model: EdgePanelModel
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
-        HStack(spacing: 8) {
-            EdgeAgentOrb(state: job.state, palette: palette, help: job.name, live: model.shown) {}
-                .allowsHitTesting(false)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(job.name).font(.geist(12, .medium)).foregroundStyle(.primary)
-                Text(job.step).font(.geist(11)).foregroundStyle(.secondary)
-            }
-            .lineLimit(1)
-            Spacer(minLength: 4)
-            if job.isActive {
-                VStack(alignment: .trailing, spacing: 1) {
-                    if Motion.still || job.started == nil {
-                        Text(job.elapsedText()).monospacedDigit()
-                    } else {
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in Text(job.elapsedText(now: ctx.date)).monospacedDigit() }
-                    }
-                    Text(job.costText)
-                }
-                .font(.geist(10)).foregroundStyle(.tertiary)
-                Button { model.stopAgent(job.id) } label: {
-                    Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(palette.rimTintColor.opacity(0.12)))
-                        .contentShape(Circle())
-                }
-                .buttonStyle(EdgePressStyle(scale: 0.9))
-                .help("Stop \(job.name)")
-                .accessibilityLabel("Stop \(job.name)")
-            } else if job.resultNote != nil {
-                Button("Open note") { model.openAgentResult(job.id) }
-                    .buttonStyle(.plain)
-                    .font(.geist(11, .medium))
-                    .foregroundStyle(palette.accentColor)
-                    .help("Open the result note")
-            }
-        }
-        .padding(.horizontal, 6)
-        .frame(height: 40)
-        .background(shape.fill(palette.restFill))
-        .overlay(shape.strokeBorder(palette.hairlineColor, lineWidth: 1))
     }
 }

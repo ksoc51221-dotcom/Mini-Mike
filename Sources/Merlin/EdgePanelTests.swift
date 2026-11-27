@@ -368,9 +368,7 @@ extension FeatureTests {
             defer { EdgeDockFixtures.forget(nameA) }
             let am = EdgePanelModel(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: dA),
                                     spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.stopped)), songs: SpotifySongs(folder: nil))
-            check("agents: no pool: no orb (the \"+\" shows), and a task says the agents are not ready",
-                  am.agentOrbs.isEmpty && { am.section = .agents; am.agentTask = "x"; am.submitAgentTask(); return am.agentLine == "Agents are not ready yet." }())
-            am.section = nil
+            check("agents: no pool: no moon, the calm orb", am.agentOrbs.isEmpty && am.agentHub.state == .idle)
             let fx = FixtureDockAgents.sample()
             am.agentSource = fx
             let orbStates = am.agentOrbs.map(\.state)
@@ -389,35 +387,17 @@ extension FeatureTests {
             EdgeDockFixtures.waitUntil(0.5) { redraws > 0 }
             check("agents: a change in the pool redraws the dock", redraws > 0)
             sink.cancel()
-            var keyboard: [Bool] = []
-            am.onSearchChange = { keyboard.append($0) }
+            var opened: [UUID?] = []
+            am.onOpenAgents = { opened.append($0) }
+            am.section = .spotify
             am.tapAgents()
-            check("agents: an orb opens the Agents card, and its task field takes the keyboard",
-                  am.section == .agents && am.agentTaskActive && am.wantsKeyboard && keyboard == [true] && am.cardSize == L.agentsSize)
-            am.agentTask = "  Find cheap flights to Rome  "
-            am.submitAgentTask()
-            check("agents: Return starts the trimmed task once, shows the pool's line and clears the field",
-                  fx.started == ["Find cheap flights to Rome"] && am.agentLine == "Agent “Find cheap flights to Rome” started." && am.agentTask.isEmpty)
-            am.submitAgentTask()
-            check("agents: an empty task starts nothing", fx.started.count == 1)
+            am.tapAgents(select: fx.jobs[0].id)
+            check("agents: the orb opens the Agents window (an open card closes); a moon opens its agent's chat",
+                  opened == [nil, fx.jobs[0].id] && am.section == nil && !am.wantsKeyboard)
             am.stopAgent(fx.jobs[0].id)
             am.openAgentResult(fx.history[0].id)
             check("agents: Stop and Open note reach the pool", fx.stopped == [fx.jobs[0].id] && fx.opened == [fx.history[0].id])
-            am.agentTask = "abc"
-            am.escapeAgentTask()
-            check("agents: Esc clears a typed task first (the card stays)", am.agentTask.isEmpty && am.section == .agents)
-            am.escapeAgentTask()
-            check("agents: a second Esc closes the card and gives the keyboard back",
-                  am.section == nil && !am.agentTaskActive && !am.wantsKeyboard && keyboard == [true, false] && am.agentLine == nil)
-            am.tapAgents(); am.tapAgents()
-            check("agents: a second click on an orb closes the card", am.section == nil && !am.agentTaskActive)
-            check("agents: the tests never reach the app's pool", DockAgents.live() == nil)
-            // The Agents window hook (2026-11-27 evening): when the app sets it, the orb opens the window, not the card.
-            var windows = 0
-            DockAgents.openWindow = { windows += 1 }
-            am.tapAgents()
-            check("agents: with the Agents window set, the orb opens it once and no card", windows == 1 && am.section == nil)
-            DockAgents.openWindow = nil
+            check("agents: the tests never reach the app's pool or its window", DockAgents.live() == nil)
             // Drag to reorder (2026-11-27 evening, Merlin).
             let wsR = FixtureDockWorkspace()
             let (dR, nameR) = EdgeDockFixtures.defaults()
@@ -1330,9 +1310,6 @@ extension FeatureTests {
                 switch section {
                 case .apps:
                     return (NSRect(x: card.midX - 55, y: card.maxY - 26, width: 110, height: 12), "apps title")
-                case .agents:
-                    // The title "Agents": top left, inside the 12 pt padding.
-                    return (NSRect(x: card.minX + 14, y: card.maxY - 28, width: 40, height: 10), "agents title")
                 case .spotify where model.songsListShown:
                     // Row 0 of the list (pad, field, 8 pt): its name, right of the 28 pt cover well.
                     let top = L.spotifyPad + L.spotifySearchHeight + 8

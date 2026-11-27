@@ -281,9 +281,30 @@ enum TeachVisuals {
         return loginShellLookup("manim")
     }
 
-    /// Whether `latex` is installed (MathTex needs it). The brief tells the model.
+    /// Whether MathTex can really render: `latex` and `dvisvgm` are installed AND LaTeX has the files Manim's template
+    /// loads (`standalone.cls` is missing from BasicTeX). A half-installed LaTeX used to count as installed, so scenes
+    /// with MathTex failed after a full render and cost a second model call. The brief tells the model.
     static func latexAvailable() -> Bool {
-        (searchFolders() + ["/Library/TeX/texbin"]).contains { FileManager.default.isExecutableFile(atPath: "\($0)/latex") }
+        let folders = searchFolders() + ["/Library/TeX/texbin"]
+        func tool(_ name: String) -> String? {
+            folders.map { "\($0)/\(name)" }.first { FileManager.default.isExecutableFile(atPath: $0) }
+        }
+        guard tool("latex") != nil, tool("dvisvgm") != nil, let kpse = tool("kpsewhich") else { return false }
+        let needed = ["standalone.cls", "babel.sty", "amsmath.sty", "amssymb.sty"]
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: kpse)
+        p.arguments = needed
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        p.standardInput = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { p.waitUntilExit(); finished.signal() }
+        if finished.wait(timeout: .now() + 5) == .timedOut { p.terminate(); return false }
+        let found = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .components(separatedBy: .newlines).filter { !$0.isEmpty }
+        return found.count == needed.count
     }
 
     private static func loginShellLookup(_ tool: String) -> String? {
