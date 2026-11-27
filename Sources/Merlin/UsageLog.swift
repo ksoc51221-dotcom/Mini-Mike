@@ -145,7 +145,7 @@ enum UsageLog {
                 The Claude figures are counted by Claude itself, cached input included. The savings are estimates: \
                 each answer on your Mac stands in for a Claude call of about 3.5k tokens, plus about 2k if a \
                 screenshot would have gone with it and about 1.5k if web search would have been on. A lean call \
-                saves just the screenshot and web search. Answers you sent on to Claude with "Ask Claude" count as \
+                saves just the screenshot and web search. Answers you sent on to Claude count as \
                 no saving.
                 """].joined(separator: "\n\n")
     }

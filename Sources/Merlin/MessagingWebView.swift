@@ -37,13 +37,67 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
     private(set) var pickerOpen = false
     var onPickerClosed: (() -> Void)?
 
+    /// The unread count in the page's title, such as "(3) WhatsApp" or "Telegram (3)". Only the number is kept; the
+    /// title is never stored or logged (it can name a chat).
+    static func unreadCount(inTitle title: String?) -> Int? {
+        guard let title, let r = title.range(of: #"\((\d{1,4})\)"#, options: .regularExpression) else { return nil }
+        return Int(title[r].dropFirst().dropLast())
+    }
+
+    /// A fixed check, run by Merlin itself (no agent tool reaches it): can the page keep a secret key, as WhatsApp Web
+    /// must? WebKit keeps such keys with "Merlin WebCrypto Master Key" in the keychain; a Deny there makes this fail.
+    /// It reads nothing of the page.
+    static let keyCheckScript = """
+    const k = await crypto.subtle.generateKey({name: "AES-GCM", length: 128}, false, ["encrypt"]);
+    return await new Promise((ok) => {
+      const open = indexedDB.open("merlin-keycheck", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("k");
+      open.onerror = () => ok("no-db");
+      open.onsuccess = () => {
+        const db = open.result;
+        const tx = db.transaction("k", "readwrite");
+        try { tx.objectStore("k").put(k, "k"); } catch (e) { db.close(); indexedDB.deleteDatabase("merlin-keycheck"); return ok("refused"); }
+        tx.oncomplete = () => { db.close(); indexedDB.deleteDatabase("merlin-keycheck"); ok("ok"); };
+        tx.onerror = () => { db.close(); indexedDB.deleteDatabase("merlin-keycheck"); ok("refused"); };
+      };
+    });
+    """
+
+    /// The unread count changed (nil: none shown in the title).
+    var onUnread: ((Int?) -> Void)?
+    /// False when the page could not keep its keys (see `keyCheckScript`).
+    private(set) var keysOK = true
+    var onKeysChanged: (() -> Void)?
+    private var titleWatch: NSKeyValueObservation?
+
     init(service: MessagingService) {
         self.service = service
         view = FirstClickWebView(frame: .zero, configuration: Self.configuration(for: service))
         super.init()
         view.navigationDelegate = self
         view.uiDelegate = self
+        titleWatch = view.observe(\.title, options: [.new]) { [weak self] web, _ in
+            let n = Self.unreadCount(inTitle: web.title)
+            DispatchQueue.main.async { self?.onUnread?(n) }
+        }
+        MessagingLog.note(service, "load start")
         view.load(URLRequest(url: service.url))
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        MessagingLog.note(service, "load finished")
+        guard service.checksKeys else { return }
+        webView.callAsyncJavaScript(Self.keyCheckScript, arguments: [:], in: nil, in: .defaultClient) { [weak self] result in
+            guard let self else { return }
+            let answer = (try? result.get()) as? String ?? "error"
+            MessagingLog.note(self.service, "key storage: \(answer)")
+            let ok = answer == "ok"
+            if ok != self.keysOK { self.keysOK = ok; self.onKeysChanged?() }
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        MessagingLog.note(service, "load failed \((error as NSError).code)")
     }
 
     /// A closed card plays nothing: a video or voice message stops, and the page cannot start one.
@@ -58,6 +112,7 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
     func retryIfFailed() { if failed { reload() } }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        MessagingLog.note(service, "load failed early \((error as NSError).code)")
         if (error as NSError).code != NSURLErrorCancelled { failed = true }
     }
 
@@ -79,7 +134,10 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
-    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) { reload() }
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        MessagingLog.note(service, "web process ended; loading again")
+        reload()
+    }
 
     /// A new window (target="_blank"): never a second web view. The link opens in the browser.
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
@@ -120,4 +178,18 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
 /// The first click acts at once, also while another app is active.
 private final class FirstClickWebView: WKWebView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
+/// Events of the cards, for a fault report: ~/Library/Logs/Merlin/messaging.log. Service names and events only; never an
+/// address, a title or any page text.
+enum MessagingLog {
+    static let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Merlin/messaging.log")
+    static var enabled = true
+    static func note(_ service: MessagingService, _ event: String) {
+        guard enabled else { return }
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(service.name): \(event)\n"
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(Data(line.utf8)); try? h.close() }
+        else { try? Data(line.utf8).write(to: url) }
+    }
 }

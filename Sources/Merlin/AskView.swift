@@ -574,6 +574,15 @@ struct AskView: View {
         HStack(alignment: .center, spacing: 6) {
             if model.canToggleLearn { learnSwitch }
             Spacer(minLength: 0)
+            if model.canKeep {
+                HeaderButton(symbol: model.newestIsKept ? "star.fill" : "star",
+                             help: model.newestIsKept ? "Kept" : "Keep this answer",
+                             active: model.newestIsKept) {
+                    model.keepNewest()
+                }
+                .disabled(model.newestIsKept)
+                .accessibilityLabel(model.newestIsKept ? "Kept" : "Keep this answer")
+            }
             if Settings.shared.saveHistory {
                 HeaderButton(symbol: model.starred ? "star.fill" : "star",
                              help: model.starred ? "Unstar" : "Star this chat (keeps it at the top of your Library and safe from delete)",
@@ -618,7 +627,7 @@ struct AskView: View {
                             .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)),
                                                     removal: .opacity))
                     }
-                    if model.canGoDeeper || model.canAskClaude || model.canKeep {
+                    if model.canGoDeeper || model.canKeep {
                         HStack(spacing: model.canMakeVisual ? 10 : 16) {
                             if model.canGoDeeper {
                                 Button { model.goDeeper() } label: {
@@ -641,31 +650,10 @@ struct AskView: View {
                                 .fixedSize()
                                 .help("Draw a diagram or animate a short video of this answer (one extra Claude call)")
                             }
-                            if model.canQuiz {
-                                Button { model.quizMe() } label: {
-                                    Label("Quiz me", systemImage: "questionmark.circle")
-                                }
-                                .buttonStyle(GhostStyle())
-                                .help("Four quick questions on this. Multiple choice is graded on your Mac.")
-                            }
                             if model.canKeep {
-                                Button { model.keepNewest() } label: {
-                                    Label(model.newestIsKept ? "Kept" : "Keep",
-                                          systemImage: model.newestIsKept ? "bookmark.fill" : "bookmark")
-                                }
-                                .buttonStyle(GhostStyle())
-                                .disabled(model.newestIsKept)
-                                .help("Save this answer to your library")
                                 if let answer = model.turns.last?.answer {
                                     SaveToNoteButton(answer: answer)
                                 }
-                            }
-                            if model.canAskClaude {
-                                Button { model.askClaudeInstead() } label: {
-                                    Label("Ask Claude", systemImage: "sparkles")
-                                }
-                                .buttonStyle(GhostStyle())
-                                .help("Have Claude answer this instead (it can search the web and see your screen)")
                             }
                         }
                         .transition(.opacity.combined(with: .offset(y: 6)))

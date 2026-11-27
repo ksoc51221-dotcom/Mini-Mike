@@ -330,12 +330,11 @@ final class StatusMenu: NSObject, NSMenuDelegate {
         chats are not affected.
 
         Your chats are saved on this Mac, filed into sectors (Math, Language…) and named when you close them (never one you renamed yourself): see \
-        "Chat History…" and "Notes…" in this menu. Tap "Quiz me" to be quizzed on a chat, "Keep" to save an \
-        answer to your library.
+        "Chat History…" and "Notes…" in this menu. Tap the star at the top right of a chat to keep the newest \
+        answer in your library.
 
         Want to use fewer Claude tokens? Turn on Quick Answers. Quick questions and short summaries are then \
-        answered by Claude Haiku 5.5 at medium effort (no screenshot, no web), with a note saying so and an \
-        "Ask Claude" button if you want a better answer. (To run them on your Mac instead, install the free \
+        answered by Claude Haiku 5.5 at medium effort (no screenshot, no web), with a note saying so. (To run them on your Mac instead, install the free \
         Ollama app and its qwen3:8b model, then run: defaults write com.kien.merlin localModel qwen3:8b.) Pronunciation, graphs, fact checks, snips and videos \
         always go to Claude. "Token Savings…" shows what this saved.
 

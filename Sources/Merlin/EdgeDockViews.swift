@@ -906,8 +906,10 @@ private struct EdgeRingItem: View {
                 // rounded square (macOS icons keep a transparent margin), whose corners stay ~4 pt inside the 44 pt well.
                 Image(nsImage: icon).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
                     .frame(width: EdgePanelLayout.appIconSize, height: EdgePanelLayout.appIconSize)
+                    .overlay(alignment: .topTrailing) { MessagingBadge(bundleID: a.bundleID) } // unread count (MessagingCards.swift)
             } else {
                 symbol("app", tint: p.rimTintColor, on: on, inner)
+                    .overlay(alignment: .topTrailing) { MessagingBadge(bundleID: a.bundleID) } // unread count (MessagingCards.swift)
             }
         }
     }

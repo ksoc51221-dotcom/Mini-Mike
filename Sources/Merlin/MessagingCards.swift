@@ -13,6 +13,8 @@ struct MessagingService: Equatable {
     /// Added to the web view's user agent. Only for a site that refuses the plain web view: the ending Safari itself sends
     /// (the engine is Safari's).
     var agentSuffix: String? = nil
+    /// The card checks that the page can keep secret keys (WhatsApp Web stores its link keys that way).
+    var checksKeys = false
 
     // "/a/" is Telegram's own web app that lays out at card width.
     static let telegram = MessagingService(name: "Telegram", bundleID: "ru.keepcoder.Telegram",
@@ -21,7 +23,7 @@ struct MessagingService: Equatable {
     static let whatsApp = MessagingService(name: "WhatsApp", bundleID: "net.whatsapp.WhatsApp",
                                            url: URL(string: "https://web.whatsapp.com/")!,
                                            storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C702")!,
-                                           agentSuffix: "Version/26.3 Safari/605.1.15")
+                                           agentSuffix: "Version/26.3 Safari/605.1.15", checksKeys: true)
     /// Instagram has no Mac app: its ring item is this name in the dock's list, not an installed app.
     static let instagram = MessagingService(name: "Instagram", bundleID: "merlin.chat.instagram",
                                             url: URL(string: "https://www.instagram.com/direct/inbox/")!,
@@ -82,6 +84,7 @@ final class MessagingCardController {
         let panel: MessagingPanel
         let web: MessagingWebView
         let header: NSHostingView<MessagingHeader>
+        let notice: NSView
     }
     private var cards: [String: Card] = [:]
     private(set) var open: MessagingService?
@@ -133,15 +136,21 @@ final class MessagingCardController {
         web.view.frame = NSRect(x: 0, y: 0, width: size.width, height: size.height - top)
         let header = NSHostingView(rootView: header(for: service, web: web))
         header.frame = NSRect(x: 0, y: size.height - top, width: size.width, height: top)
+        let notice = NSHostingView(rootView: MessagingKeyNotice(name: service.name))
+        notice.frame = NSRect(x: 0, y: size.height - top - 96, width: size.width, height: 96)
+        notice.isHidden = true
         box.addSubview(web.view)
+        box.addSubview(notice)
         box.addSubview(header)
         panel.contentView = box
         web.setShown(false)
+        web.onUnread = { MessagingUnread.shared.set(service.bundleID, $0) }
+        web.onKeysChanged = { [weak self] in self?.refreshHeader(service) }
         web.onPickerClosed = { [weak self] in
             guard let self, self.open == service else { return }
             self.cards[service.bundleID]?.panel.makeKey()
         }
-        let card = Card(panel: panel, web: web, header: header)
+        let card = Card(panel: panel, web: web, header: header, notice: notice)
         cards[service.bundleID] = card
         return card
     }
@@ -160,6 +169,12 @@ final class MessagingCardController {
                             self?.model?.onOpenApp?(app)
                         },
                         close: { [weak self] in self?.close() })
+    }
+
+    private func refreshHeader(_ service: MessagingService) {
+        guard let card = cards[service.bundleID] else { return }
+        card.header.rootView = header(for: service, web: card.web)
+        card.notice.isHidden = card.web.keysOK
     }
 
     /// The dock stays while a card is open, wherever the pointer goes.
@@ -181,7 +196,7 @@ final class MessagingCardController {
         card.web.retryIfFailed()
         card.web.setShown(true)
         let palette = model?.palette ?? .standard // the dock's colours now
-        card.header.rootView = header(for: service, web: card.web)
+        refreshHeader(service)
         card.panel.contentView?.layer?.backgroundColor = palette.baseDark.cgColor
         card.panel.contentView?.layer?.borderColor = palette.rimTint.withAlphaComponent(0.3).cgColor
         card.panel.setFrame(EdgePanelLayout.listFrame(window: dockWindow, card: MessagingPanel.cardSize), display: true)
@@ -195,6 +210,19 @@ final class MessagingCardController {
         open = nil
         cards[service.bundleID]?.panel.orderOut(nil)
         cards[service.bundleID]?.web.setShown(false)
+    }
+}
+
+/// Shown over the page when it cannot keep its keys: the reason and what to do, in plain words.
+private struct MessagingKeyNotice: View {
+    let name: String
+    var body: some View {
+        Text("\(name) can't save its sign-in keys, because macOS refused Merlin's key store. Open Keychain Access, find \"Merlin WebCrypto Master Key\", and delete it. Then press Reload and choose Always Allow.")
+            .font(.geist(12))
+            .foregroundStyle(.white)
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(Color(red: 0.55, green: 0.16, blue: 0.14))
     }
 }
 
@@ -223,5 +251,38 @@ private struct MessagingHeader: View {
             .buttonStyle(EdgePressStyle())
             .help(help)
             .accessibilityLabel(help)
+    }
+}
+
+/// Unread counts of the services, for the dock's badges. Numbers only; kept views update it while their card is closed.
+final class MessagingUnread: ObservableObject {
+    static let shared = MessagingUnread()
+    @Published private(set) var counts: [String: Int] = [:]
+    func set(_ bundleID: String, _ n: Int?) {
+        let value = (n ?? 0) > 0 ? n : nil
+        if counts[bundleID] != value { counts[bundleID] = value }
+    }
+}
+
+/// The red count on a messaging service's ring icon ("99+" above 99). Nothing for other apps or a count of 0.
+struct MessagingBadge: View {
+    let bundleID: String
+    @ObservedObject private var unread = MessagingUnread.shared
+
+    static func label(_ n: Int) -> String { n > 99 ? "99+" : "\(n)" }
+
+    var body: some View {
+        if let n = unread.counts[bundleID] {
+            Text(Self.label(n))
+                .font(.geist(10, .semibold))
+                .monospacedDigit()
+                .foregroundStyle(.white)
+                .padding(.horizontal, 5)
+                .frame(minWidth: 18, minHeight: 18)
+                .background(Capsule().fill(Color(red: 0.92, green: 0.26, blue: 0.24)))
+                .offset(x: 4, y: -4)
+                .allowsHitTesting(false)
+                .accessibilityLabel("\(n) unread")
+        }
     }
 }

@@ -28,6 +28,18 @@ extension FeatureTests {
         check("chat cards: Instagram is in the dock's app list without a Mac app",
               LiveDockWorkspace().installedApps().contains { $0.bundleID == MessagingService.instagram.bundleID })
 
+        check("chat cards: the unread count comes from the title's number only",
+              MessagingWebView.unreadCount(inTitle: "(3) WhatsApp") == 3 && MessagingWebView.unreadCount(inTitle: "Telegram (12)") == 12
+                  && MessagingWebView.unreadCount(inTitle: "Telegram") == nil && MessagingWebView.unreadCount(inTitle: nil) == nil)
+        MessagingUnread.shared.set("x.test", 4)
+        let four = MessagingUnread.shared.counts["x.test"]
+        MessagingUnread.shared.set("x.test", 0)
+        check("chat cards: a count shows, 0 clears it, 100 shows 99+",
+              four == 4 && MessagingUnread.shared.counts["x.test"] == nil && MessagingBadge.label(100) == "99+")
+        check("chat cards: only WhatsApp runs the key check", MessagingService.all.filter(\.checksKeys) == [.whatsApp])
+        check("chat cards: the key check reads no page text",
+              !["document", "innerText", "textContent", "querySelector", "title"].contains { MessagingWebView.keyCheckScript.contains($0) })
+
         func link(_ s: String, clicked: Bool = true) -> MessagingWebView.LinkAction {
             MessagingWebView.linkAction(URL(string: s)!, clicked: clicked, service: .telegram)
         }
