@@ -69,6 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         edge.start()
         statusMenu.onShowEdgePanel = { edge.show(.chats) }
         CommandRunner.shared = commands
+        // Merlin's agents as chatbots (the Agents window); their tasks run in the pool.
+        AgentBots.shared = AgentBots(pool: agents)
         LibraryAssistant.actionHook = commands.actions
         // A request typed in a blank chat goes to the same agent loop; its lines show where the chat was.
         AgentLoop.typedHook = { [weak self] text, spot in
@@ -187,6 +189,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if pointAsk.isActive || pointCapturing { dropComingPicture = true }
             if let line = commands.run(route) { voice.say(line) }
             return
+        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && AgentBots.shared?.route(text) != nil:
+            // "ask Physics tutor to …": that agent takes it, in its own chat.
+            return runAgent(text) { [weak self] line in
+                guard let self, !self.voice.isTalking else { return }
+                self.voice.say(line)
+            }
         case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && AgentRequest.looksLikeRequest(text, context: commands.actionContext):
             // No rule fits, but it asks Merlin to do something: the agent loop (Claude with Merlin's tools).
             return runAgent(text) { [weak self] line in
@@ -217,12 +225,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The agent loop (C1b): Claude gets the words and Merlin's tools and does the task; `report` shows the status lines
     /// and the last line. If Claude reads the words as a question, they go to a chat as before.
     private func runAgent(_ text: String, report: @escaping (String) -> Void) {
+        if let bots = AgentBots.shared, let named = bots.route(text) {
+            return report(bots.send(named.task, to: named.bot.id))
+        }
         let mouse = NSEvent.mouseLocation, app = NSWorkspace.shared.frontmostApplication
         guard let runner = commands.actions else { return askSpoken(text, mouse: mouse, app: app) }
         let tools = AgentTools(runner: runner, confirmScript: AgentTools.liveConfirmScript)
         tools.onStep = { line in report(line + "…") }
         tools.saveNote = AgentPool.liveSaveNote
-        tools.startAgent = { [weak self] task in self?.agents.start(task) ?? "Agents aren't ready." }
+        // A long task with no agent named goes to the default agent "Merlin" (its chat in the Agents window).
+        tools.startAgent = { [weak self] task in
+            guard let bots = AgentBots.shared, let b = bots.defaultBot else { return self?.agents.start(task) ?? "Agents aren't ready." }
+            return bots.send(task, to: b.id) + " Open the Agents window to follow it."
+        }
         report("Working on it…")
         agent.run(text, tools: tools) { [weak self] outcome in
             switch outcome {
@@ -431,6 +446,7 @@ if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contai
 if arguments.contains("--agenttest") { FeatureTests.agentLiveTest() }
 if arguments.contains("--workertest") { FeatureTests.workerLiveTest() }
 if arguments.contains("--agentreview") { FeatureTests.agentReviewLive() }
+if let i = arguments.firstIndex(of: "--agentsshot"), i + 1 < arguments.count { MainActor.assumeIsolated { AgentsWindow.renderShot(to: URL(fileURLWithPath: arguments[i + 1])) } }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if let i = arguments.firstIndex(of: "--orbtest") { OrbTests.golden(path: argument(after: i) ?? "third_party/thinking-orbs/orbs-golden.json") }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }

@@ -47,12 +47,12 @@ enum AgentRequest {
     /// loop (a task), a quick answer (a short fact question), or a chat.
     enum Path: String { case rule, calendar, agent, quick, chat }
 
-    static func path(_ spoken: String, context: ActionContext, sheets: [String] = []) -> Path {
+    static func path(_ spoken: String, context: ActionContext, sheets: [String] = [], agents: AgentBots? = nil) -> Path {
         let text = CommandCenter.cleaned(spoken)
         switch CommandCenter.route(text, sheets: sheets, actions: context) {
         case .calendar: return .calendar
         case .ask:
-            if looksLikeRequest(text, context: context) { return .agent }
+            if looksLikeRequest(text, context: context) || agents?.route(text) != nil { return .agent }
             return looksLikeQuickQuestion(text) ? .quick : .chat
         case .video: return .chat
         default: return .rule

@@ -36,6 +36,10 @@ struct AgentJobView: Identifiable, Equatable, Codable {
     var costUSD: Double?
     /// The note with the result (open it with `openResult`).
     var resultNote: String?
+    /// The whole final reply (a chat agent shows it in its chat).
+    var result: String?
+    /// The chat agent that asked (nil: a job from the quick loop or the dock).
+    var botID: UUID?
 
     var isActive: Bool { state == .queued || state == .working || state == .waiting }
 
@@ -70,6 +74,14 @@ final class AgentPool: ObservableObject {
     private var loops: [UUID: AgentLoop] = [:]
     /// The money each running job may still spend (its own cap): kept free in the day's total.
     private var reserves: [UUID: Double] = [:]
+    /// What a chat agent asks of one job: its model, the full prompt (role and chat so far), and where the result goes.
+    struct JobOptions {
+        var model: String?
+        var prompt: String?
+        var saveToNote = true
+        var onEnd: ((AgentJobView) -> Void)?
+    }
+    private var options: [UUID: JobOptions] = [:]
     private var wroteNote: [UUID: String] = [:]
 
     init(profile: AgentLoop.Profile = .worker, makeTools: @escaping (String) -> AgentTools?,
@@ -94,7 +106,11 @@ final class AgentPool: ObservableObject {
 
     /// Starts a job, or queues it. The line goes back to whoever asked (the quick loop, the card).
     @discardableResult
-    func start(_ task: String) -> String {
+    func start(_ task: String) -> String { start(task, name: nil, botID: nil, options: JobOptions()) }
+
+    /// A job for a chat agent: its own name, model and prompt; the result goes to `onEnd` (and to no note).
+    @discardableResult
+    func start(_ task: String, name: String?, botID: UUID?, options opts: JobOptions) -> String {
         let task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task.isEmpty else { return "Give the agent a task." }
         guard Self.jobBudget(cap: Self.dailyCapUSD, today: spend.today, reserved: reserves.values.reduce(0, +), task: profile.budgetUSD ?? 0) != nil else {
@@ -103,8 +119,9 @@ final class AgentPool: ObservableObject {
         guard jobs.filter({ $0.state == .queued }).count < Self.maxQueue else {
             return "\(Self.maxQueue) agent tasks wait already. Nothing was added."
         }
-        let job = AgentJobView(id: UUID(), name: Self.name(for: task), task: task, state: .queued, step: "Waiting for a free agent",
-                               started: nil, ended: nil, tokens: 0, costUSD: nil, resultNote: nil)
+        let job = AgentJobView(id: UUID(), name: name ?? Self.name(for: task), task: task, state: .queued, step: "Waiting for a free agent",
+                               started: nil, ended: nil, tokens: 0, costUSD: nil, resultNote: nil, result: nil, botID: botID)
+        options[job.id] = opts
         jobs.append(job)
         if running < Self.size {
             launch(job.id)
@@ -121,6 +138,7 @@ final class AgentPool: ObservableObject {
             j.state = .stopped
             j.step = "Stopped before it started"
             j.ended = Date()
+            options.removeValue(forKey: id)?.onEnd?(j)
             remember(j)
         } else {
             loops[id]?.stop()
@@ -190,7 +208,8 @@ final class AgentPool: ObservableObject {
         var jobProfile = profile
         if profile.budgetUSD != nil { jobProfile.budgetUSD = budget }
         reserves[id] = budget
-        loop.run(job.task, tools: tools, profile: jobProfile) { [weak self] outcome in
+        let opts = options[id] ?? JobOptions()
+        loop.run(opts.prompt ?? job.task, tools: tools, model: opts.model, profile: jobProfile) { [weak self] outcome in
             guard let self else { return }
             let cost = loop.lastCostUSD
             // A stopped or capped run reports no cost: count all of its cap, so the day's limit holds.
@@ -207,6 +226,8 @@ final class AgentPool: ObservableObject {
                     self.finish(id, state: stopped ? .stopped : .done, line: stopped ? text : "Wrote in the note \(note)", note: note)
                 } else if stopped && text.count < 160 {
                     self.finish(id, state: .stopped, line: text)
+                } else if !opts.saveToNote {
+                    self.finish(id, state: stopped ? .stopped : .done, line: Self.firstLine(text), result: text)
                 } else {
                     let note = Self.noteName(job.task)
                     _ = self.saveNote(note, Self.noteBody(task: job.task, result: text, cost: cost.map { String(format: "$%.2f", $0) } ?? "cost unknown"))
@@ -220,13 +241,15 @@ final class AgentPool: ObservableObject {
         }
     }
 
-    private func finish(_ id: UUID, state: AgentJobView.State, line: String, note: String? = nil) {
+    private func finish(_ id: UUID, state: AgentJobView.State, line: String, note: String? = nil, result: String? = nil) {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
         var j = jobs.remove(at: i)
         j.state = state
         j.step = line.hasPrefix("Stopped: ") ? String(line.dropFirst(9)).capitalizedFirst : line
         j.ended = Date()
         j.resultNote = note
+        j.result = result
+        options.removeValue(forKey: id)?.onEnd?(j)
         loops[id] = nil
         wroteNote[id] = nil
         remember(j)
@@ -287,7 +310,7 @@ final class AgentPool: ObservableObject {
         let now = Date()
         func job(_ name: String, _ state: AgentJobView.State, _ step: String, _ ago: TimeInterval, cost: Double? = nil, note: String? = nil) -> AgentJobView {
             AgentJobView(id: UUID(), name: name, task: name.lowercased(), state: state, step: step, started: state == .queued ? nil : now - ago,
-                         ended: [.done, .stopped, .failed].contains(state) ? now - 5 : nil, tokens: 24_000, costUSD: cost, resultNote: note)
+                         ended: [.done, .stopped, .failed].contains(state) ? now - 5 : nil, tokens: 24_000, costUSD: cost, resultNote: note, result: nil, botID: nil)
         }
         return [job("Price ceilings sources", .working, "Reading: econlib.org", 83),
                 job("Email to Tom", .waiting, "Asks: send this email?", 20),

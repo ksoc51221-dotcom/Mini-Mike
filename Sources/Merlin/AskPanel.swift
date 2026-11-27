@@ -1048,7 +1048,8 @@ final class AskPanelController {
               let runner = CommandRunner.shared else { return false }
         guard let route = runner.commandRoute(text) else {
             // Not a fixed command, but a request to act ("create a reminder in 30 minutes to eat lunch"): the agent loop.
-            guard CalendarIntent.parse(text) == nil, AgentRequest.looksLikeRequest(CommandCenter.cleaned(text), context: runner.actionContext),
+            guard CalendarIntent.parse(text) == nil,
+                  AgentRequest.looksLikeRequest(CommandCenter.cleaned(text), context: runner.actionContext) || AgentBots.shared?.route(text) != nil,
                   let start = AgentLoop.typedHook else { return false }
             let spot = panel.frame
             close()
