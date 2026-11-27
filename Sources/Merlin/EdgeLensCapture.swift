@@ -38,10 +38,10 @@ enum EdgeLensPolicy {
     /// No frame this long after the dock showed: the system glass instead (until frames flow). The first real-screen run
     /// measured 588 ms from show to first frame; until the frame the lens draws its body dim and rim only.
     static let firstFrameTimeout: TimeInterval = 1.2
-    /// About 60 frames a second (2026-11-27: 30 made the glass trail a page that scrolls behind it).
-    static let framesPerSecond = 60
-    /// The stream's pixels per screen pixel: half (a quarter of the pixels), so 60 frames a second cost the compositor
-    /// less than the old full-size 30 (Merlin chose a slightly softer picture for glass that keeps up).
+    /// About 30 frames a second (2026-11-27: 60 raised the compositor's load from about 15-25 % to 28 % with the dock
+    /// open: its cost is per frame, not per pixel; Merlin chose less load over smoother glass).
+    static let framesPerSecond = 30
+    /// The stream's pixels per screen pixel: half (a quarter of the pixels; the frost hides the softer picture).
     static let captureScale: CGFloat = 0.5
     /// Room round the dock's own width when no card is open (the hover lift and the rim light).
     static let dockGlassPad: CGFloat = 16
