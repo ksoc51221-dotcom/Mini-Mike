@@ -301,6 +301,31 @@ extension FeatureTests {
         check("answer: Haiku, WebSearch only, no Merlin tool server, the answer prompt, the question last",
               !aargs.contains("--mcp-config") && !aargs.contains { $0.hasPrefix("mcp__merlin__") } && aargs.last == "QUESTION: how tall is Everest"
               && aargs.contains(AgentLoop.answerPrompt()) && AgentLoop.Profile.answer.timeLimit == 30 && AgentLoop.Profile.answer.model == "haiku")
+        // Messages (Apple Messages, fakes only): a send only after a yes, every time; numbers are checked.
+        final class MsgLog { var sent: [(String, String)] = []; var asked: [String?] = []; var yes = false }
+        let mg = MsgLog()
+        let fakeMsg = MessagesBackend(send: { to, text in mg.sent.append((to, text)); return AgentToolResult(text: "Sent.", isError: false) },
+                                      confirm: { _, _, warn in mg.asked.append(warn); return mg.yes })
+        func msgTools(_ request: String) -> AgentTools {
+            let t = AgentTools(runner: runner, confirmScript: { _, _ in false }, trackTitle: { _ in nil }, mail: fakeMail, messages: fakeMsg)
+            t.request = request
+            return t
+        }
+        let mreq = "text +1 415 555 0100 that I'm running late"
+        let mNo = msgTools(mreq).call("message_send", ["to": "+1 (415) 555-0100", "text": "Running late"])
+        check("messages: a send asks first; a no sends nothing", mg.asked == [nil] && mg.sent.isEmpty && mNo.isError && mNo.text.contains("don't send"))
+        mg.yes = true
+        _ = msgTools(mreq).call("message_send", ["to": "+14155550100", "text": "Running late"])
+        check("messages: a yes sends once, to the clean number", mg.sent.count == 1 && mg.sent[0].0 == "+14155550100" && mg.sent[0].1 == "Running late")
+        _ = msgTools(mreq).call("message_send", ["to": "+44 20 7946 0000", "text": "hi"])
+        check("messages: a number not in the user's words is flagged", mg.asked.last == .some("Check the number: +442079460000 is not in your words."))
+        let mBad = msgTools(mreq).call("message_send", ["to": "Mom", "text": "hi"])
+        let mEmpty = msgTools(mreq).call("message_send", ["to": "+14155550100", "text": " "])
+        check("messages: a name or an empty text is refused before any dialog", mBad.isError && mBad.text.contains("Ask the user") && mEmpty.isError && mg.asked.count == 3)
+        check("messages: the recipient check", MessagesTools.recipient("+1 (415) 555-0100") == "+14155550100" && MessagesTools.recipient("a@b.com") == "a@b.com"
+              && MessagesTools.recipient("12") == nil && MessagesTools.recipient("call 555") == nil && MessagesTools.recipient("1+2345678") == nil)
+        check("messages: text words go to the loop", AgentRequest.looksLikeRequest("text +1 415 555 0100 that I'm late", context: ActionContext())
+              && AgentRequest.looksLikeRequest("send a message to 4155550100 saying hi", context: ActionContext()))
         var reader = AgentLoop.Reader()
         let a1 = #"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":3000,"output_tokens":50}}}"#
         reader.read(a1); reader.read(a1)

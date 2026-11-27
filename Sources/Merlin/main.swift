@@ -28,7 +28,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.commands.actions.map { runner in
                 AgentTools(runner: runner, confirmScript: { line, source in AgentTools.liveConfirmScript("Agent “\(name)”: \(line)", source) },
                            mail: MailBackend(read: MailTools.liveRead, compose: MailTools.liveCompose,
-                                             confirmSend: { d, warn in MailTools.liveConfirmSend(d, ["Agent “\(name)” wrote this email.", warn].compactMap { $0 }.joined(separator: " ")) }))
+                                             confirmSend: { d, warn in MailTools.liveConfirmSend(d, ["Agent “\(name)” wrote this email.", warn].compactMap { $0 }.joined(separator: " ")) }),
+                           messages: MessagesBackend(send: MessagesTools.liveSend,
+                                                     confirm: { to, text, warn in MessagesTools.liveConfirm(to, text, ["Agent “\(name)” wrote this message.", warn].compactMap { $0 }.joined(separator: " ")) }))
             }
         },
         saveNote: AgentPool.liveSaveNote,

@@ -42,6 +42,8 @@ final class AgentTools {
             return !(n == "note_save" && saveNote == nil) && !(n == "start_agent" && startAgent == nil)
         }
     }
+    /// Apple Messages: an iMessage to a person, only after a yes.
+    let messages: MessagesBackend
     /// Apple Mail: read the inbox, write or send an email (a send only after a yes).
     let mail: MailBackend
     /// The user's own words for this run: an email address not in them gets a warning in the send dialog.
@@ -58,8 +60,10 @@ final class AgentTools {
 
     init(runner: ActionRunner, confirmScript: @escaping (String, String) -> Bool,
          runScript: @escaping (String, String) -> AgentToolResult = AgentTools.liveRunScript,
-         trackTitle: @escaping (String) -> String? = AgentTools.liveTrackTitle, mail: MailBackend = .live) {
+         trackTitle: @escaping (String) -> String? = AgentTools.liveTrackTitle, mail: MailBackend = .live,
+         messages: MessagesBackend = .live) {
         self.mail = mail
+        self.messages = messages
         self.runner = runner
         self.confirmScript = confirmScript
         self.runScript = runScript
@@ -105,6 +109,9 @@ final class AgentTools {
              ["to": ["type": "string", "description": "Email addresses, comma-separated; empty for a draft without one"],
               "subject": ["type": "string"], "body": ["type": "string"], "send": ["type": "boolean"]],
              required: ["to", "subject", "body", "send"]),
+        tool("message_send", "Send an iMessage (Apple Messages) to a phone number or an email address the REQUEST gives. Merlin shows the user who and all of the text and sends it only on a yes. A person named without a number: ask for the number, send nothing.",
+             ["to": ["type": "string", "description": "A phone number (+ and digits) or an email address"],
+              "text": ["type": "string"]], required: ["to", "text"]),
         tool("note_save", "Put text into one of the user's Merlin notes (a note with that name gets the text added at its end; otherwise a new note is made).",
              ["note": ["type": "string", "description": "The note's name"], "text": ["type": "string"]], required: ["note", "text"]),
         tool("start_agent", "Hand a long task to a background Merlin agent (Sonnet, the web, up to 10 minutes): research, finding sources, comparing options, a summary into a note. Give the task in the user's own words.",
@@ -168,6 +175,7 @@ final class AgentTools {
         case "routine_run": return act(Action(type: "routine_run", title: str("name")), "Running \(str("name"))")
         case "play_spotify_track": return playTrack(str("track_url"), title: str("title"))
         case "run_script": return script(str("language"), str("script"), summary: str("summary"))
+        case "message_send": return messageSend(to: str("to"), text: (args["text"] as? String) ?? "")
         case "note_save":
             guard let save = saveNote else { return AgentToolResult(text: "No tool called note_save.", isError: true) }
             let note = str("note"), text = (args["text"] as? String) ?? ""
@@ -233,6 +241,25 @@ final class AgentTools {
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
         onMain { onStep?(line) }
         return runScript(language, source)
+    }
+
+    /// A message is never sent without a yes. A no is final for this request.
+    private func messageSend(to: String, text: String) -> AgentToolResult {
+        guard let target = MessagesTools.recipient(to) else {
+            return AgentToolResult(text: "“\(to)” is not a phone number or an email address. Ask the user for the number.", isError: true)
+        }
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, body.count <= MessagesTools.maxText else {
+            return AgentToolResult(text: "The message needs a text of at most \(MessagesTools.maxText) characters.", isError: true)
+        }
+        let warning = MessagesTools.inRequest(target, request: request) ? nil : "Check the number: \(target) is not in your words."
+        onAsk?(true)
+        let yes = onMain { messages.confirm(target, body, warning) }
+        onAsk?(false)
+        guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
+        guard yes else { return AgentToolResult(text: "The user said don't send. Do not send it another way; tell the user it was not sent.", isError: true) }
+        onMain { onStep?("Sending the message") }
+        return messages.send(target, body)
     }
 
     /// A send never happens without a yes; a no leaves the draft open in Mail for the user.
