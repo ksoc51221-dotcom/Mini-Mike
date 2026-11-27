@@ -305,6 +305,9 @@ final class AgentPool: ObservableObject {
         _ = CommandRunner.shared?.run(.openNote(note))
     }
 
+    /// Pictures only (`--agentsshot`): show these jobs as running, with no process behind them.
+    func debugShow(_ list: [AgentJobView]) { jobs = list }
+
     /// One job in each state, for the dock's pictures and tests.
     static var fixtures: [AgentJobView] {
         let now = Date()

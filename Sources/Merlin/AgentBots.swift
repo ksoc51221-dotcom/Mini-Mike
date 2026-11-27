@@ -185,6 +185,11 @@ final class AgentBots: ObservableObject {
         String(name.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).prefix(40))
     }
 
+    /// Pictures only (`--agentsshot`): a message in a chat without a job.
+    func debugAppend(_ role: AgentMessage.Role, _ text: String, cost: Double? = nil, to id: UUID) {
+        append(AgentMessage(id: UUID(), role: role, text: text, date: Date(), state: role == .agent ? .done : nil, costUSD: cost), to: id)
+    }
+
     // MARK: Disk
 
     private var botsFile: URL { folder.appendingPathComponent("agents.json") }
