@@ -274,6 +274,16 @@ extension FeatureTests {
         let idle = AgentLoop()
         idle.stop()
         check("worker: Stop with nothing running does nothing", !idle.isRunning)
+        // Quick answers: short fact questions, nothing that points at the screen; web only, no Merlin tools.
+        check("answer: fact questions are quick; screen or long questions are not",
+              ["who won the World Cup in 2022", "how tall is Mount Everest", "what is the capital of Australia", "when did the Berlin Wall fall"]
+                .allSatisfy(AgentRequest.looksLikeQuickQuestion)
+              && !["what does this mean", "explain price ceilings", "what is in my economics note", "how do I fix it", "what", "play some music"]
+                .contains(where: AgentRequest.looksLikeQuickQuestion))
+        let aargs = AgentLoop.arguments(request: "how tall is Everest", port: 1, token: "t", model: "haiku", profile: .answer)
+        check("answer: Haiku, WebSearch only, no Merlin tool server, the answer prompt, the question last",
+              !aargs.contains("--mcp-config") && !aargs.contains { $0.hasPrefix("mcp__merlin__") } && aargs.last == "QUESTION: how tall is Everest"
+              && aargs.contains(AgentLoop.answerPrompt()) && AgentLoop.Profile.answer.timeLimit == 30 && AgentLoop.Profile.answer.model == "haiku")
         var reader = AgentLoop.Reader()
         let a1 = #"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":3000,"output_tokens":50}}}"#
         reader.read(a1); reader.read(a1)
@@ -368,6 +378,19 @@ extension FeatureTests {
         func wait(_ done: () -> Bool, _ limit: TimeInterval) {
             let end = Date().addingTimeInterval(limit)
             while !done() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
+
+        // 0. Quick answers.
+        for question in ["who won the 2022 FIFA World Cup", "how tall is Mount Everest"] {
+            let answerer = AgentLoop()
+            var adone = false
+            let t0 = Date()
+            answerer.run(question, tools: tools(), profile: .answer) { outcome in
+                print("ANSWER: \(question) → \(outcome)  (\(String(format: "%.1f", Date().timeIntervalSince(t0))) s, $\(String(format: "%.4f", answerer.lastCostUSD ?? 0)))")
+                if case .done = outcome {} else { failures += 1 }
+                adone = true
+            }
+            wait({ adone }, 40)
         }
 
         // 1. The quick loop hands it over.

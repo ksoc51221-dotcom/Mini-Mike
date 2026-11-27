@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// "Open microeconomics note", "show my chats": commands that act and open no chat (spoken here, typed in a blank chat).
     private lazy var commands = CommandRunner.live(dock: dock)
     private let agent = AgentLoop()
+    /// Quick answers (a spoken fact question): their own loop, so a running command never blocks one.
+    private let answerer = AgentLoop()
     private lazy var worker = AgentWorker(
         makeTools: { [weak self] in self?.commands.actions.map { AgentTools(runner: $0, confirmScript: AgentTools.liveConfirmScript) } },
         saveNote: AgentWorker.liveSaveNote,
@@ -176,6 +178,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, !self.voice.isTalking else { return }
                 self.voice.say(line)
             }
+        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && !dock.hasOpenChat
+                        && AgentRequest.looksLikeQuickQuestion(text):
+            // A short fact question with no chat open: Haiku with web search answers in seconds, next to the mouse.
+            return quickAnswer(text)
         case .calendar, .ask:
             break
         }
@@ -207,6 +213,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch outcome {
             case .done(let line), .failed(let line): report(line)
             case .question: self?.askSpoken(text, mouse: mouse, app: app)
+            }
+        }
+    }
+
+    /// A quick answer, unless text is highlighted (then the question is about it: a chat, as before). A question
+    /// Claude says needs more, or a failure, goes to a chat too.
+    private func quickAnswer(_ text: String) {
+        let mouse = NSEvent.mouseLocation, app = NSWorkspace.shared.frontmostApplication
+        guard let app, !answerer.isRunning, let runner = commands.actions else { return askSpoken(text, mouse: mouse, app: app) }
+        SelectionReader.read(app: app, mouse: mouse, allowCopy: false) { [weak self] found in
+            guard let self else { return }
+            if let found, !found.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return self.dock.openChat(found, asking: text)
+            }
+            self.voice.say("Looking it up…")
+            let tools = AgentTools(runner: runner, confirmScript: { _, _ in false })
+            self.answerer.run(text, tools: tools, profile: .answer) { [weak self] outcome in
+                guard let self else { return }
+                if case .done(let line) = outcome, !line.hasPrefix("Stopped:") {
+                    let words = Double(line.split(separator: " ").count)
+                    Toast.show(line, near: NSRect(x: mouse.x, y: mouse.y, width: 1, height: 1), seconds: min(20, 3 + words / 3))
+                } else {
+                    self.askSpoken(text, mouse: mouse, app: app)
+                }
             }
         }
     }

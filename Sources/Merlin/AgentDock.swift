@@ -33,6 +33,8 @@ final class AgentDock {
     private var openAgents: [AskPanelController] { openIDs.compactMap { id in entries.first { $0.id == id }?.agent } }
     /// The chat you used last.
     private var front: AskPanelController? { openAgents.last }
+    /// A chat with turns is open: a spoken question is its follow-up (so it skips the quick answer).
+    var hasOpenChat: Bool { openAgents.contains { !$0.isEmptyChat } }
 
     var count: Int { entries.count }
     /// Room for another chat (a chat that's open and still empty makes way for it).
@@ -324,7 +326,7 @@ enum Toast {
     private static var field: NSTextField?
     private static var hideWork: DispatchWorkItem?
 
-    static func show(_ text: String, near rect: NSRect) {
+    static func show(_ text: String, near rect: NSRect, seconds: TimeInterval = 3.5) {
         let (panel, field) = make()
         field.stringValue = text
         let width: CGFloat = 280
@@ -346,7 +348,7 @@ enum Toast {
             }, completionHandler: { panel.orderOut(nil) })
         }
         hideWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
     }
 
     private static func make() -> (FloatingPanel, NSTextField) {
