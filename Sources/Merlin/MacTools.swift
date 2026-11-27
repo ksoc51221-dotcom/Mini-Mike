@@ -18,6 +18,7 @@ struct MacBackend {
     var confirmEvent: (String, Date, Int) -> Bool
     /// Adds an Apple reminder: (title, due or nil).
     var remindersAdd: (String, Date?) -> AgentToolResult
+    var confirmReminder: (String, Date?) -> Bool
     var remindersList: () -> AgentToolResult
     /// Files whose name holds the words, in Documents, Desktop and Downloads.
     var files: (String) -> AgentToolResult
@@ -26,11 +27,20 @@ struct MacBackend {
     var runShortcut: (String, String) -> AgentToolResult
     var confirmShortcut: (String, String) -> Bool
 
-    static let live = MacBackend(contacts: MacTools.liveContacts, calendarList: MacTools.liveCalendarList,
-                                 calendarAdd: MacTools.liveCalendarAdd, confirmEvent: MacTools.liveConfirmEvent,
-                                 remindersAdd: MacTools.liveRemindersAdd, remindersList: MacTools.liveRemindersList,
-                                 files: MacTools.liveFiles, shortcutNames: MacTools.liveShortcutNames,
-                                 runShortcut: MacTools.liveRunShortcut, confirmShortcut: MacTools.liveConfirmShortcut)
+    static let live = live(agent: nil)
+
+    /// The live backend; `agent` names the agent in each of its dialogs ("Agent “Price ceilings”: …").
+    static func live(agent: String?) -> MacBackend {
+        let who = agent.map { "Agent “\($0)”: " } ?? ""
+        return MacBackend(contacts: MacTools.liveContacts, calendarList: MacTools.liveCalendarList,
+                          calendarAdd: MacTools.liveCalendarAdd,
+                          confirmEvent: { t, d, m in MacTools.confirm(who + "Add this event to your calendar?", "\(t)\n\(MacTools.say(d)), \(m) minutes", yes: "Add") },
+                          remindersAdd: MacTools.liveRemindersAdd,
+                          confirmReminder: { t, d in MacTools.confirm(who + "Add this to Apple Reminders?", t + (d.map { "\nDue \(MacTools.say($0))" } ?? ""), yes: "Add") },
+                          remindersList: MacTools.liveRemindersList,
+                          files: MacTools.liveFiles, shortcutNames: MacTools.liveShortcutNames, runShortcut: MacTools.liveRunShortcut,
+                          confirmShortcut: { n, i in MacTools.confirm(who + "Run the Shortcut “\(n)”?", i.isEmpty ? "With no input." : "Input:\n\(i)", yes: "Run it") })
+    }
 }
 
 enum MacTools {
@@ -113,10 +123,6 @@ enum MacTools {
         catch { return AgentToolResult(text: error.localizedDescription, isError: true) }
     }
 
-    static func liveConfirmEvent(_ title: String, _ start: Date, _ minutes: Int) -> Bool {
-        confirm("Add this event to your calendar?", "\(title)\n\(say(start)), \(minutes) minutes", yes: "Add")
-    }
-
     static let remindersAddScript = """
     on run argv
       set t to item 1 of argv
@@ -171,10 +177,7 @@ enum MacTools {
         p.standardOutput = out
         p.standardError = FileHandle.nullDevice
         do { try p.run() } catch { return AgentToolResult(text: "The file search didn't start.", isError: true) }
-        let deadline = Date().addingTimeInterval(15)
-        while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if p.isRunning { p.terminate() }
-        let paths = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).split(separator: "\n").prefix(maxFiles)
+        let paths = String(decoding: collect(p, out, timeout: 15).data, as: UTF8.self).split(separator: "\n").prefix(maxFiles)
         guard !paths.isEmpty else { return AgentToolResult(text: "No file names match “\(q)”.", isError: false) }
         return AgentToolResult(text: paths.map { $0.replacingOccurrences(of: home, with: "~") }.joined(separator: "\n"), isError: false)
     }
@@ -205,10 +208,6 @@ enum MacTools {
         return AgentToolResult(text: output.isEmpty ? "The Shortcut ran." : "The Shortcut ran. Its output (data): " + String(output.prefix(1500)), isError: false)
     }
 
-    static func liveConfirmShortcut(_ name: String, _ input: String) -> Bool {
-        confirm("Run the Shortcut “\(name)”?", input.isEmpty ? "With no input." : "Input:\n\(input)", yes: "Run it")
-    }
-
     static func shell(_ path: String, _ args: [String], timeout: TimeInterval) -> AgentToolResult {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: path)
@@ -218,11 +217,27 @@ enum MacTools {
         p.standardOutput = out
         p.standardError = out
         do { try p.run() } catch { return AgentToolResult(text: "It didn't start: \(error.localizedDescription)", isError: true) }
+        let got = collect(p, out, timeout: timeout)
+        if got.timedOut { return AgentToolResult(text: "It took over \(Int(timeout)) s and was stopped.", isError: true) }
+        let text = String(decoding: got.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return AgentToolResult(text: p.terminationStatus == 0 ? text : "It failed: \(text.prefix(300))", isError: p.terminationStatus != 0)
+    }
+
+    /// Reads a process's output while it runs (a full pipe, about 64 KB, would stop it), up to a time limit.
+    static func collect(_ p: Process, _ pipe: Pipe, timeout: TimeInterval) -> (data: Data, timedOut: Bool) {
+        final class Box { var data = Data() }
+        let box = Box()
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            box.data = pipe.fileHandleForReading.readDataToEndOfFile()
+            done.signal()
+        }
         let deadline = Date().addingTimeInterval(timeout)
         while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if p.isRunning { p.terminate(); return AgentToolResult(text: "It took over \(Int(timeout)) s and was stopped.", isError: true) }
-        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return AgentToolResult(text: p.terminationStatus == 0 ? text : "It failed: \(text.prefix(300))", isError: p.terminationStatus != 0)
+        let timedOut = p.isRunning
+        if timedOut { p.terminate() }
+        _ = done.wait(timeout: .now() + 2)
+        return (box.data, timedOut)
     }
 
     /// A yes/no with "Don't" as the Return button and the yes button with no key.

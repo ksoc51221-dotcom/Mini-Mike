@@ -4,9 +4,9 @@ import AVFoundation
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Merlin quits: no agent keeps working (and spending) without it.
     func applicationWillTerminate(_ notification: Notification) {
-        agents.stopAll()
-        agent.stop()
-        answerer.stop()
+        agents.stopAllNow()
+        agent.stop(force: true)
+        answerer.stop(force: true)
     }
 
     private let watcher = SelectionWatcher()
@@ -37,7 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                            mail: MailBackend(read: MailTools.liveRead, compose: MailTools.liveCompose,
                                              confirmSend: { d, warn in MailTools.liveConfirmSend(d, ["Agent “\(name)” wrote this email.", warn].compactMap { $0 }.joined(separator: " ")) }),
                            messages: MessagesBackend(send: MessagesTools.liveSend,
-                                                     confirm: { to, text, warn in MessagesTools.liveConfirm(to, text, ["Agent “\(name)” wrote this message.", warn].compactMap { $0 }.joined(separator: " ")) }))
+                                                     confirm: { to, text, warn in MessagesTools.liveConfirm(to, text, ["Agent “\(name)” wrote this message.", warn].compactMap { $0 }.joined(separator: " ")) }),
+                           mac: .live(agent: name))
             }
         },
         saveNote: AgentPool.liveSaveNote,
@@ -46,7 +47,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let m = NSEvent.mouseLocation
             Toast.show(line, near: NSRect(x: m.x, y: m.y, width: 1, height: 1))
         })
-    private var agentRow: AgentRowPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ThemeStore.shared.applyMode()
@@ -74,8 +74,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgentLoop.typedHook = { [weak self] text, spot in
             self?.runAgent(text) { line in Toast.show(line, near: NSRect(x: spot.x, y: spot.y, width: 1, height: 1)) }
         }
-        // Merlin agents: a long task runs in the background (one at a time, a queue behind it), with a row and Stop.
-        agentRow = AgentRowPanel(pool: agents)
         // Timers and reminders: banners show while Merlin is in front too; one that ends while Merlin runs also says so here.
         NotificationPresenter.install()
         TimerStore.shared.onFinish = { [weak self] t in
@@ -432,6 +430,7 @@ if let i = arguments.firstIndex(of: "--livecheck"), i + 1 < arguments.count { Ma
 if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])); LibrarySettingsView.renderShortcutShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
 if arguments.contains("--agenttest") { FeatureTests.agentLiveTest() }
 if arguments.contains("--workertest") { FeatureTests.workerLiveTest() }
+if arguments.contains("--agentreview") { FeatureTests.agentReviewLive() }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if let i = arguments.firstIndex(of: "--orbtest") { OrbTests.golden(path: argument(after: i) ?? "third_party/thinking-orbs/orbs-golden.json") }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }

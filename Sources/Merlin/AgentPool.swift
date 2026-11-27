@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import SwiftUI
 
 // Merlin agents, layer 2: a pool. Up to 3 agents work at once (each its own `AgentLoop` and tool server, on the worker
 // profile: Sonnet, the web, 40 tool calls, 10 minutes, $1.00), up to 5 more wait, and the pool starts nothing new after
@@ -69,6 +68,8 @@ final class AgentPool: ObservableObject {
     private let store: UserDefaults
     static let historyKey = "agentHistory"
     private var loops: [UUID: AgentLoop] = [:]
+    /// The money each running job may still spend (its own cap): kept free in the day's total.
+    private var reserves: [UUID: Double] = [:]
     private var wroteNote: [UUID: String] = [:]
 
     init(profile: AgentLoop.Profile = .worker, makeTools: @escaping (String) -> AgentTools?,
@@ -96,9 +97,7 @@ final class AgentPool: ObservableObject {
     func start(_ task: String) -> String {
         let task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task.isEmpty else { return "Give the agent a task." }
-        // Each running agent may still spend up to its own cap: count that, so the day's total never passes the limit.
-        let reserve = Double(running + 1) * (profile.budgetUSD ?? 0)
-        guard spend.today + reserve <= Self.dailyCapUSD + 0.0001 else {
+        guard Self.jobBudget(cap: Self.dailyCapUSD, today: spend.today, reserved: reserves.values.reduce(0, +), task: profile.budgetUSD ?? 0) != nil else {
             return String(format: "The agents can spend $%.2f a day, and the rest of today's money is taken. Try again tomorrow, or stop a running agent first.", Self.dailyCapUSD)
         }
         guard jobs.filter({ $0.state == .queued }).count < Self.maxQueue else {
@@ -130,6 +129,20 @@ final class AgentPool: ObservableObject {
 
     func stopAll() { jobs.map(\.id).forEach(stop) }
 
+    /// Merlin quits: every agent ends now (no 3 s grace after the app is gone).
+    func stopAllNow() {
+        jobs.removeAll { $0.state == .queued }
+        loops.values.forEach { $0.stop(force: true) }
+    }
+
+    /// The money one more job may use: its task cap, or less when the day has less left; nil under $0.10.
+    /// `reserved`: what the running jobs may still spend.
+    static func jobBudget(cap: Double, today: Double, reserved: Double, task: Double) -> Double? {
+        let left = cap - today - reserved
+        guard left >= 0.10 else { return nil }
+        return min(task, left)
+    }
+
     /// Opens the note with the result of an ended job.
     func openResult(_ id: UUID) {
         guard let note = (history + jobs).first(where: { $0.id == id })?.resultNote else { return }
@@ -143,6 +156,10 @@ final class AgentPool: ObservableObject {
 
     private func launch(_ id: UUID) {
         guard let job = jobs.first(where: { $0.id == id }) else { return }
+        guard let budget = Self.jobBudget(cap: Self.dailyCapUSD, today: spend.today, reserved: reserves.values.reduce(0, +), task: profile.budgetUSD ?? 0) else {
+            finish(id, state: .failed, line: String(format: "The agents' $%.2f for today is used up. Try again tomorrow.", Self.dailyCapUSD))
+            return
+        }
         guard let tools = makeTools(job.name) else {
             finish(id, state: .failed, line: "Merlin's tools aren't ready, so the agent didn't start.")
             return
@@ -170,10 +187,15 @@ final class AgentPool: ObservableObject {
             $0.step = "Starting"
             $0.started = Date()
         }
-        loop.run(job.task, tools: tools, profile: profile) { [weak self] outcome in
+        var jobProfile = profile
+        if profile.budgetUSD != nil { jobProfile.budgetUSD = budget }
+        reserves[id] = budget
+        loop.run(job.task, tools: tools, profile: jobProfile) { [weak self] outcome in
             guard let self else { return }
             let cost = loop.lastCostUSD
-            self.spend.add(cost ?? 0)
+            // A stopped or capped run reports no cost: count all of its cap, so the day's limit holds.
+            self.spend.add(cost ?? budget)
+            self.reserves[id] = nil
             self.update(id) {
                 $0.costUSD = cost
                 $0.tokens = loop.lastTokens
@@ -292,70 +314,6 @@ final class AgentSpend {
 
     func add(_ usd: Double) {
         defaults.set(["day": Date().timeIntervalSince1970, "usd": today + usd], forKey: key)
-    }
-}
-
-// MARK: - The agent rows (top right, until the dock shows the agents)
-
-final class AgentRowPanel {
-    private let pool: AgentPool
-    private var panel: NSPanel?
-    private var watch: AnyCancellable?
-
-    init(pool: AgentPool) {
-        self.pool = pool
-        watch = pool.$jobs.receive(on: DispatchQueue.main).sink { [weak self] jobs in
-            jobs.isEmpty ? self?.hide() : self?.show(rows: jobs.count)
-        }
-    }
-
-    private func show(rows: Int) {
-        if panel == nil {
-            let p = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 320, height: 72),
-                            styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: true)
-            p.level = .floating
-            p.isOpaque = false
-            p.backgroundColor = .clear
-            p.hasShadow = true
-            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            p.contentView = NSHostingView(rootView: AgentRowsView(pool: pool))
-            panel = p
-        }
-        guard let p = panel, let screen = NSScreen.main else { return }
-        let height = CGFloat(min(rows, AgentPool.size + 1)) * 64 + 8
-        let f = screen.visibleFrame
-        p.setFrame(NSRect(x: f.maxX - 336, y: f.maxY - height - 12, width: 320, height: height), display: true)
-        p.orderFrontRegardless()
-    }
-
-    private func hide() { panel?.orderOut(nil) }
-}
-
-private struct AgentRowsView: View {
-    @ObservedObject var pool: AgentPool
-
-    var body: some View {
-        VStack(spacing: 6) {
-            ForEach(pool.jobs.prefix(AgentPool.size + 1)) { job in
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Agent · " + job.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                        Text(job.step).font(.system(size: 11)).foregroundStyle(job.state == .waiting ? .orange : .secondary).lineLimit(1)
-                        TimelineView(.periodic(from: .now, by: 1)) { ctx in
-                            Text(job.state == .queued ? "Waiting" : job.elapsedText(now: ctx.date) + " · " + job.costText)
-                                .font(.system(size: 10).monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    Button("Stop") { pool.stop(job.id) }.controlSize(.small)
-                }
-                .padding(.horizontal, 14)
-                .frame(width: 320, height: 58)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(width: 320)
     }
 }
 

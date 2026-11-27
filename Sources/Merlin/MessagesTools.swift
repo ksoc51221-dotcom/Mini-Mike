@@ -31,9 +31,11 @@ enum MessagesTools {
     /// True when the user's own words hold this recipient (digits compared without spaces or dashes).
     static func inRequest(_ to: String, request: String) -> Bool {
         if to.contains("@") { return request.lowercased().contains(to.lowercased()) }
-        let words = request.filter(\.isNumber)
         let want = to.filter(\.isNumber)
-        return !want.isEmpty && (words.contains(want) || (want.count > 10 && words.contains(String(want.suffix(10)))))
+        guard !want.isEmpty else { return false }
+        // Each phone-shaped run of the words on its own (unrelated digits never join into a match).
+        let runs = ActionCommand.allMatches(#"\+?\d[\d\s().-]{5,}\d"#, request).map { $0.filter(\.isNumber) }
+        return runs.contains { $0 == want || ($0.count >= 10 && want.hasSuffix($0)) || (want.count >= 10 && $0.hasSuffix(String(want.suffix(10)))) }
     }
 
     static let sendScript = """
@@ -67,5 +69,14 @@ enum MessagesTools {
         send.keyEquivalent = ""
         alert.alertStyle = .warning
         return alert.runModal() == .alertSecondButtonReturn
+    }
+}
+
+extension ActionCommand {
+    /// Every match of a pattern in a text.
+    static func allMatches(_ pattern: String, _ text: String) -> [String] {
+        guard let rx = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        return rx.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }
     }
 }

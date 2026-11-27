@@ -122,10 +122,9 @@ enum MailTools {
         p.standardOutput = out
         p.standardError = out
         do { try p.run() } catch { return AgentToolResult(text: "Mail could not start: \(error.localizedDescription)", isError: true) }
-        let deadline = Date().addingTimeInterval(timeout)
-        while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if p.isRunning { p.terminate(); return AgentToolResult(text: "Mail did not answer in \(Int(timeout)) s.", isError: true) }
-        var text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        let got = MacTools.collect(p, out, timeout: timeout)
+        if got.timedOut { return AgentToolResult(text: "The app did not answer in \(Int(timeout)) s.", isError: true) }
+        var text = String(decoding: got.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         if text.count > maxOutput { text = String(text.prefix(maxOutput)) + "…" }
         guard p.terminationStatus == 0 else {
             // -1743: the user hasn't let Merlin control Mail (System Settings > Privacy & Security > Automation).

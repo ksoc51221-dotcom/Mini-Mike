@@ -62,6 +62,15 @@ final class AgentTools {
     /// True while a tool works on the main thread (a yes/no dialog may be open): the run's clock stops meanwhile.
     private(set) var inDialog = false
 
+    /// Tools that read the user's private data. After one of them, each web call of the run asks first; after a web
+    /// read, the first of them asks first (a web page could try to send the data away).
+    static let personalTools: Set<String> = ["mail_read", "contacts_find", "calendar_list", "reminders_list", "files_find"]
+    private(set) var usedPersonal = false
+    private(set) var usedWeb = false
+    private var personalAfterWebOK = false
+    /// The yes/no of the private-data rule: (title, detail) → yes?
+    var confirmData: (String, String) -> Bool = { MacTools.confirm($0, $1, yes: "Allow") }
+
     init(runner: ActionRunner, confirmScript: @escaping (String, String) -> Bool,
          runScript: @escaping (String, String) -> AgentToolResult = AgentTools.liveRunScript,
          trackTitle: @escaping (String) -> String? = AgentTools.liveTrackTitle, mail: MailBackend = .live,
@@ -162,6 +171,15 @@ final class AgentTools {
             return AgentToolResult(text: "Step limit reached (\(maxSteps) tools). Stop now and tell the user what was done.", isError: true)
         }
         func str(_ k: String) -> String { (args[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+        if Self.personalTools.contains(name) {
+            if usedWeb && !personalAfterWebOK {
+                let r = confirmed({ confirmData("Let this task read your private data?", "This task read web pages, and now it wants to use your \(Self.personalLabel(name)). A web page can try to trick an agent into sending your data away. Allow it only if your task needs it.") },
+                                  no: "The user said no to reading private data after web pages.") { AgentToolResult(text: "", isError: false) }
+                if r.isError { return r }
+                personalAfterWebOK = true
+            }
+            usedPersonal = true
+        }
         func minutes() -> Int? {
             let m = (args["minutes"] as? Double) ?? (args["minutes"] as? Int).map(Double.init) ?? Double(str("minutes"))
             guard let m else { return nil }
@@ -199,7 +217,10 @@ final class AgentTools {
             guard q.count >= 2 else { return AgentToolResult(text: "contacts_find needs a name.", isError: true) }
             onMain { onStep?("Looking in Contacts") }
             let r = mac.contacts(q)
-            if !r.isError { knownRecipients.formUnion(MacTools.recipients(inContactLines: r.text)) }
+            // Known only when the user's own words name the person ("send Tom a message": a search for "Tom").
+            if !r.isError, request.lowercased().contains(q.lowercased()) {
+                knownRecipients.formUnion(MacTools.recipients(inContactLines: r.text))
+            }
             let many = r.text.split(separator: "\n").count > 1
             return r.isError ? r : AgentToolResult(text: "CONTACTS (data):\n" + r.text + (many ? "\nMore than one person matches: ask the user which one. Send nothing yet." : ""), isError: false)
         case "calendar_list":
@@ -222,8 +243,10 @@ final class AgentTools {
             guard !title.isEmpty else { return AgentToolResult(text: "reminders_add needs a title.", isError: true) }
             let due = str("due").isEmpty ? nil : MacTools.date(str("due"))
             if !str("due").isEmpty && due == nil { return AgentToolResult(text: "Write the due time like 2026-11-28T15:00.", isError: true) }
-            onMain { onStep?("Adding to Reminders") }
-            return mac.remindersAdd(title, due)
+            return confirmed({ mac.confirmReminder(title, due) }, no: "The user said don't add it.") {
+                onMain { onStep?("Adding to Reminders") }
+                return mac.remindersAdd(title, due)
+            }
         case "reminders_list":
             onMain { onStep?("Reading Reminders") }
             return mac.remindersList()
@@ -310,6 +333,27 @@ final class AgentTools {
         return runScript(language, source)
     }
 
+    static func personalLabel(_ tool: String) -> String {
+        ["mail_read": "email", "contacts_find": "contacts", "calendar_list": "calendar", "reminders_list": "reminders",
+         "files_find": "files"][tool] ?? "private data"
+    }
+
+    /// The gate for the CLI's own web tools (WebSearch, WebFetch), asked by a PreToolUse hook before each call. After a
+    /// private-data read, each web call shows the user the full address or search first; a no blocks it.
+    func webGate(_ tool: String, _ input: [String: Any]) -> (allow: Bool, reason: String) {
+        guard !cancelled else { return (false, "This request was stopped.") }
+        if usedPersonal {
+            let what = tool == "WebFetch" ? "open this address:\n\n\(input["url"] as? String ?? "(no address)")"
+                                          : "search the web for:\n\n\(input["query"] as? String ?? "(no words)")"
+            let r = confirmed({ confirmData("Let this task use the web after reading your private data?",
+                                            "This task read your private data. Now it wants to \(what)\n\nA web address or search can carry your data out. Allow it only if it looks right.") },
+                              no: "The user said no to this web call.") { AgentToolResult(text: "", isError: false) }
+            if r.isError { return (false, r.text) }
+        }
+        usedWeb = true
+        return (true, "")
+    }
+
     /// The one pattern for "ask first": the dialog (the row shows "waiting"), then nothing after a stop, then the work.
     private func confirmed(_ ask: () -> Bool, no: String, then work: () -> AgentToolResult) -> AgentToolResult {
         onAsk?(true)
@@ -384,10 +428,9 @@ final class AgentTools {
         p.standardOutput = out
         p.standardError = out
         do { try p.run() } catch { return AgentToolResult(text: "It could not start: \(error.localizedDescription)", isError: true) }
-        let deadline = Date().addingTimeInterval(scriptTimeout)
-        while p.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.05) }
-        if p.isRunning { p.terminate(); return AgentToolResult(text: "Stopped after \(Int(scriptTimeout)) s.", isError: true) }
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+        let got = MacTools.collect(p, out, timeout: scriptTimeout)
+        if got.timedOut { return AgentToolResult(text: "Stopped after \(Int(scriptTimeout)) s.", isError: true) }
+        let data = got.data
         var text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         if text.count > maxOutput { text = String(text.prefix(maxOutput)) + "…" }
         let ok = p.terminationStatus == 0

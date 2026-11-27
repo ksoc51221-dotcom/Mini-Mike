@@ -123,6 +123,17 @@ enum AgentRPC {
     static func encode(_ obj: [String: Any]) -> Data? { try? JSONSerialization.data(withJSONObject: obj) }
 
     /// One HTTP request, once it is all in: (method, headers in lower case, body). Nil while more bytes are needed.
+    /// A PreToolUse hook's question ("may WebFetch open this?") → the hook's answer (allow or deny, with the reason).
+    static func gate(_ body: Data, tools: AgentTools) -> (status: Int, body: Data?) {
+        let msg = (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+        let tool = msg["tool_name"] as? String ?? ""
+        let input = msg["tool_input"] as? [String: Any] ?? [:]
+        let (allow, reason) = ["WebFetch", "WebSearch"].contains(tool) ? tools.webGate(tool, input) : (true, "")
+        var out: [String: Any] = ["hookEventName": "PreToolUse", "permissionDecision": allow ? "allow" : "deny"]
+        if !allow { out["permissionDecisionReason"] = reason }
+        return (200, encode(["hookSpecificOutput": out]))
+    }
+
     static func parseHTTP(_ data: Data) -> (method: String, headers: [String: String], body: Data)? {
         guard let end = data.range(of: Data("\r\n\r\n".utf8)) else { return nil }
         let head = String(decoding: data[..<end.lowerBound], as: UTF8.self).components(separatedBy: "\r\n")
@@ -192,7 +203,8 @@ final class AgentServer {
             guard req.headers["authorization"] == "Bearer \(self.token)" else { return self.send(c, 401, nil) }
             guard req.method == "POST" else { return self.send(c, 405, nil) }
             self.work.async {
-                let (status, body) = AgentRPC.respond(to: req.body, tools: self.tools)
+                let (status, body) = req.headers["x-merlin-gate"] == "1" ? AgentRPC.gate(req.body, tools: self.tools)
+                                                                          : AgentRPC.respond(to: req.body, tools: self.tools)
                 self.queue.async { self.send(c, status, body) }
             }
         }
@@ -286,6 +298,16 @@ final class AgentLoop {
         """
     }
 
+    /// A PreToolUse hook that asks Merlin's server before each WebSearch or WebFetch (the private-data rule). If Merlin
+    /// can't be asked, the call is blocked (exit 2): the rule never fails open.
+    static func webGateSettings(port: UInt16, token: String) -> String {
+        let cmd = "curl -sf --max-time 290 -H 'Authorization: Bearer \(token)' -H 'X-Merlin-Gate: 1' --data-binary @- "
+            + "http://127.0.0.1:\(port)/gate || { echo 'Merlin could not check this web call, so it is blocked.' >&2; exit 2; }"
+        let settings: [String: Any] = ["hooks": ["PreToolUse": [["matcher": "WebFetch|WebSearch",
+                                                                 "hooks": [["type": "command", "timeout": 300, "command": cmd]]]]]]
+        return String(decoding: (try? JSONSerialization.data(withJSONObject: settings, options: [.withoutEscapingSlashes])) ?? Data(), as: UTF8.self)
+    }
+
     /// The prompt of a quick answer (the answer profile).
     static func answerPrompt(today: Date = Date()) -> String {
         let df = DateFormatter(); df.locale = Locale(identifier: "en_US_POSIX"); df.dateFormat = "yyyy-MM-dd EEEE"
@@ -327,6 +349,7 @@ final class AgentLoop {
                  "--mcp-config", json, "--strict-mcp-config", "--permission-prompts", "none",
                  "--setting-sources", "", "--no-session-persistence"]
         if let b = profile.budgetUSD { a += ["--max-budget-usd", String(format: "%.2f", b)] }
+        if profile.merlinTools { a += ["--settings", webGateSettings(port: port, token: token)] }
         if !profile.merlinTools { a = a.filter { $0 != json && $0 != "--mcp-config" } }
         let prompt = profile.worker ? workerPrompt() : (profile.merlinTools ? systemPrompt() : answerPrompt())
         let head = profile.worker ? "TASK" : (profile.merlinTools ? "REQUEST" : "QUESTION")
@@ -471,11 +494,17 @@ final class AgentLoop {
     }
 
     /// Stops the run now (the Stop button). The run ends with "Stopped: you stopped it."; a dialog's late yes runs nothing.
-    func stop() {
+    func stop(force: Bool = false) {
         guard isRunning else { return }
         stopReason = "you stopped it"
         tools?.cancelled = true
-        if let p = process { Self.hardStop(p) }
+        guard let p = process else { return }
+        if force { // Merlin quits: no time for a polite stop
+            p.terminate()
+            kill(p.processIdentifier, SIGKILL)
+        } else {
+            Self.hardStop(p)
+        }
     }
 
     /// Ends a `claude` run: a polite stop, then a forced one after `grace` seconds if it still runs (so no job hangs).
