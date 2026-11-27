@@ -18,16 +18,19 @@ struct BeatSample: Equatable {
     var bass: Double
     /// An onset: jumps when the bass rises sharply above its recent mean, then decays in about 0.25 s.
     var kick: Double
-    /// How strong the note of the lead line is (`LeadMeter`); 0 with no clear note.
+    /// For the pinned pictures only: a note this strong (0...1) at this pitch height (0 low, 1 high) is drawn as a few
+    /// raised bar groups. The live sound fills `spectrum` instead.
     var lead: Double = 0
-    /// The note's pitch height: 0 at 180 Hz, 1 at 3.5 kHz, on a log scale.
     var leadPitch: Double = 0
-    /// Counts the lead notes: a change means a new note started. A count (not a short pulse) so no frame can miss it.
     var leadNote: Int = 0
+    /// The live spectrum: `SpectrumMeter.bands` values 0...1, low to high; empty when there is none (simulated beat).
+    var spectrum: [Double] = []
 
     static let zero = BeatSample(level: 0, bass: 0, kick: 0)
 
-    var isInRange: Bool { [level, bass, kick, lead, leadPitch].allSatisfy { $0 >= 0 && $0 <= 1 && $0.isFinite } }
+    var isInRange: Bool {
+        ([level, bass, kick, lead, leadPitch] + spectrum).allSatisfy { $0 >= 0 && $0 <= 1 && $0.isFinite }
+    }
 }
 
 enum BeatMath {
@@ -154,109 +157,118 @@ struct BeatAnalyzer {
     }
 }
 
-// MARK: - The lead line (pure)
+// MARK: - The spectrum (pure)
 
-/// An estimate of the note of the lead line (the part people hum). It runs inside the audio callback: all memory is
-/// allocated once in `init`, no Swift array, no lock. Each 512 new samples it takes an FFT of the last 2048:
-/// 1. For each frequency bin, the median of the last `medianFrames` frames in time. A sung or played note stays; a
-///    short hit mostly goes.
-/// 2. Only what stands above the median of the neighbouring bins stays: a note is narrow, a drum hit is wide.
-/// 3. The note is the pitch (180 Hz to 3.5 kHz) with the most energy at the pitch and its 2nd to 4th harmonics.
-/// 4. A new note counts when its pitch holds for `holdFrames` frames and differs from the last note, or the last
-///    note stopped, or the same note was struck again.
-/// It cannot separate a voice from a full mix: in a busy song a second loud instrument can win.
-final class LeadMeter {
+/// What the bars show: how loud each of `bands` log-spaced frequency bands is now, as other music visualizers do
+/// (Cava, the Web Audio `AnalyserNode`, audioMotion). It runs inside the audio callback: all memory is allocated once,
+/// no Swift array, no lock. Each `hop` new samples:
+/// 1. A Hann-windowed FFT of the last `size` samples (43 ms at 48 kHz, so a sound shows about 21 ms after it starts).
+/// 2. The power of each band in dB, weighted toward the middle (`weight`): the bass and the cymbals show, lower.
+/// 3. 0...1 against an automatic 32 dB range under the loudest band (the top rises at once, falls 6 dB a second).
+/// 4. A note boost (spectral flux): a band from 200 Hz to 4 kHz that rose in the last 21 ms jumps higher, then the
+///    boost decays in 80 ms. Piano and guitar notes then show sharply.
+/// The values are kept at their maximum until `takeHeld`, so no hop is lost between two frames.
+final class SpectrumMeter {
     static let size = 2048
-    static let hop = 512
+    static let hop = 256
     private static let log2Size = vDSP_Length(11)
-    static let medianFrames = 3
-    /// Frames (hops) a pitch must hold before it is a new note.
-    static let holdFrames = 3
-    /// Frames with no note before the same pitch counts as a new note.
-    static let gapFrames = 7
-    static let lowHz = 180.0
-    static let highHz = 3500.0
-    /// Bins up to here are kept, for the harmonics.
-    private static let topHz = 8000.0
-    private static let floorHalfWidth = 9
-    private static let floorFactor: Float = 1.6
-    /// The share of the band's energy that the note and its harmonics must hold.
-    static let tonalOn = 0.14
-    /// A new note must differ from the last one by this many semitones (vibrato stays under it).
-    static let noteStep = 0.8
-    static let minNoteGap = 0.09
-    private static let harmonicWeights: (Double, Double, Double, Double) = (1, 0.65, 0.45, 0.3)
-    /// A sine of amplitude 0.003 (about -50 dBFS) has this FFT magnitude; quieter notes are silence.
-    private static let magnitudeFloor = 0.003 * Double(size) / 2
+    static let bands = 52
+    static let lowHz = 60.0
+    static let highHz = 8000.0
+    static let range = 32.0
+    /// Below this the sound is silence (dBFS).
+    static let silence = -75.0
+    static let topFall = 6.0
+    /// Hops back for the note boost (about 21 ms).
+    static let fluxLag = 4
+    static let boostDecay = 0.08
+    static let boostGain = 0.45
+    static let boostLow = 200.0, boostHigh = 4000.0
 
-    /// The analysis's own delay (the window, the median and the hold): about 55 to 70 ms measured on synthetic notes.
+    /// The analysis's own delay: half the window (the middle of what the FFT sees) and half a hop.
     static func lag(sampleRate: Double) -> Double {
         let sr = sampleRate > 1000 ? sampleRate : 48_000
-        return Double(size / 2 + hop * (medianFrames / 2 + holdFrames - 1)) / sr
+        return Double(size / 2 + hop / 2) / sr
+    }
+
+    /// The middle of band `i` in Hz.
+    static func centre(_ i: Int) -> Double {
+        lowHz * pow(highHz / lowHz, (Double(i) + 0.5) / Double(bands))
+    }
+
+    /// The band that holds `hz` (clamped to the ends).
+    static func band(of hz: Double) -> Int {
+        let x = log(max(hz, 1) / lowHz) / log(highHz / lowHz) * Double(bands)
+        return min(bands - 1, max(0, Int(x.rounded(.down))))
+    }
+
+    /// Weight in dB: -8 dB at 75 Hz and under, 0 from 150 Hz to 5 kHz, -8 dB at 10 kHz, a straight line in octaves
+    /// between (the planner's rule: the middle leads, the kick and the hi-hat show but never lead).
+    static func weight(_ hz: Double) -> Double {
+        if hz < 150 { return -8 * min(1, log2(150 / hz)) }
+        if hz > 5000 { return -8 * min(1, log2(hz / 5000)) }
+        return 0
     }
 
     private(set) var sampleRate: Double = 48_000
-    private var binHz = 48_000.0 / Double(size)
-    private var bins = 0, lowBin = 0, highBin = 0
-
     private let setup: FFTSetup
-    private let ring, window, frame, real, imag, magnitude, history, steady, peaks, scratch: UnsafeMutablePointer<Float>
+    private let ring, window, frame, real, imag, magnitude: UnsafeMutablePointer<Float>
+    private let level, held, boost, gains, history: UnsafeMutablePointer<Double>
+    private let lowBin, highBin: UnsafeMutablePointer<Int>
+    private let boosted: UnsafeMutablePointer<Bool>
     private static let half = size / 2
-
     private var ringHead = 0, filled = 0, sinceHop = 0, historyHead = 0
-    private var reference = LeadMeter.magnitudeFloor
-    private var candidate = 0.0, candidateFrames = 0
-    private var note: Double?
-    private var silentFrames = 0
-    private var sinceNote = 1.0
-    private var dip = 0.0
-
-    /// The newest reading.
-    private(set) var strength = 0.0
-    private(set) var pitch = 0.0
-    private(set) var notes: UInt32 = 0
+    private var top = SpectrumMeter.silence
 
     init(sampleRate: Double = 48_000) {
         setup = vDSP_create_fftsetup(Self.log2Size, FFTRadix(kFFTRadix2))!
-        func make(_ n: Int) -> UnsafeMutablePointer<Float> {
-            let p = UnsafeMutablePointer<Float>.allocate(capacity: n)
-            p.initialize(repeating: 0, count: n)
+        func make<T>(_ n: Int, _ zero: T) -> UnsafeMutablePointer<T> {
+            let p = UnsafeMutablePointer<T>.allocate(capacity: n)
+            p.initialize(repeating: zero, count: n)
             return p
         }
-        ring = make(Self.size)
-        window = make(Self.size)
-        frame = make(Self.size)
-        real = make(Self.half)
-        imag = make(Self.half)
-        magnitude = make(Self.half)
-        history = make(Self.half * Self.medianFrames)
-        steady = make(Self.half)
-        peaks = make(Self.half)
-        scratch = make(2 * Self.floorHalfWidth + 1 + Self.medianFrames)
+        ring = make(Self.size, 0); window = make(Self.size, 0); frame = make(Self.size, 0)
+        real = make(Self.half, 0); imag = make(Self.half, 0); magnitude = make(Self.half, 0)
+        level = make(Self.bands, 0); held = make(Self.bands, 0); boost = make(Self.bands, 0); gains = make(Self.bands, 0)
+        history = make(Self.bands * Self.fluxLag, Self.silence)
+        lowBin = make(Self.bands, 0); highBin = make(Self.bands, 0); boosted = make(Self.bands, false)
         vDSP_hann_window(window, vDSP_Length(Self.size), Int32(vDSP_HANN_DENORM))
         reset(sampleRate: sampleRate)
     }
 
     deinit {
         vDSP_destroy_fftsetup(setup)
-        for p in [ring, window, frame, real, imag, magnitude, history, steady, peaks, scratch] { p.deallocate() }
+        for p in [ring, window, frame, real, imag, magnitude] { p.deallocate() }
+        for p in [level, held, boost, gains, history] { p.deallocate() }
+        lowBin.deallocate(); highBin.deallocate(); boosted.deallocate()
     }
 
     /// A new tap (or none). Call only while the audio device does not run.
     func reset(sampleRate: Double = 48_000) {
         self.sampleRate = sampleRate > 1000 ? sampleRate : 48_000
-        binHz = self.sampleRate / Double(Self.size)
-        bins = min(Self.half, Int(Self.topHz / binHz) + 3)
-        lowBin = max(2, Int(Self.lowHz / binHz))
-        highBin = min(bins - 2, Int(Self.highHz / binHz) + 1)
+        let binHz = self.sampleRate / Double(Self.size)
+        for i in 0..<Self.bands {
+            let lo = Self.lowHz * pow(Self.highHz / Self.lowHz, Double(i) / Double(Self.bands))
+            let hi = Self.lowHz * pow(Self.highHz / Self.lowHz, Double(i + 1) / Double(Self.bands))
+            // Each band gets at least the bin nearest its middle (the low bands share bins).
+            let a = Int((lo / binHz).rounded(.up)), b = Int((hi / binHz).rounded(.down))
+            let mid = min(Self.half - 1, max(1, Int((Self.centre(i) / binHz).rounded())))
+            lowBin[i] = a <= b ? max(1, a) : mid
+            highBin[i] = a <= b ? min(Self.half - 1, b) : mid
+            gains[i] = Self.weight(Self.centre(i))
+            boosted[i] = Self.centre(i) >= Self.boostLow && Self.centre(i) <= Self.boostHigh
+        }
         ring.update(repeating: 0, count: Self.size)
-        history.update(repeating: 0, count: Self.half * Self.medianFrames)
+        level.update(repeating: 0, count: Self.bands)
+        held.update(repeating: 0, count: Self.bands)
+        boost.update(repeating: 0, count: Self.bands)
+        history.update(repeating: Self.silence, count: Self.bands * Self.fluxLag)
         ringHead = 0; filled = 0; sinceHop = 0; historyHead = 0
-        reference = Self.magnitudeFloor
-        candidate = 0; candidateFrames = 0
-        note = nil; silentFrames = 0; sinceNote = 1; dip = 0
-        strength = 0; pitch = 0; notes = 0
+        top = Self.silence
     }
+
+    /// Band `i` after the newest hop, 0...1.
+    func value(_ i: Int) -> Double { level[i] }
 
     /// One buffer of any length, `channels` interleaved (averaged to mono).
     func process(_ p: UnsafePointer<Float>, frames: Int, channels: Int) {
@@ -272,25 +284,19 @@ final class LeadMeter {
             sinceHop += 1
             if sinceHop >= Self.hop {
                 sinceHop = 0
-                if filled == Self.size { analyse() }
+                analyse()
             }
         }
     }
 
-    private static func median(_ v: UnsafeMutablePointer<Float>, _ n: Int) -> Float {
-        for i in 1..<n {
-            let x = v[i]
-            var j = i - 1
-            while j >= 0 && v[j] > x { v[j + 1] = v[j]; j -= 1 }
-            v[j + 1] = x
-        }
-        return v[n / 2]
+    /// Calls `body` with each band's highest value since the last call, then starts again from 0.
+    func takeHeld(_ body: (Int, Double) -> Void) {
+        for i in 0..<Self.bands { body(i, held[i]); held[i] = 0 }
     }
 
     private func analyse() {
-        // The ring in order, windowed.
         let n = Self.size
-        (frame).update(from: ring + ringHead, count: n - ringHead)
+        frame.update(from: ring + ringHead, count: n - ringHead)
         (frame + (n - ringHead)).update(from: ring, count: ringHead)
         vDSP_vmul(frame, 1, window, 1, frame, 1, vDSP_Length(n))
         var split = DSPSplitComplex(realp: real, imagp: imag)
@@ -300,146 +306,35 @@ final class LeadMeter {
         vDSP_fft_zrip(setup, &split, 1, Self.log2Size, FFTDirection(FFT_FORWARD))
         imag[0] = 0
         vDSP_zvabs(&split, 1, magnitude, 1, vDSP_Length(Self.half))
-        // vDSP's real FFT is twice the textbook one; with the Hann window a sine of amplitude a then reads a·size/2.
-        (history + historyHead * Self.half).update(from: magnitude, count: bins)
-        historyHead = (historyHead + 1) % Self.medianFrames
+        // vDSP's real FFT with this Hann window reads a sine of amplitude a as about a·size/2: scale to amplitude.
+        var scale = Float(2) / Float(n)
+        vDSP_vsmul(magnitude, 1, &scale, magnitude, 1, vDSP_Length(Self.half))
 
-        // 1. The median in time.
-        for k in 0..<bins {
-            for m in 0..<Self.medianFrames { scratch[m] = history[m * Self.half + k] }
-            steady[k] = Self.median(scratch, Self.medianFrames)
-        }
-        // 2. Only what stands above its neighbours in frequency.
-        var total = 0.0, now = 0.0
-        for k in 0..<bins {
-            let a = max(0, k - Self.floorHalfWidth), b = min(bins - 1, k + Self.floorHalfWidth)
-            for j in a...b { scratch[j - a] = steady[j] }
-            peaks[k] = max(0, steady[k] - Self.floorFactor * Self.median(scratch, b - a + 1))
-        }
-        for k in lowBin...highBin {
-            total += Double(steady[k]) * Double(steady[k])
-            now += Double(magnitude[k]) * Double(magnitude[k])
-        }
         let dt = Double(Self.hop) / sampleRate
-        sinceNote += dt
-        // A hit that is much louder than the steady sound hides the note: change nothing in this frame.
-        if now > 3 * total, total > Self.magnitudeFloor * Self.magnitudeFloor {
-            return
-        }
-
-        // 3. The strongest pitch.
-        let (frequency, height, share) = strongest(total: total)
-        reference = max(height, Self.magnitudeFloor, reference * exp(-dt / 4))
-        let voiced = share >= Self.tonalOn && height >= max(Self.magnitudeFloor, 0.12 * reference)
-        guard voiced else {
-            candidateFrames = 0
-            silentFrames += 1
-            strength = max(0, strength - dt / 0.12)
-            if silentFrames >= Self.gapFrames { note = nil; dip = 0 }
-            return
-        }
-        silentFrames = 0
-        let semitone = 12 * log2(frequency / Self.lowHz)
-        if candidateFrames > 0, abs(semitone - candidate) < 0.7 {
-            candidate += (semitone - candidate) * 0.5
-            candidateFrames += 1
-        } else {
-            candidate = semitone
-            candidateFrames = 1
-        }
-        let level = BeatMath.clamp01(height / reference)
-        // 4. A new note: the pitch holds, and it differs from the last one or the same pitch was struck again.
-        guard candidateFrames >= Self.holdFrames else { return }
-        let changed = note.map { abs(candidate - $0) >= Self.noteStep } ?? true
-        if !changed { dip = min(dip, level) }
-        let struckAgain = !changed && level > 0.55 && level > 1.8 * dip
-        if (changed || struckAgain), sinceNote >= Self.minNoteGap {
-            notes &+= 1
-            sinceNote = 0
-            note = candidate
-            dip = level
-        } else if !changed, let held = note {
-            note = held + (candidate - held) * 0.08 // follows a slow slide and the middle of a vibrato
-            if sinceNote < 0.12 { dip = level }
-        }
-        strength = level
-        let span = log2(Self.highHz / Self.lowHz)
-        pitch = BeatMath.clamp01(log2(frequency / Self.lowHz) / span)
-    }
-
-    /// The strongest peak near `hz` (within 3 %, at least one bin): its height and bin.
-    private func peak(at hz: Double) -> (height: Double, bin: Int) {
-        let centre = hz / binHz, reach = max(0.7, centre * 0.03)
-        let a = max(1, Int((centre - reach).rounded())), b = min(bins - 2, Int((centre + reach).rounded()))
-        guard a <= b else { return (0, 0) }
-        var best: Float = 0, at = a
-        for k in a...b where peaks[k] > best { best = peaks[k]; at = k }
-        return (Double(best), at)
-    }
-
-    /// The peak's frequency between bins (a parabola through the log magnitudes).
-    private func refined(_ k: Int) -> Double {
-        let a = log(Double(steady[k - 1]) + 1e-9), b = log(Double(steady[k]) + 1e-9), c = log(Double(steady[k + 1]) + 1e-9)
-        let curve = a - 2 * b + c
-        let shift = curve < -1e-9 ? min(0.5, max(-0.5, 0.5 * (a - c) / curve)) : 0
-        return (Double(k) + shift) * binHz
-    }
-
-    /// A 2nd or 3rd harmonic of a bass note under the band: a louder partial at a half or a third of the pitch, with
-    /// that bass note's next partial present too.
-    private func isBassHarmonic(_ f0: Double, height: Double) -> Bool {
-        for divisor in 2...3 {
-            let bass = f0 / Double(divisor)
-            guard bass < Self.lowHz, bass > 40, peak(at: bass).height > height else { continue }
-            if peak(at: bass * Double(divisor == 2 ? 3 : 2)).height > 0.1 * height { return true }
-        }
-        return false
-    }
-
-    private func strongest(total: Double) -> (frequency: Double, height: Double, share: Double) {
-        var bestScore = 0.0, bestFrequency = 0.0, bestHeight = 0.0
-        var largest: Float = 0
-        for k in lowBin...highBin { largest = max(largest, peaks[k]) }
-        guard largest > 0, total > 0 else { return (0, 0, 0) }
-        for k in lowBin...highBin where peaks[k] > 0.12 * largest && peaks[k] >= peaks[k - 1] && peaks[k] >= peaks[k + 1] {
-            let f = refined(k)
-            // The peak itself as the fundamental, or as the 2nd or 3rd harmonic of a lower, present fundamental.
-            for divisor in 1...3 {
-                let f0 = f / Double(divisor)
-                guard f0 >= Self.lowHz, f0 <= Self.highHz else { continue }
-                let first = peak(at: f0)
-                guard first.height > 0.15 * Double(peaks[k]) else { continue }
-                let w = Self.harmonicWeights
-                let score = w.0 * first.height + w.1 * peak(at: 2 * f0).height + w.2 * peak(at: 3 * f0).height
-                    + w.3 * peak(at: 4 * f0).height
-                if isBassHarmonic(f0, height: first.height) { continue }
-                if score > bestScore {
-                    bestScore = score
-                    bestFrequency = first.bin > 0 ? refined(first.bin) : f0
-                    bestHeight = first.height
-                }
+        var loudest = Self.silence
+        let past = historyHead // the oldest of the `fluxLag` stored hops
+        for i in 0..<Self.bands {
+            var power = 0.0
+            for k in lowBin[i]...highBin[i] { power += Double(magnitude[k]) * Double(magnitude[k]) }
+            let db = max(Self.silence - 20, 10 * log10(power + 1e-14)) + gains[i]
+            loudest = max(loudest, db)
+            let rise = db - history[past * Self.bands + i]
+            history[past * Self.bands + i] = db
+            boost[i] *= exp(-dt / Self.boostDecay)
+            if boosted[i], rise > 0, db > Self.silence {
+                boost[i] = max(boost[i], Self.boostGain * BeatMath.clamp01(rise / 12))
             }
+            level[i] = db // finished below, once the top is known
         }
-        guard bestScore > 0 else { return (0, 0, 0) }
-        var energy = 0.0
-        for h in 1...4 {
-            let centre = Int((bestFrequency * Double(h) / binHz).rounded())
-            guard centre >= 1, centre < bins - 1 else { break }
-            for k in (centre - 1)...(centre + 1) where k >= lowBin && k <= highBin {
-                energy += Double(steady[k]) * Double(steady[k]) * (peaks[k] > 0 ? 1 : 0)
-            }
+        historyHead = (historyHead + 1) % Self.fluxLag
+        top = max(loudest, top - Self.topFall * dt, Self.silence)
+        let floor = top - Self.range
+        for i in 0..<Self.bands {
+            let db = level[i]
+            let v = db <= Self.silence ? 0 : BeatMath.clamp01((db - floor) / Self.range + boost[i])
+            level[i] = v
+            held[i] = max(held[i], v)
         }
-        return (bestFrequency, bestHeight, min(1, energy / total))
-    }
-
-    /// The reading packed for the main thread: strength and pitch in 16 bits each, the note count in 32.
-    var packed: UInt64 {
-        let s = UInt64(BeatMath.clamp01(strength) * 65535), p = UInt64(BeatMath.clamp01(pitch) * 65535)
-        return s << 48 | p << 32 | UInt64(notes)
-    }
-
-    static func unpack(_ v: UInt64) -> (strength: Double, pitch: Double, notes: Int) {
-        (Double(v >> 48) / 65535, Double((v >> 32) & 0xFFFF) / 65535, Int(v & 0xFFFF_FFFF))
     }
 }
 
@@ -591,10 +486,55 @@ final class BeatTapShared: @unchecked Sendable {
     let levels = Atomic<UInt64>(0)
     let heard = Atomic<Bool>(false)
     let callbacks = Atomic<UInt64>(0)
-    /// The lead line's reading (`LeadMeter.packed`).
-    let note = Atomic<UInt64>(0)
     /// Same rule as `meter`: the audio thread while the device runs, the tap queue while it is stopped.
-    let lead = LeadMeter()
+    let spectrum = SpectrumMeter()
+    /// The spectrum's highest values since the main thread last took them: four 16-bit bands in each slot.
+    let bandSlots = (0..<(SpectrumMeter.bands + 3) / 4).map { _ in BandSlot() }
+    /// Counts the callbacks that published bands, so a frame with no new audio keeps the last spectrum.
+    let published = Atomic<UInt64>(0)
+
+    final class BandSlot: @unchecked Sendable { let bits = Atomic<UInt64>(0) }
+
+    /// The audio thread: merge the newest maxima into the slots (each lane keeps its larger value).
+    private func publishBands() {
+        var lanes: (UInt64, UInt64, UInt64, UInt64) = (0, 0, 0, 0)
+        var current = -1
+        func flush() {
+            guard current >= 0 else { return }
+            let add = lanes.0 | lanes.1 << 16 | lanes.2 << 32 | lanes.3 << 48
+            let slot = bandSlots[current]
+            var old = slot.bits.load(ordering: .relaxed)
+            while true {
+                var merged: UInt64 = 0
+                for lane in 0..<4 {
+                    let shift = UInt64(lane * 16)
+                    merged |= max((old >> shift) & 0xFFFF, (add >> shift) & 0xFFFF) << shift
+                }
+                let (done, seen) = slot.bits.compareExchange(expected: old, desired: merged, ordering: .relaxed)
+                if done { break }
+                old = seen
+            }
+        }
+        spectrum.takeHeld { i, v in
+            if i / 4 != current { flush(); lanes = (0, 0, 0, 0); current = i / 4 }
+            let q = UInt64(BeatMath.clamp01(v) * 65535)
+            switch i % 4 { case 0: lanes.0 = q; case 1: lanes.1 = q; case 2: lanes.2 = q; default: lanes.3 = q }
+        }
+        flush()
+        published.wrappingAdd(1, ordering: .releasing)
+    }
+
+    /// The main thread: the bands' highest values since the last call (each slot emptied as it is read).
+    func takeBands() -> [Double] {
+        var out = [Double](repeating: 0, count: SpectrumMeter.bands)
+        for (s, slot) in bandSlots.enumerated() {
+            let v = slot.bits.exchange(0, ordering: .acquiring)
+            for lane in 0..<4 where s * 4 + lane < out.count {
+                out[s * 4 + lane] = Double((v >> UInt64(lane * 16)) & 0xFFFF) / 65535
+            }
+        }
+        return out
+    }
     /// Written only by the audio thread while the device runs, and by the tap queue while it is stopped.
     let meter: UnsafeMutablePointer<BeatMeter>
 
@@ -617,8 +557,8 @@ final class BeatTapShared: @unchecked Sendable {
         let r = meter.pointee.process(data.assumingMemoryBound(to: Float.self), frames: frames, channels: channels)
         levels.store(UInt64(r.rms.bitPattern) << 32 | UInt64(r.low.bitPattern), ordering: .relaxed)
         if r.peak > 0 { heard.store(true, ordering: .relaxed) }
-        lead.process(data.assumingMemoryBound(to: Float.self), frames: frames, channels: channels)
-        note.store(lead.packed, ordering: .relaxed)
+        spectrum.process(data.assumingMemoryBound(to: Float.self), frames: frames, channels: channels)
+        publishBands()
         callbacks.wrappingAdd(1, ordering: .relaxed)
     }
 
@@ -650,6 +590,8 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
     private let shared = BeatTapShared()
     private let statusLock = OSAllocatedUnfairLock<BeatSourceStatus>(initialState: .idle)
     private var analyzer = BeatAnalyzer() // main thread only
+    private var lastPublished: UInt64 = 0 // main thread only
+    private var lastBands: [Double] = [] // main thread only
     // The tap queue's own state.
     private var wanted = false
     private var tap = AudioObjectID(kAudioObjectUnknown)
@@ -690,10 +632,13 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
         let heard = shared.heard.exchange(false, ordering: .relaxed)
         let v = shared.load()
         var sample = analyzer.update(rms: v.rms, low: v.low, dt: dt)
-        let lead = LeadMeter.unpack(shared.note.load(ordering: .relaxed))
-        sample.lead = lead.strength
-        sample.leadPitch = lead.pitch
-        sample.leadNote = lead.notes
+        // No callback since the last frame: keep the last spectrum (the bars' fall does the rest).
+        let count = shared.published.load(ordering: .acquiring)
+        if count != lastPublished || lastBands.isEmpty {
+            lastPublished = count
+            lastBands = shared.takeBands()
+        }
+        sample.spectrum = lastBands
         return (sample, heard)
     }
 
@@ -808,7 +753,7 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
         guard err == noErr else { return "kAudioTapPropertyFormat failed (OSStatus \(err))" }
         guard format.mFormatFlags & kAudioFormatFlagIsFloat != 0, format.mBitsPerChannel == 32 else { return "tap format is not 32-bit float" }
         shared.meter.pointee = BeatMeter(sampleRate: format.mSampleRate) // the device is not running yet
-        shared.lead.reset(sampleRate: format.mSampleRate)
+        shared.spectrum.reset(sampleRate: format.mSampleRate)
 
         var composition: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Merlin beat",
@@ -852,8 +797,8 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
         tapped = []
         shared.levels.store(0, ordering: .relaxed)
         shared.meter.pointee = BeatMeter()
-        shared.note.store(0, ordering: .relaxed)
-        shared.lead.reset()
+        shared.spectrum.reset()
+        _ = shared.takeBands()
     }
 }
 
@@ -988,7 +933,7 @@ final class SpotifyBeat {
         if isPaused, let bpm = tempo.bpm { simulated.tempo(bpm) }
         if want, decision == .live {
             // The note analysis is already late by its own lag, so the picture waits that much less.
-            outputDelay = max(0, min(0.4, OutputLatency.current() - Self.pictureLag - LeadMeter.lag(sampleRate: 48_000)))
+            outputDelay = max(0, min(0.4, OutputLatency.current() - Self.pictureLag - SpectrumMeter.lag(sampleRate: 48_000)))
         }
         if want {
             // Unconditional, before anything can fail: the first sign in the log that a start was tried.

@@ -14,193 +14,186 @@ private final class FakeBeatSource: SpotifyBeatSource {
     func read(now: TimeInterval, dt: Double) -> (sample: BeatSample, heard: Bool) { (sample, heard) }
 }
 
-/// Synthetic sound for the lead-line checks: notes, noise bursts (drum hits), a bass line, a kick and a gliding tom.
+/// Synthetic sound for the spectrum checks: piano-like notes (a 2 ms rise, six harmonics that fade), a kick and a
+/// hi-hat. No real tap, no file.
 private enum Synth {
-    struct Note { var at, length, hz: Double }
-
-    static func tone(_ t: Double, _ n: Note, harmonics: [Double] = [1], vibrato: Double = 0) -> Double {
-        let u = t - n.at
-        guard u >= 0, u < n.length else { return 0 }
-        let envelope = min(1, u / 0.008) * min(1, (n.length - u) / 0.02)
-        var phase = 2 * Double.pi * n.hz * u
-        if vibrato > 0 { phase -= n.hz * (pow(2, vibrato / 12) - 1) / 5.5 * cos(2 * .pi * 5.5 * u) }
-        var sum = 0.0
-        for (i, a) in harmonics.enumerated() { sum += a * sin(Double(i + 1) * phase) }
-        return envelope * sum
-    }
-
-    static func hits(_ t: Double, _ times: [Double], noise: Double, amplitude: Double = 0.6, decay: Double = 0.025) -> Double {
+    static func piano(_ t: Double, at: Double, hz: Double, amplitude: Double = 0.3) -> Double {
+        let u = t - at
+        guard u >= 0, u < 1.2 else { return 0 }
         var v = 0.0
-        for at in times where t >= at && t < at + 0.15 { v += amplitude * noise * exp(-(t - at) / decay) }
-        return v
+        for h in 1...6 { v += pow(0.55, Double(h - 1)) * exp(-u / (0.8 / Double(h))) * sin(2 * .pi * hz * Double(h) * u) }
+        return amplitude * min(1, u / 0.002) * v
     }
 
-    static let melody = [440.0, 523.25, 659.25, 587.33, 392, 493.88, 698.46, 329.63].enumerated().map {
-        Note(at: 0.5 + 0.5 * Double($0.offset), length: 0.4, hz: $0.element)
-    }
-    /// Another rhythm than the melody's.
-    static let drums = (0..<12).map { 0.73 + 0.37 * Double($0) }
-
-    struct Heard {
-        var onsets: [(time: Double, hz: Double)] = []
-        var strength: [(time: Double, value: Double)] = []
+    static func kick(_ t: Double, at: Double, amplitude: Double = 0.3) -> Double {
+        let u = t - at
+        guard u >= 0, u < 0.3 else { return 0 }
+        return amplitude * exp(-u / 0.08) * sin(2 * .pi * (55 * u + 2.4 * (1 - exp(-u / 0.02))))
     }
 
-    /// Runs `seconds` of `signal` (the second argument is white noise in -1...1) through the analysis.
-    static func hear(_ seconds: Double, rate: Double = 48_000, _ signal: (Double, Double) -> Double) -> Heard {
+    struct Frame { var time: Double; var bands: [Double] }
+
+    /// Runs `seconds` of `signal` (its second argument is white noise in -1...1) through the meter, one hop at a time.
+    static func hear(_ seconds: Double, rate: Double = 48_000, _ signal: (Double, Double) -> Double) -> [Frame] {
         var random = BeatRandom(state: 42)
         let samples = (0..<Int(seconds * rate)).map { Float(signal(Double($0) / rate, random.unit() * 2 - 1)) }
-        let meter = LeadMeter(sampleRate: rate)
-        var heard = Heard(), count: UInt32 = 0, i = 0
+        let meter = SpectrumMeter(sampleRate: rate)
+        var out: [Frame] = [], i = 0
         while i < samples.count {
-            let n = min(512, samples.count - i)
+            let n = min(SpectrumMeter.hop, samples.count - i)
             samples.withUnsafeBufferPointer { meter.process($0.baseAddress! + i, frames: n, channels: 1) }
             i += n
-            let t = Double(i) / rate
-            if meter.notes != count {
-                count = meter.notes
-                heard.onsets.append((t, LeadMeter.lowHz * pow(LeadMeter.highHz / LeadMeter.lowHz, meter.pitch)))
-            }
-            heard.strength.append((t, meter.strength))
+            out.append(Frame(time: Double(i) / rate, bands: (0..<SpectrumMeter.bands).map { meter.value($0) }))
         }
-        return heard
+        return out
     }
 
-    /// How many notes were found (right pitch, within 150 ms), the extra onsets, and the largest delay.
-    static func match(_ heard: Heard, _ notes: [Note]) -> (found: Int, extra: Int, worst: Double) {
-        var used = Set<Int>(), worst = 0.0
-        for n in notes {
-            if let k = heard.onsets.indices.first(where: { k in
-                let o = heard.onsets[k]
-                return !used.contains(k) && o.time >= n.at && o.time < n.at + 0.15 && abs(12 * log2(o.hz / n.hz)) < 0.7
-            }) {
-                used.insert(k)
-                worst = max(worst, heard.onsets[k].time - n.at)
-            }
-        }
-        return (used.count, heard.onsets.count - used.count, worst)
+    static func tallest(_ f: Frame) -> Int { f.bands.indices.max { f.bands[$0] < f.bands[$1] } ?? 0 }
+
+    /// The first time after `at` (seconds, at most `within` later) that the band group of `hz` is above 0.6 and the
+    /// tallest group on the ring (2 bands either way), or nil.
+    static func rise(_ frames: [Frame], at: Double, hz: Double, within: Double = 0.03) -> Double? {
+        let b = SpectrumMeter.band(of: hz)
+        return frames.first { $0.time >= at && $0.time <= at + within && $0.bands[b] > 0.6 && abs(tallest($0) - b) <= 2 }
+            .map { $0.time - at }
     }
+
+    static let scale = [261.63, 329.63, 392.0, 523.25, 440.0, 349.23, 293.66, 493.88, 587.33, 220.0]
 }
 
 extension FeatureTests {
-    static func leadChecks(_ check: (String, Bool) -> Void) {
-        let melody = Synth.melody, drums = Synth.drums
+    static func spectrumChecks(_ check: (String, Bool) -> Void) {
         func ms(_ s: Double) -> String { String(format: "%.0f ms", s * 1000) }
+        // Eight piano-like notes, alone.
+        let alone = (0..<8).map { (at: 0.4 + 0.5 * Double($0), hz: Synth.scale[$0]) }
         for rate in [48_000.0, 44_100] {
-            let name = "lead \(Int(rate / 1000)) kHz:"
-            let mixed = Synth.match(Synth.hear(4.8, rate: rate) { t, noise in
-                melody.reduce(0) { $0 + 0.25 * Synth.tone(t, $1) } + Synth.hits(t, drums, noise: noise)
-            }, melody)
-            check("\(name) a melody with drum bursts on another rhythm: every note found (\(mixed.found)/8), none on a burst (\(mixed.extra) extra), at most \(ms(mixed.worst)) late",
-                  mixed.found == 8 && mixed.extra == 0 && mixed.worst <= 0.08)
-            for decay in [0.025, 0.08] {
-                let only = Synth.hear(4.8, rate: rate) { t, noise in Synth.hits(t, drums, noise: noise, decay: decay) }
-                check("\(name) drum bursts only (decay \(ms(decay))): no note (\(only.onsets.count))", only.onsets.isEmpty)
-            }
+            let frames = Synth.hear(4.6, rate: rate) { t, _ in alone.reduce(0) { $0 + Synth.piano(t, at: $1.at, hz: $1.hz) } }
+            let rises = alone.compactMap { Synth.rise(frames, at: $0.at, hz: $0.hz) }
+            check("spectrum \(Int(rate / 1000)) kHz: each piano note's bar group rises within 30 ms (\(rises.count)/8, worst \(ms(rises.max() ?? 1)))",
+                  rises.count == alone.count)
         }
-        check("lead: steady noise gives no note", Synth.hear(3) { _, noise in 0.2 * noise }.onsets.isEmpty)
-        check("lead: silence gives no note and no strength", { let h = Synth.hear(1) { _, _ in 0 }; return h.onsets.isEmpty && h.strength.allSatisfy { $0.value == 0 } }())
-        let long = Synth.Note(at: 0.3, length: 3, hz: 440)
-        let held = Synth.hear(3.6) { t, _ in 0.25 * Synth.tone(t, long) }
-        let least = held.strength.filter { $0.time > 0.5 && $0.time < 3.2 }.map(\.value).min() ?? 0
-        check("lead: one long held note gives one onset and stays strong (\(held.onsets.count), least \(String(format: "%.2f", least)))",
-              held.onsets.count == 1 && least > 0.8)
-        let vibrato = Synth.hear(3.6) { t, _ in 0.2 * Synth.tone(t, long, harmonics: [1, 0.5, 0.3], vibrato: 0.4) }
-        check("lead: a held note with vibrato gives one onset (\(vibrato.onsets.count))", vibrato.onsets.count == 1)
-        let over = Synth.hear(3.6) { t, noise in 0.25 * Synth.tone(t, long) + Synth.hits(t, [0.9, 1.4, 1.9, 2.4], noise: noise) }
-        check("lead: drum bursts over a held note add no onset (\(over.onsets.count))", over.onsets.count == 1)
-        // The closest to a song: a voice-like tone with harmonics and vibrato, a bass line on another rhythm, a kick,
-        // a gliding tom and noise hits. The estimate may take a few wrong notes here.
-        let bass = (0..<10).map { Synth.Note(at: 0.38 + 0.43 * Double($0), length: 0.3, hz: [82.4, 98, 110, 73.4][$0 % 4]) }
-        let song = Synth.match(Synth.hear(4.8) { t, noise in
-            var v = melody.reduce(0) { $0 + 0.18 * Synth.tone(t, $1, harmonics: [1, 0.6, 0.45, 0.25, 0.12], vibrato: 0.3) }
-            v += bass.reduce(0) { $0 + 0.2 * Synth.tone(t, $1, harmonics: [1, 0.4, 0.15]) }
-            v += Synth.hits(t, drums, noise: noise, amplitude: 0.4)
-            for hit in drums {
-                let tom = t - (hit + 0.18), kick = t - (hit + 0.05)
-                if tom >= 0 && tom < 0.2 { v += 0.3 * exp(-tom / 0.04) * sin(2 * .pi * (230 * tom - 400 * tom * tom)) }
-                if kick >= 0 && kick < 0.2 { v += 0.4 * exp(-kick / 0.05) * sin(2 * .pi * 60 * kick) }
-            }
-            return v
-        }, melody)
-        check("lead: voice, bass and drums together: every voice note found (\(song.found)/8), at most 2 wrong onsets (\(song.extra)), \(ms(song.worst)) late at most",
-              song.found == 8 && song.extra <= 2 && song.worst <= 0.08)
+        // The planner's check: 10 s of piano notes on one rhythm, a kick and a hi-hat on another.
+        let notes = (0..<20).map { (at: 0.4 + 0.47 * Double($0), hz: Synth.scale[$0 % Synth.scale.count]) }
+        let kicks = (0..<16).map { 0.25 + 0.6 * Double($0) }
+        let hats = (0..<32).map { 0.55 + 0.3 * Double($0) }
+        var previous = 0.0
+        let mix = Synth.hear(10) { t, noise in
+            var v = notes.reduce(0) { $0 + Synth.piano(t, at: $1.at, hz: $1.hz) }
+            v += kicks.reduce(0) { $0 + Synth.kick(t, at: $1) }
+            var hat = 0.0
+            for h in hats where t >= h && t < h + 0.08 { hat += 0.25 * exp(-(t - h) / 0.02) }
+            let bright = noise - previous // white noise tilted to the treble
+            previous = noise
+            return v + hat * bright * 0.5
+        }
+        let rises = notes.compactMap { Synth.rise(mix, at: $0.at, hz: $0.hz) }
+        check("spectrum mix: the tallest bar group follows each piano note within 30 ms, over a kick and a hi-hat (\(rises.count)/20, worst \(ms(rises.max() ?? 1)))",
+              rises.count == notes.count)
+        let kickBands = 0...SpectrumMeter.band(of: 100)
+        let kickPeaks = kicks.map { k in mix.filter { $0.time >= k && $0.time < k + 0.08 }.map { f in kickBands.map { f.bands[$0] }.max() ?? 0 }.max() ?? 0 }
+        let pianoPeaks = notes.map { n in mix.filter { $0.time >= n.at && $0.time < n.at + 0.1 }.map { $0.bands[SpectrumMeter.band(of: n.hz)] }.max() ?? 0 }
+        let kickMean = kickPeaks.reduce(0, +) / Double(kickPeaks.count), pianoMean = pianoPeaks.reduce(0, +) / Double(pianoPeaks.count)
+        check("spectrum mix: the kick shows but stays lower than the piano (kick \(String(format: "%.2f", kickMean)), piano \(String(format: "%.2f", pianoMean)))",
+              kickMean > 0.3 && kickMean < pianoMean - 0.1)
+        let hatBands = SpectrumMeter.band(of: 5000)..<SpectrumMeter.bands
+        let hatPeak = mix.map { f in hatBands.map { f.bands[$0] }.max() ?? 0 }.max() ?? 0
+        check("spectrum mix: the hi-hat stays low (\(String(format: "%.2f", hatPeak)))", hatPeak < 0.6)
+        // A chord: both notes rise.
+        let chord = Synth.hear(1) { t, _ in Synth.piano(t, at: 0.3, hz: 261.63) + Synth.piano(t, at: 0.3, hz: 659.25) }
+        let both = [261.63, 659.25].allSatisfy { hz in chord.contains { $0.time >= 0.3 && $0.time <= 0.33 && $0.bands[SpectrumMeter.band(of: hz)] > 0.6 } }
+        check("spectrum: both notes of a chord rise within 30 ms", both)
+        let silent = Synth.hear(1) { _, _ in 0 }
+        check("spectrum: silence is 0 in every band", silent.allSatisfy { $0.bands.allSatisfy { $0 == 0 } })
+        let held = Synth.hear(3) { t, _ in 0.2 * sin(2 * .pi * 440 * t) }.filter { $0.time > 0.5 }.map { $0.bands[SpectrumMeter.band(of: 440)] }
+        check("spectrum: a steady tone stays up and steady (\(String(format: "%.2f...%.2f", held.min() ?? 0, held.max() ?? 0)))",
+              (held.min() ?? 0) > 0.9 && (held.max() ?? 0) - (held.min() ?? 0) < 0.1)
+        check("spectrum: weight 0 dB in the middle, -8 dB at 60 Hz and 10 kHz",
+              SpectrumMeter.weight(1000) == 0 && abs(SpectrumMeter.weight(60) + 8) < 1e-9 && abs(SpectrumMeter.weight(10_000) + 8) < 1e-9)
 
-        // Cost: the best of three runs of 10 s of sound, as a share of one core.
+        // The hand-off: a short loud hop between two reads is not lost, and a read empties the slots.
+        let shared = BeatTapShared()
+        var burst = (0..<SpectrumMeter.size).map { Float(0.3 * sin(2 * .pi * 440 * Double($0) / 48_000)) }
+        burst += [Float](repeating: 0, count: 4 * SpectrumMeter.size)
+        shared.spectrum.reset()
+        burst.withUnsafeBufferPointer { shared.spectrum.process($0.baseAddress!, frames: $0.count, channels: 1) }
+        var list = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: 1, mDataByteSize: 4, mData: nil))
+        var zero: Float = 0
+        withUnsafeMutablePointer(to: &zero) { p in
+            list.mBuffers.mData = UnsafeMutableRawPointer(p)
+            shared.consume(&list)
+        }
+        let first = shared.takeBands(), second = shared.takeBands()
+        check("spectrum hand-off: a peak since the last read is kept (\(String(format: "%.2f", first[SpectrumMeter.band(of: 440)])))",
+              first[SpectrumMeter.band(of: 440)] > 0.9 && second.allSatisfy { $0 == 0 })
+
+        // Cost: the best of three runs of 10 s of sound. Timing means something only in an optimised build.
         var random = BeatRandom(state: 3)
         let sound = (0..<480_000).map { Float(0.2 * sin(2 * .pi * 440 * Double($0) / 48_000) + 0.1 * (random.unit() - 0.5)) }
-        let meter = LeadMeter()
+        let meter = SpectrumMeter()
         var best = Double.infinity
         for _ in 0..<3 {
             let start = ProcessInfo.processInfo.systemUptime
             var i = 0
             while i < sound.count {
-                sound.withUnsafeBufferPointer { meter.process($0.baseAddress! + i, frames: min(512, sound.count - i), channels: 1) }
-                i += 512
+                sound.withUnsafeBufferPointer { meter.process($0.baseAddress! + i, frames: min(480, sound.count - i), channels: 1) }
+                i += 480
             }
             best = min(best, (ProcessInfo.processInfo.systemUptime - start) / 10)
         }
-        // Timing means something only in an optimised build: a debug build runs the same code many times slower.
         #if DEBUG
-        print("  [measure] lead: analysis cost \(String(format: "%.1f", best * 100)) % of one core (debug build: not checked)")
+        print("  [measure] spectrum: analysis cost \(String(format: "%.1f", best * 100)) % of one core (debug build: not checked)")
         #else
-        check("lead: the analysis costs under 2 % of one core (\(String(format: "%.2f", best * 100)) %)", best < 0.02)
+        check("spectrum: the analysis costs under 2 % of one core (\(String(format: "%.2f", best * 100)) %)", best < 0.02)
         #endif
-        let shared = LeadMeter.unpack(UInt64(65535) << 48 | UInt64(32768) << 32 | 7)
-        check("lead: the packed reading unpacks", shared.strength == 1 && abs(shared.pitch - 0.5) < 0.001 && shared.notes == 7)
     }
 
     static func melodyBarsChecks(_ check: (String, Bool) -> Void) {
         typealias M = MelodyBarsMotion
-        func note(_ n: Int, _ pitch: Double, lead: Double = 1, kick: Double = 0) -> BeatSample {
-            BeatSample(level: 0.8, bass: 0.5, kick: kick, lead: lead, leadPitch: pitch, leadNote: n)
+        func spectrum(_ band: Int, _ value: Double) -> BeatSample {
+            var s = BeatSample(level: 0.8, bass: 0.5, kick: 0)
+            s.spectrum = [Double](repeating: 0, count: SpectrumMeter.bands)
+            s.spectrum[band] = value
+            return s
         }
-        /// Advances at 60 frames a second from `from` to `to` seconds.
-        func run(_ m: M, _ from: Double, _ to: Double, _ sample: BeatSample, moving: Bool = true) {
+        func run(_ m: M, _ from: Double, _ to: Double, _ sample: BeatSample, moving: Bool = true, half: Bool = false) {
             var t = from
-            while t <= to + 1e-9 { m.advance(to: t, sample: sample, moving: moving, half: false); t += 1.0 / 60 }
+            while t <= to + 1e-9 { m.advance(to: t, sample: sample, moving: moving, half: half); t += 1.0 / 60 }
         }
-        var m = M()
-        run(m, 0, 0.5, note(0, 0, lead: 0, kick: 1))
-        check("bars: drum hits with no note raise no bar", m.spikes.isEmpty && m.heights.allSatisfy { $0 == 0 })
-        let where1 = M.bar(pitch: 0.6, half: false)
-        m.advance(to: 0.5 + 1.0 / 60, sample: note(1, 0.6), moving: true, half: false)
-        run(m, 0.5 + 2.0 / 60, 0.5 + 5.0 / 60, note(1, 0.6))
-        check("bars: a new note jumps out in about 60 ms (\(String(format: "%.2f", m.heights[where1])))", m.heights[where1] > 0.85)
-        let group = (-3...3).map { m.heights[(where1 + $0 + M.count) % M.count] }
-        check("bars: a spike is a group of 5 neighbour bars, the middle one tallest",
-              group[0] == 0 && group[6] == 0 && group[1] > 0 && group[1] < group[2] && group[2] < group[3]
-              && group[3] > group[4] && group[4] > group[5] && group[5] > 0)
-        let top = m.heights[where1]
-        run(m, 0.6, 1.6, note(1, 0.6))
-        check("bars: a held note keeps a lower spike", m.heights[where1] > 0.4 && m.heights[where1] < top)
-        run(m, 1.62, 1.62 + 0.27, note(1, 0.6, lead: 0))
-        check("bars: it falls back in about 250 ms (\(String(format: "%.2f", m.heights[where1])))", m.heights[where1] < 0.12)
-        run(m, 1.9, 4, note(1, 0.6, lead: 0))
-        let soft = m.heights.max() ?? 0
-        check("bars: with no note for 1.5 s, a low slow motion (\(String(format: "%.2f", soft)))", soft > 0.05 && soft <= M.idleHeight + 1e-9)
-        run(m, 4.02, 4.6, note(1, 0.6, lead: 0), moving: false)
-        check("bars: after the song stops, a still ring", m.heights.allSatisfy { $0 == 0 } && m.spikes.isEmpty)
-        m = M()
-        run(m, 0, 0.1, note(0, 0, lead: 0))
-        var t = 0.1
-        for n in 1...20 { run(m, t + 1.0 / 60, t + 0.1, note(n, Double(n % 7) / 7)); t += 0.1 }
-        check("bars: many quick notes keep at most \(M.maxSpikes) spikes", m.spikes.count <= M.maxSpikes && m.spikes.count > 1)
-
-        let discBars = stride(from: 0.0, through: 1, by: 0.01).map { M.bar(pitch: $0, half: true) }
-        check("bars: on the disc every pitch lands on the visible half, low at the bottom and high at the top",
-              discBars.allSatisfy { M.visible(bar: $0, half: true) } && discBars == discBars.sorted()
-              && sin(M.angle(bar: discBars.first!)) > 0.9 && sin(M.angle(bar: discBars.last!)) < -0.9)
-        check("bars: in the mini window different pitch heights give clearly different places",
-              M.bar(pitch: 0.2, half: false) != M.bar(pitch: 0.5, half: false) && M.count >= 90 && M.count <= 120)
+        let m = M()
+        let band = 30, bar = M.bar(band: band)
+        run(m, 0, 0.1, spectrum(band, 0))
+        check("bars: no sound, no raised bar", m.drawn.allSatisfy { $0 == 0 })
+        m.advance(to: 0.1 + 1.0 / 60, sample: spectrum(band, 1), moving: true, half: false)
+        check("bars: a loud band rises at once (\(String(format: "%.2f", m.drawn[bar])))", m.drawn[bar] > 0.99)
+        let group = (-3...3).map { m.drawn[(bar + $0 + M.count) % M.count] }
+        check("bars: a loud band lifts its neighbours, the middle one tallest",
+              group[3] > group[2] && group[2] > group[1] && group[1] > group[0] && group[3] > group[4] && group[4] > group[5]
+              && group[2] > 0.4 && group[0] < 0.25)
+        run(m, 0.1 + 2.0 / 60, 0.1 + 2.0 / 60 + 0.2, spectrum(band, 0))
+        check("bars: it falls back in about 200 ms (\(String(format: "%.2f", m.drawn[bar])))", m.drawn[bar] < 0.05)
+        run(m, 0.4, 2.5, spectrum(band, 0))
+        let soft = m.drawn.max() ?? 0
+        check("bars: with no sound for 1.5 s, a low slow motion (\(String(format: "%.2f", soft)))", soft > 0.05 && soft <= M.idleHeight + 1e-9)
+        run(m, 2.52, 3, spectrum(band, 0), moving: false)
+        check("bars: after the song stops, a still ring", m.drawn.allSatisfy { $0 == 0 })
+        check("bars: the left half runs from low (bottom) to high (top), the mini window mirrors it",
+              sin(M.angle(bar: M.bar(band: 0))) > 0.95 && sin(M.angle(bar: M.bar(band: SpectrumMeter.bands - 1))) < -0.95
+              && (0..<M.count).allSatisfy { M.band(bar: $0) == M.band(bar: (M.count / 2 - $0 + M.count) % M.count) }
+              && (0..<SpectrumMeter.bands).allSatisfy { M.visible(bar: M.bar(band: $0), half: true) })
+        check("bars: they move only while a song plays and the dock shows (a paused song: still, no redraws)",
+              MelodyBars.moves(playing: true, shown: true) && !MelodyBars.moves(playing: false, shown: true)
+              && !MelodyBars.moves(playing: true, shown: false))
         var inside = true, reach = true
         for place in [BeatStrings.Place.disc, .discWithChip, .card] {
             let half = place != .card
             let full = M()
-            full.pin(note(3, 1), half: half)
+            var loud = BeatSample(level: 1, bass: 1, kick: 0)
+            loud.spectrum = [Double](repeating: 1, count: SpectrumMeter.bands)
+            full.pin(loud, half: half)
             let paths = full.paths(center: .zero, place: place, half: half)
             var far = 0.0, near = Double.infinity
-            for path in [paths.ticks, paths.raised] {
+            // An empty `Path` (all bars raised: no ticks) can report a point at infinity: skip it.
+            for path in [paths.ticks, paths.raised] where !path.isEmpty {
                 path.cgPath.applyWithBlock { e in
                     let type = e.pointee.type
                     guard type == .moveToPoint || type == .addLineToPoint else { return }
@@ -215,21 +208,15 @@ extension FeatureTests {
         }
         check("bars: every bar stays between the record and the band's limit, the longest reaching it", inside && reach)
         let still = M()
-        still.pin(note(0, 0, lead: 0), half: true)
-        check("bars: a pinned sample with no note is the still ring", still.heights.allSatisfy { $0 == 0 })
-        check("bars: they move only while a song plays and the dock shows (a paused song: still, no redraws)",
-              MelodyBars.moves(playing: true, shown: true) && !MelodyBars.moves(playing: false, shown: true)
-              && !MelodyBars.moves(playing: true, shown: false))
-        let paused = M()
-        run(paused, 0, 0.5, note(1, 0.6))
-        run(paused, 0.52, 1, note(1, 0.6), moving: false)
-        check("bars: after a pause they settle to the still ring", paused.heights.allSatisfy { $0 == 0 } && paused.energy == 0)
+        still.pin(BeatSample(level: 0, bass: 0, kick: 0), half: true)
+        let picture = M()
+        picture.pin(BeatSample(level: 0.8, bass: 0.5, kick: 0, lead: 1, leadPitch: 0.7, leadNote: 3), half: true)
+        check("bars: a pinned picture with no note is the still ring; with a note it raises bar groups",
+              still.drawn.allSatisfy { $0 == 0 } && (picture.drawn.max() ?? 0) > 0.9)
     }
-
-    @MainActor
     static func spotifyBeatChecks(_ check: (String, Bool) -> Void) {
         let sr = 48_000.0, block = 480 // 10 ms buffers, as the audio callback gets them
-        leadChecks(check)
+        spectrumChecks(check)
         melodyBarsChecks(check)
 
         /// Runs `seconds` of a signal through the callback's meter and the analyzer; returns every sample.
