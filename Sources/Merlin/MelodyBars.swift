@@ -156,8 +156,8 @@ final class MelodyBarsMotion {
     }
 }
 
-/// The bars round the record. One `TimelineView` runs only while `moving` (and for the short settle after it), at 60
-/// frames a second at most. A still ring under `Motion.still` and Reduce Motion; a pinned sample
+/// The bars round the record. One `TimelineView` runs only while `moving` (and for the short settle after it), at the
+/// display's own rate (120 on a ProMotion screen), each frame from the newest analysis. A still ring under `Motion.still` and Reduce Motion; a pinned sample
 /// (the pictures) draws one fixed frame.
 struct MelodyBars: View {
     let palette: DockPalette
@@ -182,7 +182,7 @@ struct MelodyBars: View {
             } else if beat?.pinned != nil || Motion.still || Motion.reduceMotion {
                 bars { motion.rest() }
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !(moving || settling))) { ctx in
+                TimelineView(.animation(minimumInterval: nil, paused: !(moving || settling))) { ctx in
                     let now = ctx.date.timeIntervalSinceReferenceDate
                     bars {
                         let sample = moving ? (beat?.sample(now: now) ?? .zero) : .zero

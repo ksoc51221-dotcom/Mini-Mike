@@ -154,7 +154,9 @@ extension FeatureTests {
             check("spectrum rock mix: every vocal note's bars rise within 40 ms (\(risen.count)/\(vocal.count), worst \(ms(risen.max() ?? 1)))",
                   risen.count == vocal.count && (risen.max() ?? 1) <= 0.04)
             check("spectrum rock mix: the vocal is the tallest group most of the time (\(String(format: "%.0f", 100 * Double(lead) / Double(max(total, 1)))) %)",
-                  Double(lead) / Double(max(total, 1)) > 0.7)
+                  Double(lead) / Double(max(total, 1)) > 0.8)
+            let median = risen.sorted()[risen.count / 2]
+            check("spectrum rock mix: the vocal bars rise in a median of 25 ms or less (\(ms(median)))", median <= 0.025)
             check("spectrum rock mix: the ring is not full all the time (\(String(format: "%.0f", busy * 100)) % of the bars up)", busy < 0.45)
         }
         // A chord: both notes rise.
