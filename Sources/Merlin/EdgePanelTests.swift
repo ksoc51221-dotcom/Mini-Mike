@@ -1009,8 +1009,10 @@ extension FeatureTests {
         model.appsQuery = ""
         model.deactivateAppsSearch()
         spin()
-        check("edge glass 3c: the Apps card with six apps in the dock (full)",
-              model.section == .apps && model.apps.pinned.count == 6 && !model.apps.canPin && ordered())
+        // Six apps no longer fill the dock: it holds DockAppStore.maxPinned (20) since the orbit can turn.
+        check("edge glass 3c: the Apps card with six apps in the dock (room for \(DockAppStore.maxPinned))",
+              model.section == .apps && model.apps.pinned.count == 6
+              && model.apps.canPin == (6 < DockAppStore.maxPinned) && ordered())
 
         // 4. The Spotify mini window: playing, a palette change, paused, not running.
         model.tapSpotify()
