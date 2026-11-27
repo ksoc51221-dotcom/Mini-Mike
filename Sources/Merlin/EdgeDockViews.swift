@@ -416,31 +416,42 @@ struct EdgeDockView: View {
 }
 
 /// The ring the items sit on: a row of tiny accent dots, each on a soft dark casing (so it reads on a white page too),
-/// on the SAME circle as the items' centres (`EdgePanelLayout.ringCentre`), out to the screen edge. While the dock shows
-/// (and motion is allowed) the dots drift slowly along the orbit, and a soft bright "comet" sweeps down the arc
-/// (motion.dev "Motion along a path", animate-ui "Shine"). Still: even dots, a whole number round the circle, one on the
-/// centre line.
+/// on the SAME circle as the items' centres (`EdgePanelLayout.ringCentre`), out to the screen edge. Each time the dock
+/// opens (and motion is allowed) one soft bright "comet" sweeps down the arc (animate-ui "Shine"); then the ring is
+/// still, so an open dock redraws nothing here (2026-11-27: the old endless drift kept the compositor busy).
 private struct EdgeHalo: View {
     let palette: DockPalette
     var moving = false
+    @State private var sweepStart: Date?
 
     /// Dots round the whole circle (even, so one sits on the centre line on each side): about 9 pt apart.
     static let dots = 152
     /// The dot and its casing.
     static let dot: CGFloat = 3.2
     static let casing: CGFloat = 1.4
-    /// One dot spacing every this many seconds (the drift); the comet's trip down the visible arc.
-    static let driftPeriod = 1.6
-    static let cometPeriod = 5.5
+    /// The comet's one trip down the visible arc, each time the dock opens.
+    static let sweep = 1.4
 
     var body: some View {
-        if moving {
-            TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
-                dots(time: ctx.date.timeIntervalSinceReferenceDate)
+        Group {
+            if let start = sweepStart {
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+                    dots(time: ctx.date.timeIntervalSince(start))
+                }
+            } else {
+                dots(time: nil)
             }
-            .allowsHitTesting(false)
-        } else {
-            dots(time: nil).allowsHitTesting(false)
+        }
+        .allowsHitTesting(false)
+        .onAppear { if moving { startSweep() } }
+        .onChange(of: moving) { _, on in if on { startSweep() } else { sweepStart = nil } }
+    }
+
+    private func startSweep() {
+        let start = Date()
+        sweepStart = start
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sweep) {
+            if sweepStart == start { sweepStart = nil }
         }
     }
 
@@ -449,11 +460,11 @@ private struct EdgeHalo: View {
         return Canvas { gc, size in
             let c = EdgePanelLayout.ringCentre, r = EdgePanelLayout.ringLineRadius
             let step = 2 * Double.pi / Double(Self.dots)
-            let drift = time.map { ($0 / Self.driftPeriod).truncatingRemainder(dividingBy: 1) * step } ?? 0
+            let drift = 0.0
             // The visible arc runs from the top of the frame to the bottom: angles (from the left axis) within ±span.
             let span = asin(min(1, Double(size.height / 2) / Double(r)))
             let comet: Double? = time.map {
-                let f = ($0 / Self.cometPeriod).truncatingRemainder(dividingBy: 1)
+                let f = min(1, max(0, $0 / Self.sweep))
                 return -span * 1.3 + f * span * 2.6 // enters above the top, leaves below the bottom
             }
             for i in 0..<Self.dots {
@@ -913,8 +924,26 @@ private struct EdgeCoverDisc: View {
         return angle
     }
 
-    /// The cover as a vinyl record: grooves, a soft specular light, a dark label with the title around the spindle.
+    /// The record face, cached: a spin frame only turns it (2026-11-27: the face was rebuilt 30 times a second).
     private var record: some View {
+        EdgeRecordFace(image: image, palette: palette, title: title, size: size, titleOnBottom: titleOnBottom).equatable()
+    }
+}
+
+/// The cover as a vinyl record: grooves, a soft specular light, a dark label with the title around the spindle.
+/// Equatable, so SwiftUI keeps the drawn face while only its rotation changes.
+private struct EdgeRecordFace: View, Equatable {
+    let image: NSImage?
+    let palette: DockPalette
+    let title: String
+    let size: CGFloat
+    let titleOnBottom: Bool
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.image === b.image && a.palette == b.palette && a.title == b.title && a.size == b.size && a.titleOnBottom == b.titleOnBottom
+    }
+
+    var body: some View {
         let k = size / EdgePanelLayout.recordArtBase
         return ZStack {
             if let image {
@@ -1032,7 +1061,8 @@ private struct EdgeWaves: View {
                 // Paused (a pinned picture too), Motion.still, Reduce Motion: three still circles.
                 strings { motion.rest(place: place) }
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !(moving || settling))) { ctx in
+                // Paused (a soft pulse): 30 frames a second; playing: 60, so a kick lands on time.
+                TimelineView(.animation(minimumInterval: beat?.isPaused == true ? 1.0 / 30 : 1.0 / 60, paused: !(moving || settling))) { ctx in
                     let now = ctx.date.timeIntervalSinceReferenceDate
                     strings {
                         let sample = moving ? (beat?.sample(now: now) ?? .zero) : .zero

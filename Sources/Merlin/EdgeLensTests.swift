@@ -98,12 +98,12 @@ extension FeatureTests {
                     && $0.source.maxX <= second.width + 0.01 } == true
                 && EdgeLensPolicy.pixelSize(NSRect(x: 0, y: 0, width: 100.4, height: 50), scale: 2) == (201, 100))
         do {
-            // 2026-11-27: the compositor load. Half-size frames at 30 a second, and with no card
+            // 2026-11-27: the compositor load. Half-size frames at 20 a second, and with no card
             // open only the dock's strip is copied.
             let w = NSRect(x: 1000, y: 100, width: 741, height: 641)
             let dock = EdgeLensPolicy.glassRect(window: w, cardOpen: false), all = EdgeLensPolicy.glassRect(window: w, cardOpen: true)
-            check("lens: 30 frames a second at half the screen's pixel scale (a quarter of the old pixel rate)",
-                  EdgeLensPolicy.framesPerSecond == 30 && EdgeLensPolicy.captureScale == 0.5)
+            check("lens: 20 frames a second at half the screen's pixel scale (a sixth of the old pixel rate)",
+                  EdgeLensPolicy.framesPerSecond == 20 && EdgeLensPolicy.captureScale == 0.5)
             check("lens: no card open -> only the dock's strip at the right edge is copied, full height (\(dock.width) of \(w.width) pt)",
                   dock.maxX == w.maxX && dock.minY == w.minY && dock.height == w.height
                   && dock.width == EdgePanelLayout.dockSize.width + EdgeLensPolicy.dockGlassPad && dock.width < w.width / 2)
