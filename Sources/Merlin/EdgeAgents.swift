@@ -53,6 +53,10 @@ final class FixtureDockAgents: DockAgentSource {
 }
 
 enum DockAgents {
+    /// The Agents window (2026-11-27 evening, Merlin: "that should be the same size as Merlin's library"). The app sets
+    /// it (the Merlin assistant session); nil keeps the small Agents card.
+    nonisolated(unsafe) static var openWindow: (() -> Void)?
+
     /// The app's pool (nil in the tests and pictures, which set a fixture themselves).
     static func live() -> DockAgentSource? {
         let args = CommandLine.arguments

@@ -254,6 +254,17 @@ enum EdgePanelLayout {
         return (CGPoint(x: s.width - ringOffset - ringRadius * cos(a), y: s.height / 2 + ringRadius * sin(a)), max(0, 1 - past))
     }
 
+    /// The order place under point `p` (the dock's top-left, y down) for `count` items turned by `offset`, and the arc
+    /// place it is in (0 at the top end ... `visibleSlots` - 1 at the bottom end; outside that range past an end).
+    static func orbitIndex(at p: CGPoint, count: Int, offset: CGFloat) -> (index: Int, place: CGFloat) {
+        let s = dockSize
+        let slots = min(max(count, 1), visibleSlots)
+        let a = atan2(p.y - s.height / 2, (s.width - ringOffset) - p.x)
+        let place = a / (itemStep * .pi / 180) + CGFloat(slots - 1) / 2
+        let index = Int((place + offset).rounded())
+        return (min(max(index, 0), max(count - 1, 0)), place)
+    }
+
     /// How far the orbit can turn for `count` items (0 when all fit).
     static func maxOrbitOffset(count: Int) -> CGFloat { CGFloat(max(0, count - visibleSlots)) }
 
@@ -273,9 +284,9 @@ enum EdgePanelLayout {
         return NSPoint(x: d.minX + c.x, y: d.maxY - c.y)
     }
 
-    /// The rim column (2026-11-27, round nine), top to bottom on the rim circle (centres ON the rim), `rimGap` clear between
-    /// neighbours: Chats, search, "+", the Agents orb (on the horizontal centre line, the largest control after the
-    /// record), collapse, Notes. Angles in radians about the disc's centre, negative up. From the dock's top-left (y down).
+    /// The rim column (2026-11-27 evening, Merlin), top to bottom on the rim circle (centres ON the rim), `rimGap` clear
+    /// between neighbours: Chats, "+", the Agents orb (on the horizontal centre line, the largest control after the
+    /// record), search, Notes. No collapse button: the dock hides when the pointer leaves. Angles in radians about the disc's centre, negative up. From the dock's top-left (y down).
     static let rimGap: CGFloat = 10
     /// The Agents orb on the rim's middle place (the centre line).
     static let agentHubSize: CGFloat = 56
@@ -286,10 +297,9 @@ enum EdgePanelLayout {
         CGPoint(x: dockSize.width - discButtonRadius * cos(angle), y: dockSize.height / 2 + discButtonRadius * sin(angle))
     }
     static var plusAngle: CGFloat { -rimStep(agentHubSize, plusSize) }
-    static var searchAngle: CGFloat { plusAngle - rimStep(plusSize, plusSize) }
-    static var chatsAngle: CGFloat { searchAngle - rimStep(plusSize, itemSize) }
-    static var collapseAngle: CGFloat { rimStep(agentHubSize, plusSize) }
-    static var notesAngle: CGFloat { collapseAngle + rimStep(plusSize, itemSize) }
+    static var chatsAngle: CGFloat { plusAngle - rimStep(plusSize, itemSize) }
+    static var searchAngle: CGFloat { rimStep(agentHubSize, plusSize) }
+    static var notesAngle: CGFloat { searchAngle + rimStep(plusSize, itemSize) }
     /// Kept for the callers: the old name of the rim gap between Chats or Notes and their neighbour.
     static var fixedItemGap: CGFloat { rimGap }
     static func fixedCentre(_ s: EdgePanelModel.Section) -> CGPoint { rimPoint(s == .notes ? notesAngle : chatsAngle) }
@@ -298,15 +308,22 @@ enum EdgePanelLayout {
     static var coverCentre: CGPoint { CGPoint(x: dockSize.width, y: dockSize.height / 2) }
 
     static var discButtonRadius: CGFloat { discRadius }
-    /// The three places of the rim's middle: "+" (0), the Agents orb (1), collapse (2). (The bars' room and the lens
-    /// shapes read these.)
+    /// The Agents orb's outer edge with its working ring (the ring is `agentHubSize` + 7 pt and pulses 3 pt wider, 2.5 pt
+    /// stroke), from the orb's centre.
+    static var agentHubReach: CGFloat { (agentHubSize + 7 + 3) / 2 + 1.25 }
+    /// How far the music bars may reach from the disc's centre before they touch a rim control (the nearest inner edge:
+    /// the Agents orb's ring on the centre line).
+    static var rimInnerEdge: CGFloat {
+        min(discButtonRadius - agentHubReach, discButtonRadius - plusSize / 2)
+    }
+    /// The three places of the rim's middle: "+" (0), the Agents orb (1), search (2). (The bars' room and the lens shapes
+    /// read these; the bars should read `rimInnerEdge`, which counts the large orb's ring.)
     static func discButtonCentre(_ row: Int) -> CGPoint {
-        rimPoint(row == 0 ? plusAngle : row == 2 ? collapseAngle : 0)
+        rimPoint(row == 0 ? plusAngle : row == 2 ? searchAngle : 0)
     }
     static var plusCentre: CGPoint { rimPoint(plusAngle) }
     static var agentHubCentre: CGPoint { rimPoint(0) }
     static var searchCentre: CGPoint { rimPoint(searchAngle) }
-    static var collapseCentre: CGPoint { rimPoint(collapseAngle) }
     /// The search field in the disc: on the centre line, from 6 pt right of the Agents orb's place to 8 pt from the
     /// screen edge (the record and the rim controls hide while it shows).
     static var searchFieldFrame: CGRect {
@@ -511,6 +528,53 @@ final class EdgePanelModel: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
+    // MARK: Drag to reorder (2026-11-27 evening, Merlin: "drag it to reorder its position in the side dock")
+
+    /// The app being dragged (its bundle ID), where the pointer is (the dock's top-left, y down) and its new place.
+    @Published private(set) var draggedApp: String?
+    @Published private(set) var dragPoint: CGPoint = .zero
+    @Published private(set) var dragIndex = 0
+    private var lastAutoTurn: TimeInterval = 0
+    private var dragEndedAt: TimeInterval = -1
+
+    /// The reorder spring (motion.dev "Reorder" items making room); none under Reduce Motion.
+    static var reorderAnimation: Animation? {
+        Motion.still || Motion.reduceMotion ? nil : .spring(duration: 0.3, bounce: 0.25)
+    }
+
+    /// The pointer moved while an app is held: the app follows it, the others make room. Near an end of the arc the
+    /// orbit turns one place (at most every 0.35 s), so an app can go past the places on screen.
+    func dragApp(_ app: DockApp, to p: CGPoint, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard !isFiltering, let from = ringApps.firstIndex(of: app) else { return }
+        if draggedApp == nil {
+            hoverWork?.cancel()
+            draggedApp = app.bundleID
+            dragIndex = from
+        }
+        dragPoint = p
+        let count = ringApps.count
+        let (index, place) = EdgePanelLayout.orbitIndex(at: p, count: count, offset: orbitOffset)
+        if index != dragIndex { withAnimation(Self.reorderAnimation) { dragIndex = index } }
+        let slots = CGFloat(min(count, EdgePanelLayout.visibleSlots))
+        guard now - lastAutoTurn > 0.35 else { return }
+        if place < 0.3, orbitOffset > 0 {
+            lastAutoTurn = now; stepOrbit(-1)
+        } else if place > slots - 1.3, orbitOffset < EdgePanelLayout.maxOrbitOffset(count: count) {
+            lastAutoTurn = now; stepOrbit(1)
+        }
+    }
+
+    /// The app is let go: the new order is saved and the app settles into its place.
+    func endDrag(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard let id = draggedApp else { return }
+        apps.move(id, to: dragIndex)
+        withAnimation(Self.reorderAnimation) { draggedApp = nil }
+        dragEndedAt = now
+    }
+
+    /// A drag ended a moment ago: the release is not a click.
+    func justDragged(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Bool { now - dragEndedAt < 0.3 }
+
     /// One whole place up (-1) or down (+1), animated (the mouse wheel's notch; Reduce Motion's gesture).
     func stepOrbit(_ places: Int) {
         let limit = EdgePanelLayout.maxOrbitOffset(count: ringItems.count)
@@ -529,9 +593,16 @@ final class EdgePanelModel: ObservableObject {
     }
 
     /// What the orbit draws: the pinned apps (Chats and Notes sit fixed on the disc's rim), or while a query is typed only
-    /// its match (at the ring's middle-left point).
+    /// its match (at the ring's middle-left point). While an app is dragged it already sits in its new place.
     var ringItems: [Item] {
-        guard isFiltering else { return ringApps.map { .app($0) } }
+        guard isFiltering else {
+            var apps = ringApps
+            if let id = draggedApp, let from = apps.firstIndex(where: { $0.bundleID == id }) {
+                let app = apps.remove(at: from)
+                apps.insert(app, at: min(max(dragIndex, 0), apps.count))
+            }
+            return apps.map { .app($0) }
+        }
         return searchMatch.map { [.app($0)] } ?? []
     }
 
@@ -674,8 +745,15 @@ final class EdgePanelModel: ObservableObject {
     var agentOrbs: [AgentJobView] { DockAgents.orbs(jobs: agentJobs, history: agentHistory) }
     var agentHub: DockAgents.Hub { DockAgents.hub(jobs: agentJobs, history: agentHistory) }
 
-    /// An orb or the "+": opens the Agents card, or closes it when it is open.
-    func tapAgents() { toggle(.agents) }
+    /// The Agents orb or a moon: opens the Agents window (the Merlin assistant session's, as large as the library) when
+    /// the app set `DockAgents.openWindow`; until then the Agents card opens (or closes).
+    func tapAgents() {
+        if let open = DockAgents.openWindow {
+            closeCard()
+            return open()
+        }
+        toggle(.agents)
+    }
 
     func activateAgentTask() {
         guard section == .agents, !agentTaskActive else { return }
@@ -920,6 +998,13 @@ final class EdgePanelModel: ObservableObject {
     }
 
     /// A click on the cover or "+": opens that card, or closes it when it is open.
+    /// A click outside: the open card closes (the dock stays).
+    func closeCard() {
+        hoverWork?.cancel()
+        guard section != nil else { return }
+        withAnimation(Motion.still || Motion.reduceMotion ? nil : Motion.edgeOut) { section = nil }
+    }
+
     func toggle(_ s: Section) {
         hoverWork?.cancel()
         guard section == s else { return choose(s) }
@@ -945,6 +1030,7 @@ final class EdgePanelModel: ObservableObject {
     /// An app on the ring: opens it, then the panel hides (like a chat row). Spotify's icon (a click, or Return on it in
     /// search) opens or closes the mini player instead and never opens or activates Spotify.
     func tapApp(_ app: DockApp) {
+        guard draggedApp == nil, !justDragged() else { return } // the end of a drag is not a click
         releaseKeyboard()
         if app.bundleID == LiveSpotifyBackend.bundleID { return tapSpotify() }
         if let chat = MessagingService.of(bundleID: app.bundleID), let onChat { return onChat(chat) }
@@ -1709,7 +1795,11 @@ final class EdgePanelController {
         let screens = NSScreen.screens.map(\.frame)
         let inZone = EdgeGeometry.inZone(p, screens: screens)
         // While search is open the dock stays, wherever the pointer goes (it may leave mid-typing).
-        let over = reveal.visible && (model.wantsKeyboard || MessagingCardController.shared.holdsDock || hoverFrame.insetBy(dx: -6, dy: -6).contains(p))
+        let inside = hoverFrame.insetBy(dx: -6, dy: -6).contains(p)
+        if inside { keepAfterCard = false }
+        // An open card holds the dock (a click outside closes the card first); so does the dock just after that click.
+        let over = reveal.visible && (model.wantsKeyboard || MessagingCardController.shared.holdsDock || inside
+                                      || model.section != nil || keepAfterCard || model.draggedApp != nil)
         let blocked = !reveal.visible && inZone && liveBlocked(at: p, screens: screens)
         let stop = reveal.visible && interrupted
         let now = ProcessInfo.processInfo.systemUptime
@@ -1793,6 +1883,7 @@ final class EdgePanelController {
     private var drivesSpotify: Bool { started || !liveSpotify }
 
     private func dismiss() {
+        keepAfterCard = false
         model.releaseKeyboard() // gives the keyboard back before the panel leaves
         removeMonitors()
         if drivesSpotify { model.spotify.stop() }
@@ -1907,10 +1998,20 @@ final class EdgePanelController {
         if MessagingCardController.shared.keeps(e) { return }
         if e.type == .keyDown {
             if e.keyCode == 53, reveal.escape() == .hide { dismiss() }
-        } else if !hoverFrame.contains(NSEvent.mouseLocation), reveal.clickOutside() == .hide {
-            dismiss()
+        } else if !hoverFrame.contains(NSEvent.mouseLocation) {
+            // 2026-11-27 evening (Merlin): a click outside an open card closes the card only; the dock stays until the
+            // pointer comes back and leaves again, or a second click outside.
+            if model.section != nil {
+                model.closeCard()
+                keepAfterCard = true
+            } else if reveal.clickOutside() == .hide {
+                dismiss()
+            }
         }
     }
+
+    /// After a click outside closed a card: the dock stays (the pointer is outside it) until the pointer comes back.
+    private var keepAfterCard = false
 
     private func removeMonitors() {
         monitors.forEach(NSEvent.removeMonitor)

@@ -321,11 +321,11 @@ extension FeatureTests {
         // the rim, equal gaps; all clear of the record's waves, the timer chip and every orbit place. 10 places are apps.
         do {
             let centre = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
-            let column: [(CGPoint, CGFloat)] = [(L.fixedCentre(.chats), L.itemSize), (L.searchCentre, L.plusSize),
-                                                (L.plusCentre, L.plusSize), (L.agentHubCentre, L.agentHubSize),
-                                                (L.collapseCentre, L.plusSize), (L.fixedCentre(.notes), L.itemSize)]
+            let column: [(CGPoint, CGFloat)] = [(L.fixedCentre(.chats), L.itemSize), (L.plusCentre, L.plusSize),
+                                                (L.agentHubCentre, L.agentHubSize), (L.searchCentre, L.plusSize),
+                                                (L.fixedCentre(.notes), L.itemSize)]
             let gaps = zip(column, column.dropFirst()).map { a, b in hypot(a.0.x - b.0.x, a.0.y - b.0.y) - a.1 / 2 - b.1 / 2 }
-            check("edge dock: the rim column runs Chats, search, +, Agents, collapse, Notes, top to bottom, centres on the rim",
+            check("edge dock: the rim column runs Chats, +, Agents, search, Notes, top to bottom, centres on the rim (no collapse)",
                   zip(column, column.dropFirst()).allSatisfy { $0.0.y < $1.0.y }
                   && column.allSatisfy { abs(hypot($0.0.x - centre.x, $0.0.y - centre.y) - L.discRadius) < 0.01 })
             check("edge dock: equal \(L.rimGap) pt gaps between the rim controls (\(gaps.map { String(format: "%.1f", $0) }))",
@@ -353,7 +353,7 @@ extension FeatureTests {
                       sats.allSatisfy { m in
                           let h = hypot(m.x - L.agentHubCentre.x, m.y - L.agentHubCentre.y)
                           return h - sh > ringOuter && m.x < L.agentHubCentre.x
-                              && [L.plusCentre, L.collapseCentre].allSatisfy { hypot($0.x - m.x, $0.y - m.y) >= L.plusSize / 2 + sh + 4 }
+                              && [L.plusCentre, L.searchCentre].allSatisfy { hypot($0.x - m.x, $0.y - m.y) >= L.plusSize / 2 + sh + 4 }
                               && hypot(m.x - ringCentre.x, m.y - ringCentre.y) + sh + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
                       }
                       && zip(sats, sats.dropFirst()).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) >= 2 * sh + 3 })
@@ -412,6 +412,45 @@ extension FeatureTests {
             am.tapAgents(); am.tapAgents()
             check("agents: a second click on an orb closes the card", am.section == nil && !am.agentTaskActive)
             check("agents: the tests never reach the app's pool", DockAgents.live() == nil)
+            // The Agents window hook (2026-11-27 evening): when the app sets it, the orb opens the window, not the card.
+            var windows = 0
+            DockAgents.openWindow = { windows += 1 }
+            am.tapAgents()
+            check("agents: with the Agents window set, the orb opens it once and no card", windows == 1 && am.section == nil)
+            DockAgents.openWindow = nil
+            // Drag to reorder (2026-11-27 evening, Merlin).
+            let wsR = FixtureDockWorkspace()
+            let (dR, nameR) = EdgeDockFixtures.defaults()
+            defer { EdgeDockFixtures.forget(nameR) }
+            let storeR = EdgeDockFixtures.appStore(wsR, defaults: dR, extra: Array(FixtureDockWorkspace.sample.dropFirst().prefix(5)))
+            let rm = EdgePanelModel(apps: storeR, spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.stopped)),
+                                    songs: SpotifySongs(folder: nil))
+            let ids = storeR.pinned.map(\.bundleID), n = ids.count
+            let first = storeR.pinned[0]
+            rm.dragApp(first, to: L.orbitPlace(0, of: n, offset: 0).centre, now: 100)
+            rm.dragApp(first, to: L.orbitPlace(3, of: n, offset: 0).centre, now: 100.1)
+            check("reorder: the held app follows the pointer and the others make room",
+                  rm.draggedApp == first.bundleID && rm.dragPoint == L.orbitPlace(3, of: n, offset: 0).centre
+                  && rm.ringItems.map(\.id) == (Array(ids[1...3]) + [ids[0]] + Array(ids[4...])).map { "app:" + $0 })
+            rm.endDrag(now: 101)
+            let moved = Array(ids[1...3]) + [ids[0]] + Array(ids[4...])
+            check("reorder: letting go saves the new order (it survives a restart)",
+                  rm.draggedApp == nil && storeR.pinned.map(\.bundleID) == moved
+                  && DockAppStore(defaults: dR, workspace: wsR).pinned.map(\.bundleID) == moved)
+            check("reorder: the release right after a drag is not a click", rm.justDragged(now: 101.1) && !rm.justDragged(now: 101.5))
+            for i in 0..<14 { storeR.pin(DockApp(bundleID: "fixture.more\(i)", name: "More \(i)")) }
+            let m20 = storeR.pinned.count, last = storeR.pinned.last!
+            rm.dragApp(last, to: L.orbitPlace(L.visibleSlots - 1, of: m20, offset: 0).centre, now: 200)
+            check("reorder: near the arc's end the orbit turns one place (not again within 0.35 s)", {
+                let turned = rm.orbitOffset
+                rm.dragApp(last, to: L.orbitPlace(L.visibleSlots - 1, of: m20, offset: 0).centre, now: 200.1)
+                return turned == 1 && rm.orbitOffset == 1
+            }() || m20 <= L.visibleSlots)
+            rm.endDrag(now: 300)
+            check("reorder: a short press is a click (the drag needs 6 pt); Chats and Notes never move",
+                  storeR.pinned.count == m20 && rm.ringItems.allSatisfy { if case .app = $0 { return true } else { return false } })
+            let mapped = L.orbitIndex(at: L.orbitPlace(4, of: 20, offset: 2).centre, count: 20, offset: 2)
+            check("reorder: a point on the arc maps back to its place and order index", mapped.index == 4 && abs(mapped.place - 2) < 0.01)
             // Review (2026-11-27): full-screen apps and the open time.
             let win = EdgePanelWindow()
             check("edge window: joins every Space and shows over full-screen apps, above normal windows",
@@ -427,19 +466,23 @@ extension FeatureTests {
         // The disc's three buttons ("+", search, collapse). Round five (Stitch) replaces the old column inside the disc
         // (14 pt from the rim, 12 pt gaps): 30 pt buttons on a 117 pt circle about the disc's centre, straddling the rim,
         // 41.5 pt centre to centre, the middle one on the centre line.
-        let buttons = [L.plusCentre, L.searchCentre, L.collapseCentre]
+        let buttons: [CGPoint] = [L.plusCentre, L.searchCentre]
         let disc = BeatStrings.Place.disc
         let onCircle = buttons.allSatisfy { abs(hypot($0.x - mid.x, $0.y - mid.y) - L.discRadius) < 0.001 }
         let straddle = buttons.allSatisfy { b in
             let d = hypot(b.x - mid.x, b.y - mid.y)
             return d - L.plusSize / 2 < L.discRadius && d + L.plusSize / 2 > L.discRadius && abs(d - L.discRadius) < 0.01
         }
-        check("edge dock: \"+\", search and collapse: 39 pt, centres on the rim (the semicircle's circumference)",
+        check("edge dock: \"+\" and search: 39 pt, centres on the rim (the semicircle's circumference)",
               L.plusSize == 39 && onCircle && straddle)
-        check("edge dock: search above \"+\", collapse below the centre line (the Agents orb between them)",
-              buttons[1].y < buttons[0].y && buttons[0].y < mid.y && buttons[2].y > mid.y)
-        check("edge dock: the buttons are clear of the record's waves",
-              buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > Double(disc.outer) })
+        check("edge dock: \"+\" above the centre line, search below it (the Agents orb between them)",
+              buttons[0].y < mid.y && buttons[1].y > mid.y)
+        let outer = Double(disc.outer)
+        let clearOfWaves = buttons.allSatisfy { b -> Bool in
+            let d: Double = hypot(Double(b.x - cover.x), Double(b.y - cover.y))
+            return d - Double(L.plusSize) / 2 > outer
+        }
+        check("edge dock: the buttons are clear of the record's waves", clearOfWaves)
         check("edge dock: the record at rest is 130 pt on the disc's centre; its waves reach 180 to 190 pt across",
               L.coverSize == 130 && cover == mid && (180...190).contains(disc.outer * 2)
               && disc.outer <= EdgeDockArt.orbRadius)
@@ -457,7 +500,7 @@ extension FeatureTests {
         check("edge dock: the timer chip is inside the disc, clear of the buttons and the waves",
               chipCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius }
               && hypot(nearest.x - mid.x, nearest.y - mid.y) > Double(disc.outer)
-              && chip.minX > L.collapseCentre.x + L.plusSize / 2 + 4)
+              && chip.minX > L.fixedCentre(.notes).x + L.itemSize / 2 + 4)
         let noApp = L.noMatchCentre
         check("edge dock: \"No app\" sits under the field, inside the disc",
               noApp.y > field.maxY && hypot(noApp.x - mid.x, noApp.y - mid.y) < L.discRadius - 20)

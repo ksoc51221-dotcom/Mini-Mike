@@ -112,6 +112,14 @@ final class DockAppStore: ObservableObject {
         return true
     }
 
+    /// Moves a pinned app to place `index` in the order (a drag on the orbit); the order is saved.
+    func move(_ bundleID: String, to index: Int) {
+        guard let from = pinned.firstIndex(where: { $0.bundleID == bundleID }) else { return }
+        let app = pinned.remove(at: from)
+        pinned.insert(app, at: min(max(index, 0), pinned.count))
+        save()
+    }
+
     func unpin(_ bundleID: String) {
         pinned.removeAll { $0.bundleID == bundleID }
         icons[bundleID] = nil

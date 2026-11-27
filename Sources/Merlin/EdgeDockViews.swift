@@ -454,17 +454,20 @@ struct EdgeDockView: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.95)))
                 }
             }
-            ForEach(Array(items.enumerated()).filter { places[$0.offset].shown > 0 }, id: \.element.id) { i, item in
+            ForEach(Array(items.enumerated()).filter { places[$0.offset].shown > 0 || isDragged($0.element) }, id: \.element.id) { i, item in
                 let place = places[i]
+                let dragged = isDragged(item)
+                let at = dragged ? model.dragPoint : place.centre
                 EdgeRingItem(model: model, item: item, index: i) { h in
                     if h { hovered = item.id } else if hovered == item.id { hovered = nil }
                 }
-                // The orbit: past an end an item shrinks and fades as it goes behind the disc.
-                .scaleEffect(0.55 + 0.45 * place.shown)
-                .opacity(Double(place.shown))
-                .allowsHitTesting(place.shown > 0.6)
-                .position(x: place.centre.x, y: place.centre.y)
-                .zIndex(hovered == item.id ? 1 : 0) // its name label over the neighbours
+                // The orbit: past an end an item shrinks and fades as it goes behind the disc. A dragged app follows the
+                // pointer, a little larger, above the others.
+                .scaleEffect(dragged ? 1.1 : 0.55 + 0.45 * place.shown)
+                .opacity(dragged ? 1 : Double(place.shown))
+                .allowsHitTesting(dragged || place.shown > 0.6)
+                .position(x: at.x, y: at.y)
+                .zIndex(dragged ? 5 : hovered == item.id ? 1 : 0) // its name label over the neighbours
                 // Search: the other items fade out (and back) from 0.95; the match slides to the ring's middle.
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
@@ -476,13 +479,21 @@ struct EdgeDockView: View {
                     .position(EdgePanelLayout.orbitPlace(EdgePanelLayout.visibleSlots - 1, of: items.count, offset: -0.62).centre)
             }
         }
-        .animation(calm ? nil : Motion.edgeIn, value: items.map(\.id))
+        .animation(calm ? nil : (model.draggedApp != nil ? EdgePanelModel.reorderAnimation : Motion.edgeIn), value: items.map(\.id))
+        .coordinateSpace(name: EdgeRingItem.dockSpace)
         .onChange(of: items.count) { _, _ in model.settleOrbit() } // an app removed: the orbit stays in range
         .frame(width: s.width, height: s.height)
         // Flat path: dark in light and dark mode alike. Glass path: the system picks light or dark content.
         .edgeFlatScheme()
         .environment(\.edgePalette, p)
         .animation(Motion.edgePaletteAnimation, value: p)
+    }
+}
+
+extension EdgeDockView {
+    fileprivate func isDragged(_ item: EdgePanelModel.Item) -> Bool {
+        if case .app(let a) = item { return a.bundleID == model.draggedApp }
+        return false
     }
 }
 
@@ -728,14 +739,14 @@ private struct EdgeDockDisc: View {
     }
 }
 
-/// "+", search and collapse on their circle about the disc's centre (`EdgePanelLayout.discButtonCentre`), each its own
-/// small glass circle.
+/// "+" and search on the rim (`EdgePanelLayout.plusCentre`, `searchCentre`), each its own small glass circle. (No collapse
+/// button since 2026-11-27 evening: the dock hides when the pointer leaves.)
 private struct EdgeDiscButtons: View {
     @ObservedObject var model: EdgePanelModel
 
     var body: some View {
         let p = model.palette
-        let plus = EdgePanelLayout.plusCentre, find = EdgePanelLayout.searchCentre, collapse = EdgePanelLayout.collapseCentre
+        let plus = EdgePanelLayout.plusCentre, find = EdgePanelLayout.searchCentre
         ZStack(alignment: .topLeading) {
             EdgeSmallButton(symbol: "plus", help: "Add or remove apps", active: model.section == .apps, palette: p,
                             ownGlass: true) {
@@ -746,10 +757,6 @@ private struct EdgeDiscButtons: View {
                 model.openSearch()
             }
             .position(x: find.x, y: find.y)
-            EdgeSmallButton(symbol: "chevron.right", help: "Hide the dock", active: false, palette: p, ownGlass: true) {
-                model.tapCollapse()
-            }
-            .position(x: collapse.x, y: collapse.y)
         }
     }
 }
@@ -766,6 +773,9 @@ private struct EdgeRingItem: View {
     @State private var magnet: CGSize = .zero
     /// Counts hover entries: each one plays the bobble (motion.dev "Bobble hover").
     @State private var bobbles = 0
+
+    /// The dock's coordinate space (the dock's top-left, y down): where a drag reports the pointer.
+    static let dockSpace = "edgeDock"
 
     /// The magnetic pull's reach (well under `EdgePanelLayout.minItemGap`, so neighbours never touch).
     static let pull: CGFloat = 3
@@ -874,8 +884,16 @@ private struct EdgeRingItem: View {
         .offset(model.shown || Motion.reduceMotion || !isApp ? .zero : Self.spoke(index: index, count: model.ringItems.count))
         .animation(Motion.still ? nil : Motion.animation(model.shown ? Motion.edgePop : Motion.edgeOut)
             .delay(model.shown ? Motion.edgeStagger(index) : 0), value: model.shown)
+        // Drag to reorder (apps only): a drag of 6 pt or more moves the app; a shorter press stays a click.
+        .highPriorityGesture(reorder, including: isApp && !Motion.still ? .all : .subviews)
         .help(title)
         .accessibilityLabel(title)
+    }
+
+    private var reorder: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .named(Self.dockSpace))
+            .onChanged { v in if case .app(let a) = item { model.dragApp(a, to: v.location) } }
+            .onEnded { _ in model.endDrag() }
     }
 
     /// Where a hidden item waits: 45 % of the way from its place back to the disc's centre.
