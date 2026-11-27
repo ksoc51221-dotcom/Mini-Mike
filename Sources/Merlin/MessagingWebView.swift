@@ -46,6 +46,9 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
         view.load(URLRequest(url: service.url))
     }
 
+    /// A closed card plays nothing: a video or voice message stops, and the page cannot start one.
+    func setShown(_ shown: Bool) { view.setAllMediaPlaybackSuspended(!shown, completionHandler: nil) }
+
     private var failed = false
     func reload() {
         failed = false
@@ -99,12 +102,15 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
         panel.canChooseDirectories = parameters.allowsDirectories
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1) // above the dock
         pickerOpen = true
+        let front = NSWorkspace.shared.frontmostApplication
         NSApp.activate()
         panel.begin { [weak self] answer in
             completionHandler(answer == .OK ? panel.urls : nil)
             // The click that closed the picker must still count as the picker's.
             DispatchQueue.main.async {
                 self?.pickerOpen = false
+                // The picker made Merlin the active app; the app you were in gets that back.
+                if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { front?.activate() }
                 self?.onPickerClosed?()
             }
         }

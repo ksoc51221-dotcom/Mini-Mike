@@ -75,11 +75,20 @@ final class MessagingCardController {
     private(set) var open: MessagingService?
     private weak var model: EdgePanelModel?
     private var subscriptions: Set<AnyCancellable> = []
+    private var memoryWarning: DispatchSourceMemoryPressure?
 
     /// The app only (never a test): a click on a service's ring icon now opens its card.
     func attach(_ model: EdgePanelModel, dockWindow: @escaping () -> NSRect) {
         self.model = model
         model.onChat = { [weak self] service in self?.toggle(service, dockWindow: dockWindow()) }
+        // The Mac is critically short of memory: closed cards go (the sign-in stays on disk; the next click loads again).
+        let warning = DispatchSource.makeMemoryPressureSource(eventMask: .critical, queue: .main)
+        warning.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.cards = self.cards.filter { $0.key == self.open?.bundleID }
+        }
+        warning.activate()
+        memoryWarning = warning
         // The dock hides (Esc, a click outside, a snip, point to ask) or shows another card: the chat goes at once.
         model.$shown.sink { [weak self] shown in if !shown { self?.close() } }.store(in: &subscriptions)
         model.$section.sink { [weak self] section in if section != nil { self?.close() } }.store(in: &subscriptions)
@@ -115,6 +124,7 @@ final class MessagingCardController {
         box.addSubview(web.view)
         box.addSubview(header)
         panel.contentView = box
+        web.setShown(false)
         web.onPickerClosed = { [weak self] in
             guard let self, self.open == service else { return }
             self.cards[service.bundleID]?.panel.makeKey()
@@ -152,6 +162,7 @@ final class MessagingCardController {
         let card = card(for: service)
         open = service
         card.web.retryIfFailed()
+        card.web.setShown(true)
         let palette = model?.palette ?? .standard // the dock's colours now
         card.header.rootView = header(for: service, web: card.web)
         card.panel.contentView?.layer?.backgroundColor = palette.baseDark.cgColor
@@ -166,6 +177,7 @@ final class MessagingCardController {
         guard let service = open else { return }
         open = nil
         cards[service.bundleID]?.panel.orderOut(nil)
+        cards[service.bundleID]?.web.setShown(false)
     }
 }
 
