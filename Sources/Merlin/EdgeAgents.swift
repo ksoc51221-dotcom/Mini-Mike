@@ -78,6 +78,8 @@ extension EdgePanelLayout {
     /// orbit), above the record by the screen edge; clear of Chats, the orbit at any turn and the screen edge.
     static let agentOrbRadius: CGFloat = 165
     static let agentOrbSize: CGFloat = 24
+    /// With no job, one larger "Ask an agent" orb in the middle place, so the feature is easy to find at rest.
+    static let agentIdleSize: CGFloat = 32
     static let agentOrbSlots = 3
     /// Degrees up from the disc's left horizontal; the "+" takes the first free place.
     static let agentOrbAngles: [CGFloat] = [85, 72.5, 60]
@@ -102,17 +104,23 @@ struct EdgeAgentOrbs: View {
         ZStack(alignment: .topLeading) {
             ForEach(Array(orbs.enumerated()), id: \.element.id) { i, job in
                 let c = EdgePanelLayout.agentOrbCentre(i)
-                EdgeAgentOrb(state: job.state, palette: p, help: "\(job.name): \(job.step)") { model.tapAgents() }
+                EdgeAgentOrb(state: job.state, palette: p, help: "\(job.name): \(job.step)", live: model.shown) { model.tapAgents() }
                     .position(x: c.x, y: c.y)
-                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                    // motion.dev "spring pop": a new agent springs out from small; an ended one shrinks away.
+                    .transition(.scale(scale: 0.4).combined(with: .opacity))
             }
             if orbs.count < EdgePanelLayout.agentOrbSlots {
-                let c = EdgePanelLayout.agentOrbCentre(orbs.count)
-                EdgeAgentOrb(state: nil, palette: p, help: "Ask an agent") { model.tapAgents() }
+                // No job: the larger "Ask an agent" orb in the middle place. Jobs: a small "+" in the first free place.
+                let idle = orbs.isEmpty
+                let c = EdgePanelLayout.agentOrbCentre(idle ? 1 : orbs.count)
+                EdgeAgentOrb(state: nil, palette: p, help: "Ask an agent", live: model.shown,
+                             size: idle ? EdgePanelLayout.agentIdleSize : EdgePanelLayout.agentOrbSize) { model.tapAgents() }
                     .position(x: c.x, y: c.y)
+                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+                    .id(idle ? "idle" : "plus")
             }
         }
-        .animation(Motion.still || Motion.reduceMotion ? nil : Motion.edgeState, value: orbs.map(\.id))
+        .animation(Motion.still || Motion.reduceMotion ? nil : Motion.edgePop, value: orbs.map(\.id))
     }
 }
 
@@ -122,6 +130,9 @@ private struct EdgeAgentOrb: View {
     let state: AgentJobView.State?
     let palette: DockPalette
     let help: String
+    /// The dock shows: only then does a working or waiting orb breathe (a hidden dock draws nothing).
+    var live = true
+    var size = EdgePanelLayout.agentOrbSize
     let action: () -> Void
     @State private var hovering = false
     @State private var pulse = false
@@ -129,12 +140,14 @@ private struct EdgeAgentOrb: View {
     private static let amber = Color(red: 1.0, green: 0.72, blue: 0.25)
 
     var body: some View {
-        let size = EdgePanelLayout.agentOrbSize
-        let moving = !Motion.still && !Motion.reduceMotion && (state == .working || state == .waiting)
+        let moving = live && !Motion.still && !Motion.reduceMotion && (state == .working || state == .waiting)
+        let idle = state == nil && size > EdgePanelLayout.agentOrbSize
         Button(action: action) {
             ZStack {
                 Circle().fill(palette.baseDarkColor.opacity(0.88))
-                Circle().strokeBorder(ring, lineWidth: 1)
+                    // The idle orb: a soft accent glow, still (no loop), so it reads as the place to start.
+                    .shadow(color: idle ? palette.accentColor.opacity(0.45) : .clear, radius: idle ? 6 : 0)
+                Circle().strokeBorder(idle ? palette.accentColor.opacity(0.75) : ring, lineWidth: idle ? 1.5 : 1)
                 core
                     .scaleEffect(moving && pulse ? 1.18 : 1)
                     .opacity(moving && pulse ? 0.75 : 1)
@@ -163,6 +176,8 @@ private struct EdgeAgentOrb: View {
 
     @ViewBuilder private var core: some View {
         switch state {
+        case nil where size > EdgePanelLayout.agentOrbSize:
+            Image(systemName: "sparkles").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.accentColor)
         case nil:
             Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary).opacity(0.8)
         case .working?:
@@ -277,7 +292,7 @@ private struct EdgeAgentRow: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
         HStack(spacing: 8) {
-            EdgeAgentOrb(state: job.state, palette: palette, help: job.name) {}
+            EdgeAgentOrb(state: job.state, palette: palette, help: job.name, live: model.shown) {}
                 .allowsHitTesting(false)
             VStack(alignment: .leading, spacing: 1) {
                 Text(job.name).font(.geist(12, .medium)).foregroundStyle(.primary)

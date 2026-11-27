@@ -353,6 +353,11 @@ extension FeatureTests {
                       [L.fixedCentre(.chats), L.plusCentre].allSatisfy { hypot($0.x - o.x, $0.y - o.y) >= L.itemSize / 2 + half + 4 }
                       && hypot(o.x - ringCentre.x, o.y - ringCentre.y) + half + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
                   })
+            let idle = L.agentOrbCentre(1), ih = L.agentIdleSize / 2
+            check("agents: the larger idle orb (no job) is clear of Chats, the orbit and the screen edge",
+                  hypot(idle.x - L.fixedCentre(.chats).x, idle.y - L.fixedCentre(.chats).y) >= L.itemSize / 2 + ih + 4
+                  && hypot(idle.x - ringCentre.x, idle.y - ringCentre.y) + ih + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
+                  && idle.x + ih * 1.12 < L.dockSize.width && hypot(idle.x - centre.x, idle.y - centre.y) - ih > L.discRadius)
             let (dA, nameA) = EdgeDockFixtures.defaults()
             defer { EdgeDockFixtures.forget(nameA) }
             let am = EdgePanelModel(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: dA),
