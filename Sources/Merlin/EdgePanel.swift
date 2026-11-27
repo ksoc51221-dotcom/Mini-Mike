@@ -1430,6 +1430,10 @@ final class EdgePanelController {
         lensStyleWatch = model.$glassStyle.dropFirst().removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncLens() } // after the new value has landed
         }
+        DockPerf.start { [weak self] in
+            guard let self else { return "" }
+            return "shown=\(self.reveal.visible) section=\(self.model.section.map { "\($0)" } ?? "none") lens=\(EdgeLensCapture.shared.live) spotify=\(self.model.spotify.state.perfName)"
+        }
         lensSectionWatch = model.$section.dropFirst().map { $0 != nil }.removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncLens() } // a card opened or closed: the copied region follows
         }
@@ -1516,7 +1520,7 @@ final class EdgePanelController {
         guard poll == nil else { return }
         tick()
         guard reveal.isWatching else { return zones.rearm() }
-        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in self?.tick() }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in DockPerf.tick("poll"); self?.tick() }
         RunLoop.main.add(timer, forMode: .common)
         poll = timer
     }

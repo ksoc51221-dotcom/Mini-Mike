@@ -17,6 +17,18 @@ enum SpotifyState: Equatable {
     case notRunning, denied, stopped, track(SpotifyTrack)
 }
 
+extension SpotifyState {
+    /// A short name for `DockPerf` lines.
+    var perfName: String {
+        switch self {
+        case .notRunning: return "closed"
+        case .denied: return "denied"
+        case .stopped: return "stopped"
+        case .track(let t): return t.isPlaying ? "playing" : "paused"
+        }
+    }
+}
+
 enum SpotifyCommand: Equatable { case playPause, play, pause, next, previous, stop, playTrack(String) }
 
 protocol SpotifyBackend {

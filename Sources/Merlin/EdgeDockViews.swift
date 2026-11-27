@@ -379,6 +379,7 @@ struct EdgeDockView: View {
     @State private var hovered: String?
 
     var body: some View {
+        let _ = DockPerf.tick("dockBody")
         let s = EdgePanelLayout.dockSize
         let p = model.palette
         let items = model.ringItems
@@ -459,6 +460,7 @@ private struct EdgeHalo: View {
         let accent = palette.accentColor
         return Canvas { gc, size in
             let c = EdgePanelLayout.ringCentre, r = EdgePanelLayout.ringLineRadius
+            DockPerf.tick("halo")
             let step = 2 * Double.pi / Double(Self.dots)
             let drift = 0.0
             // The visible arc runs from the top of the frame to the bottom: angles (from the left axis) within ±span.
@@ -543,6 +545,7 @@ private struct EdgeDockDisc: View {
     @ObservedObject private var timers = TimerStore.shared
 
     var body: some View {
+        let _ = DockPerf.tick("discBody")
         let p = model.palette
         let r = EdgePanelLayout.discRadius
         let s = EdgePanelLayout.dockSize
@@ -695,6 +698,7 @@ private struct EdgeRingItem: View {
     }
 
     var body: some View {
+        let _ = DockPerf.tick("itemBody")
         let p = model.palette
         let active = section != nil && model.section == section
         // Only the pointer lifts an item. An open card marks its item with the accent rim, not a bigger size, so every
@@ -905,6 +909,7 @@ private struct EdgeCoverDisc: View {
             record
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !spinning && stopping == nil)) { ctx in
+                let _ = DockPerf.tick("spin")
                 record.rotationEffect(.degrees(current(at: ctx.date)))
             }
         }
@@ -944,6 +949,7 @@ private struct EdgeRecordFace: View, Equatable {
     }
 
     var body: some View {
+        DockPerf.tick("face")
         let k = size / EdgePanelLayout.recordArtBase
         return ZStack {
             if let image {
@@ -1088,6 +1094,7 @@ private struct EdgeWaves: View {
         let p = palette, m = motion
         return Canvas { gc, size in
             prepare()
+            DockPerf.tick("strings")
             let c = CGPoint(x: size.width / 2, y: size.height / 2)
             // One line weight for all three (`BeatStrings.Place.lineWidth`), so the calm rings are equal.
             let colors: [Color] = [p.accentColor.opacity(0.55), p.rimTintColor.opacity(0.8), p.accentColor.opacity(0.85)]

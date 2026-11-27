@@ -389,6 +389,7 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
             // The rectangle this frame shows (it changes when a card opens or closes).
             guard let shows = self.rectBySize[sizeKey] else { return }
             self.captureRect = shows
+            DockPerf.tick("lensFrame")
             self.latest = made
             self.latestPixels = pixels
             self.texture = CVMetalTextureGetTexture(made)

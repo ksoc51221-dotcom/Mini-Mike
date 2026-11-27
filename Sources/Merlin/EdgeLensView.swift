@@ -459,6 +459,7 @@ final class EdgeLensNSView: NSView {
                 DispatchQueue.main.async { EdgeLensCapture.shared.recordPresented(frame: frameTime, at: at) }
             }
         }
+        DockPerf.tick("lensDraw")
         commands.present(drawable)
         commands.commit()
     }
