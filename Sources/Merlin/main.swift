@@ -71,6 +71,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         CommandRunner.shared = commands
         // Merlin's agents as chatbots (the Agents window); their tasks run in the pool.
         AgentBots.shared = AgentBots(pool: agents)
+        DockAgents.openWindow = { AgentsWindow.open() } // the dock's Agents orb and its moons open the Agents window
         LibraryAssistant.actionHook = commands.actions
         // A request typed in a blank chat goes to the same agent loop; its lines show where the chat was.
         AgentLoop.typedHook = { [weak self] text, spot in
@@ -188,6 +189,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             pendingSpoken = nil
             if pointAsk.isActive || pointCapturing { dropComingPicture = true }
             if let line = commands.run(route) { voice.say(line) }
+            return
+        case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && VoiceNote.parse(text) != nil:
+            // "Hey Merlin, make this a note of a list of SUVAT equations": Merlin writes the note (5 to 20 s).
+            pendingSpoken = nil
+            voice.say("Writing the note…")
+            Task { [weak self] in
+                let line = await VoiceNote.live(text) ?? "I couldn't write that note."
+                await MainActor.run { self?.voice.say(line) }
+            }
             return
         case .ask where pendingPicture == nil && !pointAsk.isActive && !pointCapturing && AgentBots.shared?.route(text) != nil:
             // "ask Physics tutor to …": that agent takes it, in its own chat.

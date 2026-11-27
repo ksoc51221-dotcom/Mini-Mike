@@ -1048,6 +1048,17 @@ final class AskPanelController {
               let runner = CommandRunner.shared else { return false }
         guard let route = runner.commandRoute(text) else {
             // Not a fixed command, but a request to act ("create a reminder in 30 minutes to eat lunch"): the agent loop.
+            if CalendarIntent.parse(text) == nil, VoiceNote.parse(text) != nil {
+                // "make a note of the SUVAT equations": Merlin writes the note; the lines show where the chat was.
+                let at = NSRect(x: panel.frame.minX + 12, y: panel.frame.maxY - 4, width: 1, height: 1)
+                close()
+                Toast.show("Writing the note…", near: at)
+                Task {
+                    let line = await VoiceNote.live(text) ?? "I couldn't write that note."
+                    await MainActor.run { Toast.show(line, near: at) }
+                }
+                return true
+            }
             guard CalendarIntent.parse(text) == nil,
                   AgentRequest.looksLikeRequest(CommandCenter.cleaned(text), context: runner.actionContext) || AgentBots.shared?.route(text) != nil,
                   let start = AgentLoop.typedHook else { return false }

@@ -532,6 +532,11 @@ extension FeatureTests {
         check("bots: a task refused by the day's limit says so in the chat", capLine.contains("$3.00 a day") && cappedBots.messages(cappedBots.defaultBot!.id).last?.text == capLine)
         try? FileManager.default.removeItem(at: botDir)
         botSpend.removePersistentDomain(forName: "merlin.bots.test")
+        check("routing: a voice note goes to the note path; questions about notes and note commands don't",
+              AgentRequest.path("Hey Merlin, make this a note of a list of SUVAT equations", context: ActionContext()) == .note
+              && AgentRequest.path("make a note of the SUVAT equations", context: ActionContext()) == .note
+              && AgentRequest.path("what is in my notes", context: ActionContext()) != .note
+              && AgentRequest.path("find five sources on price ceilings and put them in my economics note", context: ActionContext()) != .note)
         var reader = AgentLoop.Reader()
         let a1 = #"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":3000,"output_tokens":50}}}"#
         reader.read(a1); reader.read(a1)
