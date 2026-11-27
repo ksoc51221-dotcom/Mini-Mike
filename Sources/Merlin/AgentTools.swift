@@ -42,6 +42,10 @@ final class AgentTools {
             return !(n == "note_save" && saveNote == nil) && !(n == "start_agent" && startAgent == nil)
         }
     }
+    /// Contacts, Calendar, Reminders, file search, Shortcuts.
+    let mac: MacBackend
+    /// Numbers and addresses that Contacts gave in this run: a send to one of them needs no "not in your words" warning.
+    private(set) var knownRecipients: Set<String> = []
     /// Apple Messages: an iMessage to a person, only after a yes.
     let messages: MessagesBackend
     /// Apple Mail: read the inbox, write or send an email (a send only after a yes).
@@ -61,7 +65,8 @@ final class AgentTools {
     init(runner: ActionRunner, confirmScript: @escaping (String, String) -> Bool,
          runScript: @escaping (String, String) -> AgentToolResult = AgentTools.liveRunScript,
          trackTitle: @escaping (String) -> String? = AgentTools.liveTrackTitle, mail: MailBackend = .live,
-         messages: MessagesBackend = .live) {
+         messages: MessagesBackend = .live, mac: MacBackend = .live) {
+        self.mac = mac
         self.mail = mail
         self.messages = messages
         self.runner = runner
@@ -112,6 +117,19 @@ final class AgentTools {
         tool("message_send", "Send an iMessage (Apple Messages) to a phone number or an email address the REQUEST gives. Merlin shows the user who and all of the text and sends it only on a yes. A person named without a number: ask for the number, send nothing.",
              ["to": ["type": "string", "description": "A phone number (+ and digits) or an email address"],
               "text": ["type": "string"]], required: ["to", "text"]),
+        tool("contacts_find", "Find people in the user's Contacts by name: their phone numbers and email addresses. If more than one person matches, ask the user which one and send nothing.",
+             ["name": ["type": "string"]], required: ["name"]),
+        tool("calendar_list", "List the user's calendar events from now for some days.", ["days": ["type": "number", "description": "1 to 31 (default 7)"]]),
+        tool("calendar_add", "Add an event to the user's calendar. Merlin asks the user first.",
+             ["title": ["type": "string"], "start": ["type": "string", "description": "Local time, yyyy-MM-ddTHH:mm"],
+              "minutes": ["type": "number", "description": "Length (default 60)"]], required: ["title", "start"]),
+        tool("reminders_add", "Add a reminder to Apple Reminders (the Reminders app, not Merlin's dock).",
+             ["title": ["type": "string"], "due": ["type": "string", "description": "Optional, local time yyyy-MM-ddTHH:mm"]], required: ["title"]),
+        tool("reminders_list", "List the user's open Apple Reminders."),
+        tool("files_find", "Find files by name in the user's Documents, Desktop and Downloads. It gives names and places only.",
+             ["name": ["type": "string", "description": "Words in the file name"]], required: ["name"]),
+        tool("shortcut_run", "Run one of the user's Apple Shortcuts by its exact name. Merlin asks the user first.",
+             ["name": ["type": "string"], "input": ["type": "string", "description": "Optional text input"]], required: ["name"]),
         tool("note_save", "Put text into one of the user's Merlin notes (a note with that name gets the text added at its end; otherwise a new note is made).",
              ["note": ["type": "string", "description": "The note's name"], "text": ["type": "string"]], required: ["note", "text"]),
         tool("start_agent", "Hand a long task to a background Merlin agent (Sonnet, the web, up to 10 minutes): research, finding sources, comparing options, a summary into a note. Give the task in the user's own words.",
@@ -176,6 +194,55 @@ final class AgentTools {
         case "play_spotify_track": return playTrack(str("track_url"), title: str("title"))
         case "run_script": return script(str("language"), str("script"), summary: str("summary"))
         case "message_send": return messageSend(to: str("to"), text: (args["text"] as? String) ?? "")
+        case "contacts_find":
+            let q = str("name")
+            guard q.count >= 2 else { return AgentToolResult(text: "contacts_find needs a name.", isError: true) }
+            onMain { onStep?("Looking in Contacts") }
+            let r = mac.contacts(q)
+            if !r.isError { knownRecipients.formUnion(MacTools.recipients(inContactLines: r.text)) }
+            let many = r.text.split(separator: "\n").count > 1
+            return r.isError ? r : AgentToolResult(text: "CONTACTS (data):\n" + r.text + (many ? "\nMore than one person matches: ask the user which one. Send nothing yet." : ""), isError: false)
+        case "calendar_list":
+            let days = (args["days"] as? Double).map { Int($0) } ?? (args["days"] as? Int) ?? 7
+            onMain { onStep?("Reading your calendar") }
+            let r = mac.calendarList(min(max(days, 1), MacTools.maxDays))
+            return r.isError ? r : AgentToolResult(text: "EVENTS (data):\n" + r.text, isError: false)
+        case "calendar_add":
+            let title = str("title")
+            guard !title.isEmpty, let start = MacTools.date(str("start")) else {
+                return AgentToolResult(text: "calendar_add needs a title and a start like 2026-11-28T15:00.", isError: true)
+            }
+            let minutes = min(max((args["minutes"] as? Double).map { Int($0) } ?? (args["minutes"] as? Int) ?? 60, 5), 24 * 60)
+            return confirmed({ mac.confirmEvent(title, start, minutes) }, no: "The user said don't add it.") {
+                onMain { onStep?("Adding to your calendar") }
+                return mac.calendarAdd(title, start, minutes)
+            }
+        case "reminders_add":
+            let title = str("title")
+            guard !title.isEmpty else { return AgentToolResult(text: "reminders_add needs a title.", isError: true) }
+            let due = str("due").isEmpty ? nil : MacTools.date(str("due"))
+            if !str("due").isEmpty && due == nil { return AgentToolResult(text: "Write the due time like 2026-11-28T15:00.", isError: true) }
+            onMain { onStep?("Adding to Reminders") }
+            return mac.remindersAdd(title, due)
+        case "reminders_list":
+            onMain { onStep?("Reading Reminders") }
+            return mac.remindersList()
+        case "files_find":
+            let q = str("name")
+            guard q.count >= 2 else { return AgentToolResult(text: "files_find needs words of the file name.", isError: true) }
+            onMain { onStep?("Searching your files") }
+            return mac.files(q)
+        case "shortcut_run":
+            let name = str("name"), input = (args["input"] as? String) ?? ""
+            let names = mac.shortcutNames()
+            guard names.contains(name) else {
+                let near = names.filter { $0.lowercased().contains(name.lowercased()) || name.lowercased().contains($0.lowercased()) }.prefix(5)
+                return AgentToolResult(text: "There is no Shortcut called “\(name)”." + (near.isEmpty ? "" : " Near: \(near.joined(separator: ", ")).") , isError: true)
+            }
+            return confirmed({ mac.confirmShortcut(name, input) }, no: "The user said don't run it.") {
+                onMain { onStep?("Running the Shortcut \(name)") }
+                return mac.runShortcut(name, input)
+            }
         case "note_save":
             guard let save = saveNote else { return AgentToolResult(text: "No tool called note_save.", isError: true) }
             let note = str("note"), text = (args["text"] as? String) ?? ""
@@ -243,6 +310,16 @@ final class AgentTools {
         return runScript(language, source)
     }
 
+    /// The one pattern for "ask first": the dialog (the row shows "waiting"), then nothing after a stop, then the work.
+    private func confirmed(_ ask: () -> Bool, no: String, then work: () -> AgentToolResult) -> AgentToolResult {
+        onAsk?(true)
+        let yes = onMain(ask)
+        onAsk?(false)
+        guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
+        guard yes else { return AgentToolResult(text: no + " Do not try another way; tell the user it was not done.", isError: true) }
+        return work()
+    }
+
     /// A message is never sent without a yes. A no is final for this request.
     private func messageSend(to: String, text: String) -> AgentToolResult {
         guard let target = MessagesTools.recipient(to) else {
@@ -252,7 +329,8 @@ final class AgentTools {
         guard !body.isEmpty, body.count <= MessagesTools.maxText else {
             return AgentToolResult(text: "The message needs a text of at most \(MessagesTools.maxText) characters.", isError: true)
         }
-        let warning = MessagesTools.inRequest(target, request: request) ? nil : "Check the number: \(target) is not in your words."
+        let known = MessagesTools.inRequest(target, request: request) || knownRecipients.contains(target)
+        let warning = known ? nil : "Check the number: \(target) is not in your words."
         onAsk?(true)
         let yes = onMain { messages.confirm(target, body, warning) }
         onAsk?(false)
@@ -275,7 +353,7 @@ final class AgentTools {
             return mail.compose(draft, false)
         }
         guard !list.isEmpty else { return AgentToolResult(text: "An email to send needs an address.", isError: true) }
-        let stranger = MailTools.notInRequest(list, request: request)
+        let stranger = MailTools.notInRequest(list, request: request).filter { !knownRecipients.contains($0) }
         let warning = stranger.isEmpty ? nil : "Check the address: \(stranger.joined(separator: ", ")) is not in your words."
         onAsk?(true)
         let yes = onMain { mail.confirmSend(draft, warning) }

@@ -344,6 +344,62 @@ extension FeatureTests {
               && MessagesTools.recipient("12") == nil && MessagesTools.recipient("call 555") == nil && MessagesTools.recipient("1+2345678") == nil)
         check("messages: text words go to the loop", AgentRequest.looksLikeRequest("text +1 415 555 0100 that I'm late", context: ActionContext())
               && AgentRequest.looksLikeRequest("send a message to 4155550100 saying hi", context: ActionContext()))
+        // Contacts, Calendar, Reminders, files, Shortcuts (fakes only).
+        final class MacLog { var events: [(String, Date, Int)] = []; var reminders: [(String, Date?)] = []; var shortcuts: [String] = []
+                             var yes = false; var asked = 0; var contacts = "Tom Lee | +1 415 555 0101,  | tom@example.com, \n" }
+        let mk = MacLog()
+        let fakeMac = MacBackend(contacts: { _ in AgentToolResult(text: mk.contacts, isError: false) },
+                                 calendarList: { d in AgentToolResult(text: "Friday 28 November, 15:00: Dentist (\(d))", isError: false) },
+                                 calendarAdd: { t, d, m in mk.events.append((t, d, m)); return AgentToolResult(text: "Added", isError: false) },
+                                 confirmEvent: { _, _, _ in mk.asked += 1; return mk.yes },
+                                 remindersAdd: { t, d in mk.reminders.append((t, d)); return AgentToolResult(text: "Added to Reminders.", isError: false) },
+                                 remindersList: { AgentToolResult(text: "Buy milk", isError: false) },
+                                 files: { q in AgentToolResult(text: "~/Documents/\(q).pages", isError: false) },
+                                 shortcutNames: { ["Morning", "Log water"] },
+                                 runShortcut: { n, _ in mk.shortcuts.append(n); return AgentToolResult(text: "The Shortcut ran.", isError: false) },
+                                 confirmShortcut: { _, _ in mk.asked += 1; return mk.yes })
+        func macTools(_ request: String) -> AgentTools {
+            let t = AgentTools(runner: runner, confirmScript: { _, _ in false }, trackTitle: { _ in nil }, mail: fakeMail, messages: fakeMsg, mac: fakeMac)
+            t.request = request
+            return t
+        }
+        let tomReq = "send Tom a message that I'm late"
+        let tt = macTools(tomReq)
+        let found = tt.call("contacts_find", ["name": "Tom"])
+        let sentBefore = mg.sent.count, askedBefore = mg.asked.count
+        mg.yes = true
+        _ = tt.call("message_send", ["to": "+1 415 555 0101", "text": "I'm late"])
+        check("contacts: a name gives the number; a send to it asks first, with no 'not in your words' warning",
+              found.text.contains("+1 415 555 0101") && !found.text.contains("More than one") && mg.asked.count == askedBefore + 1
+              && mg.asked.last == .some(nil) && mg.sent.count == sentBefore + 1 && mg.sent.last?.0 == "+14155550101")
+        mk.contacts = "Tom Lee | +1 415 555 0101,  | \nTom Ford | +1 415 555 0199,  | \n"
+        check("contacts: two matches tell Claude to ask which one", macTools(tomReq).call("contacts_find", ["name": "Tom"]).text.contains("ask the user which one"))
+        check("contacts: the recipients are read from the lines", MacTools.recipients(inContactLines: "A | +1 415 555 0101, 020 7946 0000,  | a@b.com, ") == ["+14155550101", "02079460000", "a@b.com"])
+        mk.yes = false
+        let evNo = macTools("add a dentist appointment on friday at 3").call("calendar_add", ["title": "Dentist", "start": "2026-11-28T15:00", "minutes": 30.0])
+        check("calendar: an event asks first; a no adds nothing", mk.asked == 1 && mk.events.isEmpty && evNo.isError)
+        mk.yes = true
+        _ = macTools("x").call("calendar_add", ["title": "Dentist", "start": "2026-11-28T15:00"])
+        let cal = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: mk.events.first?.1 ?? Date.distantPast)
+        check("calendar: a yes adds it once, at the local time, 60 min by default",
+              mk.events.count == 1 && cal.year == 2026 && cal.month == 11 && cal.day == 28 && cal.hour == 15 && cal.minute == 0 && mk.events[0].2 == 60)
+        check("calendar: a bad time is refused before any dialog; the list is data",
+              macTools("x").call("calendar_add", ["title": "X", "start": "friday 3pm"]).isError && mk.asked == 2
+              && macTools("x").call("calendar_list", ["days": 400.0]).text == "EVENTS (data):\nFriday 28 November, 15:00: Dentist (31)")
+        _ = macTools("x").call("reminders_add", ["title": "Buy milk", "due": "2026-11-28T09:30"])
+        check("reminders: add with a due time, and list", mk.reminders.first?.0 == "Buy milk" && mk.reminders.first?.1 != nil
+              && macTools("x").call("reminders_list", [:]).text == "Buy milk" && macTools("x").call("reminders_add", ["title": "x", "due": "soon"]).isError)
+        check("files: search by name", macTools("x").call("files_find", ["name": "essay"]).text == "~/Documents/essay.pages" && macTools("x").call("files_find", ["name": "a"]).isError)
+        mk.yes = false
+        let scNo = macTools("x").call("shortcut_run", ["name": "Morning"])
+        let askedAfterNo = mk.asked
+        let scMissing = macTools("x").call("shortcut_run", ["name": "Log"])
+        let askedAfterMissing = mk.asked
+        mk.yes = true
+        _ = macTools("x").call("shortcut_run", ["name": "Morning"])
+        check("shortcuts: a run asks first; a no runs nothing; an unknown name runs nothing and names the near ones",
+              scNo.isError && askedAfterNo == 3 && scMissing.text.contains("Log water") && askedAfterMissing == 3 && mk.asked == 4 && mk.shortcuts == ["Morning"])
+        check("dates: the time formats Claude may write", MacTools.date("2026-11-28 15:00") != nil && MacTools.date("2026-11-28") != nil && MacTools.date("tomorrow") == nil)
         var reader = AgentLoop.Reader()
         let a1 = #"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":3000,"output_tokens":50}}}"#
         reader.read(a1); reader.read(a1)
