@@ -574,21 +574,16 @@ struct AskView: View {
         HStack(alignment: .center, spacing: 6) {
             if model.canToggleLearn { learnSwitch }
             Spacer(minLength: 0)
-            if model.canKeep {
-                HeaderButton(symbol: model.newestIsKept ? "star.fill" : "star",
-                             help: model.newestIsKept ? "Kept" : "Keep this answer",
-                             active: model.newestIsKept) {
-                    model.keepNewest()
+            // One star: it stars the chat and keeps the newest answer (`ChatStar`).
+            let star = ChatStar.state(saveHistory: Settings.shared.saveHistory, starred: model.starred,
+                                      canKeep: model.canKeep, newestIsKept: model.newestIsKept)
+            if star.shown {
+                HeaderButton(symbol: star.filled ? "star.fill" : "star", help: star.help, active: star.filled) {
+                    if star.keeps { model.keepNewest() }
+                    if star.togglesChat { model.onToggleStar?() }
                 }
-                .disabled(model.newestIsKept)
-                .accessibilityLabel(model.newestIsKept ? "Kept" : "Keep this answer")
-            }
-            if Settings.shared.saveHistory {
-                HeaderButton(symbol: model.starred ? "star.fill" : "star",
-                             help: model.starred ? "Unstar" : "Star this chat (keeps it at the top of your Library and safe from delete)",
-                             active: model.starred) {
-                    model.onToggleStar?()
-                }
+                .disabled(!star.keeps && !star.togglesChat)
+                .accessibilityLabel(star.help)
             }
             HeaderButton(symbol: model.isFilled ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right",
                          help: model.isFilled ? "Back to its size" : "Fill the screen") {
@@ -1821,5 +1816,39 @@ private extension View {
             .animation(Motion.animation(Motion.small), value: isPressed)
             .animation(Motion.animation(Motion.small), value: hovering.wrappedValue)
             .onHover { hovering.wrappedValue = $0 }
+    }
+}
+
+
+// MARK: - The one star in the chat header
+
+/// The header's one star does two jobs: it stars the chat (top of the Library, safe from delete) and keeps the newest
+/// answer in the notebook. It is full only when both are done (or when the one possible job is done).
+enum ChatStar {
+    struct State: Equatable {
+        let shown: Bool
+        let filled: Bool
+        /// A click keeps the newest answer.
+        let keeps: Bool
+        /// A click stars or unstars the chat.
+        let togglesChat: Bool
+        let help: String
+    }
+
+    static func state(saveHistory: Bool, starred: Bool, canKeep: Bool, newestIsKept: Bool) -> State {
+        let needsKeep = canKeep && !newestIsKept
+        guard saveHistory else {
+            // No chat history: the star only keeps the answer.
+            return State(shown: canKeep, filled: canKeep && newestIsKept, keeps: needsKeep, togglesChat: false,
+                         help: needsKeep ? "Keep this answer" : "Kept")
+        }
+        if starred && !needsKeep {
+            return State(shown: true, filled: true, keeps: false, togglesChat: true, help: "Unstar this chat (kept answers stay in your Library)")
+        }
+        if starred {
+            return State(shown: true, filled: false, keeps: true, togglesChat: false, help: "Keep the newest answer (this chat is starred)")
+        }
+        return State(shown: true, filled: false, keeps: needsKeep, togglesChat: true,
+                     help: needsKeep ? "Star this chat and keep this answer" : "Star this chat (keeps it at the top of your Library and safe from delete)")
     }
 }

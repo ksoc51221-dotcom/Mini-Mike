@@ -10,13 +10,25 @@ import SwiftUI
 final class MelodyBarsMotion {
     /// Bars on the whole circle.
     static let count = 104
-    static let lineWidth: CGFloat = 2
+    /// 2026-11-27, Merlin: "a bit more rounded, not too round" and "bounce less": a wider bar with round caps, a softer
+    /// hill across neighbours, 60 % of the old reach with a soft knee at the top.
+    static let lineWidth: CGFloat = 2.6
     /// A resting bar's length: almost a dot.
     static let tick = 1.5
     /// The fall's acceleration (heights per second²): a full bar is down in about 200 ms.
     static let gravity = 50.0
     /// Each bar away from a loud bar keeps this share of its height (Cava's "monstercat").
-    static let spread = 0.55
+    static let spread = 0.66
+    /// How much of a bar is its neighbours' average (a light blur: a peak is a soft hill, some single-bar character
+    /// stays).
+    static let blur = 0.35
+    /// The bars reach this share of the room they had before (Merlin: they bounced too far); the knee takes the loudest
+    /// down to about 85 % of that, so a loud bar goes about 55 % as far as before.
+    static let reachShare = 0.65
+    /// Clear space from the tip of the longest bar to every rim control, and from the record to the bars' foot.
+    static let clearance = 6.0
+    /// Above this height the soft knee starts: loud parts grow slower and never shoot out.
+    static let knee = 0.45
     /// Under this, a band reads as 0 (the quiet rest of the spectrum stays a ring of ticks).
     static let gate = 0.4
     /// With no sound for this long, a slow soft motion takes over.
@@ -105,6 +117,14 @@ final class MelodyBarsMotion {
         }
         for i in 1..<Self.count { target[i] = max(target[i], target[i - 1] * Self.spread) }
         for i in stride(from: Self.count - 2, through: 0, by: -1) { target[i] = max(target[i], target[i + 1] * Self.spread) }
+        // The light blur: each bar mixes in its old neighbours (the left one kept in `previous`, the first one in `first`).
+        var previous = target[Self.count - 1]
+        let first = target[0]
+        for i in 0..<Self.count {
+            let next = i == Self.count - 1 ? first : target[i + 1], here = target[i]
+            target[i] = (1 - Self.blur) * here + Self.blur * (0.5 * previous + 0.5 * next)
+            previous = here
+        }
     }
 
     /// The still ring of ticks (a pause, `Motion.still`, Reduce Motion).
@@ -138,13 +158,38 @@ final class MelodyBarsMotion {
 
     /// The ticks and the raised bars as two paths: they start just outside the record and, round caps included, never
     /// pass `place.limit`.
+    /// The soft knee: straight up to `knee`, then the same slope bending over (about 0.85 at 1).
+    static func soften(_ h: Double) -> Double {
+        guard h > knee else { return max(0, h) }
+        let bend = 0.8
+        return knee + bend * (1 - exp(-(min(h, 1) - knee) / bend))
+    }
+
+    /// The nearest edge of any rim control from the disc's centre: every control sits on the rim circle, so the largest
+    /// one (the Agents orb, Chats, Notes, or a button) comes nearest. Read from the dock's layout, whatever the order.
+    static var rimEdge: Double {
+        typealias L = EdgePanelLayout
+        return Double(L.discButtonRadius - max(L.itemSize, L.agentHubSize, L.plusSize) / 2)
+    }
+
+    /// Where a bar's centre line starts and the farthest its tip's centre may go (round caps add `lineWidth / 2` each
+    /// way): `clearance` from the record, `reachShare` of the old room, and on the disc `clearance` short of the rim.
+    static func room(_ place: BeatStrings.Place) -> (start: Double, tip: Double) {
+        let cap = Double(lineWidth) / 2
+        let start = Double(place.inner) - 3 + clearance + cap // `inner` is the record's edge plus 3 pt
+        let old = Double(place.limit) - cap
+        var tip = start + tick + reachShare * max(0, old - start - tick)
+        if place != .card { tip = min(tip, rimEdge - clearance - cap) }
+        return (start, max(start + tick, tip))
+    }
+
     func paths(center c: CGPoint, place: BeatStrings.Place, half: Bool) -> (ticks: Path, raised: Path) {
-        let start = Double(place.inner) + Double(Self.lineWidth) / 2
-        let longest = Double(place.limit - Self.lineWidth / 2) - start
+        let (start, tip) = Self.room(place)
+        let longest = tip - start
         var ticks = Path(), raised = Path()
         for i in 0..<Self.count where Self.visible(bar: i, half: half) {
             let a = Self.angle(bar: i), x = cos(a), y = sin(a)
-            let end = start + Self.tick + drawn[i] * (longest - Self.tick)
+            let end = start + Self.tick + Self.soften(drawn[i]) * (longest - Self.tick)
             let from = CGPoint(x: c.x + start * x, y: c.y + start * y), to = CGPoint(x: c.x + end * x, y: c.y + end * y)
             if drawn[i] < 0.04 {
                 ticks.move(to: from); ticks.addLine(to: to)

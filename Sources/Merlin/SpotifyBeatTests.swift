@@ -230,11 +230,11 @@ extension FeatureTests {
         run(m, 0, 0.1, spectrum(band, 0))
         check("bars: no sound, no raised bar", m.drawn.allSatisfy { $0 == 0 })
         m.advance(to: 0.1 + 1.0 / 60, sample: spectrum(band, 1), moving: true, half: false)
-        check("bars: a loud band rises at once (\(String(format: "%.2f", m.drawn[bar])))", m.drawn[bar] > 0.99)
+        check("bars: a loud band rises at once (\(String(format: "%.2f", m.drawn[bar])))", m.drawn[bar] > 0.85)
         let group = (-3...3).map { m.drawn[(bar + $0 + M.count) % M.count] }
-        check("bars: a loud band lifts its neighbours, the middle one tallest",
+        check("bars: a loud band is a soft hill of 5 to 7 bars, the middle one tallest (\(group.map { String(format: "%.2f", $0) }.joined(separator: " ")))",
               group[3] > group[2] && group[2] > group[1] && group[1] > group[0] && group[3] > group[4] && group[4] > group[5]
-              && group[2] > 0.4 && group[0] < 0.25)
+              && group[2] > 0.55 * group[3] && group[1] > 0.3 * group[3] && group[0] > 0.12 && group[0] < 0.45 * group[3])
         run(m, 0.1 + 2.0 / 60, 0.1 + 2.0 / 60 + 0.2, spectrum(band, 0))
         check("bars: it falls back in about 200 ms (\(String(format: "%.2f", m.drawn[bar])))", m.drawn[bar] < 0.05)
         run(m, 0.4, 2.5, spectrum(band, 0))
@@ -269,16 +269,29 @@ extension FeatureTests {
                 }
             }
             // 0.001: a `Path` keeps its points in less than double precision.
-            inside = inside && far <= Double(place.limit) + 0.001 && near >= Double(place.inner) - 0.001
-            reach = reach && far > Double(place.limit) - 1
+            let room = M.room(place), cap = Double(M.lineWidth) / 2
+            let record = Double(place == .card ? EdgePanelLayout.spotifyRecord : EdgePanelLayout.coverSize) / 2
+            inside = inside && far <= Double(place.limit) + 0.001 && near >= record + M.clearance - 0.001
+                && (place == .card || far <= M.rimEdge - M.clearance + 0.001)
+            // The loudest bar goes to the knee's top (about 85 % of the room), never past the tip.
+            reach = reach && far > room.start + M.tick + M.soften(1) * (room.tip - room.start - M.tick) + cap - 0.5
+                && far <= room.tip + cap + 0.001
         }
-        check("bars: every bar stays between the record and the band's limit, the longest reaching it", inside && reach)
+        check("bars: every bar stays 6 pt clear of the record and of every rim control (largest: \(String(format: "%.0f", EdgePanelLayout.agentHubSize)) pt), the longest reaching its tip",
+              inside && reach)
+        let disc = BeatStrings.Place.disc, cap = Double(M.lineWidth) / 2
+        let oldReach = Double(disc.limit) - cap - (Double(disc.inner) + cap)
+        let newReach = M.room(disc).tip - M.room(disc).start
+        check("bars: they reach 35 to 45 % less far than before, at most (\(String(format: "%.0f of %.0f pt", newReach, oldReach)))",
+              newReach / oldReach >= 0.55 && newReach / oldReach <= 0.65)
+        check("bars: the soft knee keeps quiet bars as they are and bends the loud ones",
+              M.soften(0.3) == 0.3 && M.soften(0.7) < 0.7 && M.soften(0.7) > 0.6 && M.soften(1) < 0.9 && M.soften(1) > 0.8)
         let still = M()
         still.pin(BeatSample(level: 0, bass: 0, kick: 0), half: true)
         let picture = M()
         picture.pin(BeatSample(level: 0.8, bass: 0.5, kick: 0, lead: 1, leadPitch: 0.7, leadNote: 3), half: true)
         check("bars: a pinned picture with no note is the still ring; with a note it raises bar groups",
-              still.drawn.allSatisfy { $0 == 0 } && (picture.drawn.max() ?? 0) > 0.9)
+              still.drawn.allSatisfy { $0 == 0 } && (picture.drawn.max() ?? 0) > 0.8)
     }
     static func spotifyBeatChecks(_ check: (String, Bool) -> Void) {
         let sr = 48_000.0, block = 480 // 10 ms buffers, as the audio callback gets them

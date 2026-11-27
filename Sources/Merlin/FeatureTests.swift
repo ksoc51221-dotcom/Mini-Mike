@@ -37,6 +37,8 @@ enum FeatureTests {
         tableChecks(check)
         sheetChecks(check)
         commandChecks(check)
+        voiceNoteChecks(check)
+        chatStarChecks(check)
         actionChecks(check)
         agentChecks(check)
         MainActor.assumeIsolated { edgePanelChecks(check) }
