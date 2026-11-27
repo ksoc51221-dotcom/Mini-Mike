@@ -25,6 +25,9 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
     static func configuration(for service: MessagingService) -> WKWebViewConfiguration {
         let c = WKWebViewConfiguration()
         c.websiteDataStore = WKWebsiteDataStore(forIdentifier: service.storeID)
+        if let suffix = service.agentSuffix { c.applicationNameForUserAgent = suffix }
+        // Never suspend the page fully (as WebKit may with a view outside any window), so it is up to date at a click.
+        c.preferences.inactiveSchedulingPolicy = .throttle
         return c
     }
 
@@ -43,7 +46,17 @@ final class MessagingWebView: NSObject, WKNavigationDelegate, WKUIDelegate {
         view.load(URLRequest(url: service.url))
     }
 
-    func reload() { view.load(URLRequest(url: service.url)) }
+    private var failed = false
+    func reload() {
+        failed = false
+        view.load(URLRequest(url: service.url))
+    }
+    /// A load that never arrived (no network at launch) is tried again at the next click. Nothing else reloads there.
+    func retryIfFailed() { if failed { reload() } }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if (error as NSError).code != NSURLErrorCancelled { failed = true }
+    }
 
     private func openOutside(_ url: URL) {
         if url.scheme == "https" || url.scheme == "http" { NSWorkspace.shared.open(url) }

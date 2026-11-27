@@ -13,10 +13,17 @@ extension FeatureTests {
     /// The messaging mini windows. No page is loaded and no window is shown.
     static func messagingChecks(_ check: (String, Bool) -> Void) {
         let all = MessagingService.all
-        check("chat cards: the table holds Telegram, on https", all.map(\.name) == ["Telegram"] && all.allSatisfy { $0.url.scheme == "https" })
+        check("chat cards: the table holds Telegram and WhatsApp, on https", all.map(\.name) == ["Telegram", "WhatsApp"] && all.allSatisfy { $0.url.scheme == "https" })
         check("chat cards: each service has its own data store",
               Set(all.map(\.storeID)).count == all.count
                   && MessagingWebView.configuration(for: .telegram).websiteDataStore.identifier == MessagingService.telegram.storeID)
+
+        check("chat cards: only WhatsApp gets Safari's user agent ending",
+              MessagingService.telegram.agentSuffix == nil
+                  && MessagingWebView.configuration(for: .whatsApp).applicationNameForUserAgent == MessagingService.whatsApp.agentSuffix)
+        check("chat cards: only a service on the ring is loaded ahead",
+              MessagingService.toPreload(pinned: []).isEmpty
+                  && MessagingService.toPreload(pinned: [DockApp(bundleID: MessagingService.whatsApp.bundleID, name: "WhatsApp")]) == [.whatsApp])
 
         func link(_ s: String, clicked: Bool = true) -> MessagingWebView.LinkAction {
             MessagingWebView.linkAction(URL(string: s)!, clicked: clicked, service: .telegram)

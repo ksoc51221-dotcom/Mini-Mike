@@ -1,7 +1,6 @@
 import AppKit
 import Combine
 import SwiftUI
-import WebKit
 
 /// One messaging service with a mini window. A fixed table: Merlin opens no other site in a card.
 struct MessagingService: Equatable {
@@ -11,12 +10,22 @@ struct MessagingService: Equatable {
     let url: URL
     /// Names the service's own saved web data. Never change it: a new value signs Merlin's user out.
     let storeID: UUID
+    /// Added to the web view's user agent. Only for a site that refuses the plain web view: the ending Safari itself sends
+    /// (the engine is Safari's).
+    var agentSuffix: String? = nil
 
     // "/a/" is Telegram's own web app that lays out at card width.
     static let telegram = MessagingService(name: "Telegram", bundleID: "ru.keepcoder.Telegram",
                                            url: URL(string: "https://web.telegram.org/a/")!,
                                            storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C701")!)
-    static let all = [telegram]
+    static let whatsApp = MessagingService(name: "WhatsApp", bundleID: "net.whatsapp.WhatsApp",
+                                           url: URL(string: "https://web.whatsapp.com/")!,
+                                           storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C702")!,
+                                           agentSuffix: "Version/26.3 Safari/605.1.15")
+    static let all = [telegram, whatsApp]
+
+    /// The services loaded ahead of a click: only those on the ring.
+    static func toPreload(pinned: [DockApp]) -> [MessagingService] { all.filter { s in pinned.contains { $0.bundleID == s.bundleID } } }
 
     static func of(bundleID: String) -> MessagingService? { all.first { $0.bundleID == bundleID } }
 }
@@ -50,15 +59,19 @@ final class MessagingPanel: FloatingPanel {
     }
 }
 
-/// Shows and closes the mini window. The dock decides when it hides; the card follows with no exit animation.
+/// Shows and closes the mini windows. A service on the ring is loaded a few seconds after launch and kept alive in its own
+/// hidden panel, so a click only shows it: nothing loads or reloads at a click. The dock decides when a card hides.
 final class MessagingCardController {
     static let shared = MessagingCardController()
-    /// A web view with a closed card for this long is freed (the sign-in stays on disk).
-    static let idleLimit: TimeInterval = 10 * 60
+    /// After launch (or after an app is added to the ring), so the load does not slow the launch.
+    static let preloadDelay: TimeInterval = 3
 
-    private var panel: MessagingPanel?
-    private var webs: [String: MessagingWebView] = [:]
-    private var idle: [String: Timer] = [:]
+    private struct Card {
+        let panel: MessagingPanel
+        let web: MessagingWebView
+        let header: NSHostingView<MessagingHeader>
+    }
+    private var cards: [String: Card] = [:]
     private(set) var open: MessagingService?
     private weak var model: EdgePanelModel?
     private var subscriptions: Set<AnyCancellable> = []
@@ -70,6 +83,56 @@ final class MessagingCardController {
         // The dock hides (Esc, a click outside, a snip, point to ask) or shows another card: the chat goes at once.
         model.$shown.sink { [weak self] shown in if !shown { self?.close() } }.store(in: &subscriptions)
         model.$section.sink { [weak self] section in if section != nil { self?.close() } }.store(in: &subscriptions)
+        model.apps.$pinned
+            .delay(for: .seconds(Self.preloadDelay), scheduler: RunLoop.main)
+            .sink { [weak self] _ in self?.syncWithRing() }
+            .store(in: &subscriptions)
+    }
+
+    /// Loads the services on the ring and frees those taken off it. Reads the ring as it is now.
+    private func syncWithRing() {
+        guard let model else { return }
+        let wanted = MessagingService.toPreload(pinned: model.apps.pinned)
+        wanted.forEach { _ = card(for: $0) }
+        for id in cards.keys where !wanted.contains(where: { $0.bundleID == id }) && open?.bundleID != id { cards[id] = nil }
+    }
+
+    /// The kept card, or a new one that starts to load now.
+    private func card(for service: MessagingService) -> Card {
+        if let card = cards[service.bundleID] { return card }
+        let panel = MessagingPanel()
+        let web = MessagingWebView(service: service)
+        let size = MessagingPanel.cardSize, top = EdgePanelLayout.headerHeight
+        let box = NSView(frame: NSRect(origin: .zero, size: size))
+        box.wantsLayer = true
+        box.layer?.cornerRadius = EdgePanelLayout.cardRadius
+        box.layer?.cornerCurve = .continuous
+        box.layer?.masksToBounds = true
+        box.layer?.borderWidth = 1
+        web.view.frame = NSRect(x: 0, y: 0, width: size.width, height: size.height - top)
+        let header = NSHostingView(rootView: header(for: service, web: web))
+        header.frame = NSRect(x: 0, y: size.height - top, width: size.width, height: top)
+        box.addSubview(web.view)
+        box.addSubview(header)
+        panel.contentView = box
+        web.onPickerClosed = { [weak self] in
+            guard let self, self.open == service else { return }
+            self.cards[service.bundleID]?.panel.makeKey()
+        }
+        let card = Card(panel: panel, web: web, header: header)
+        cards[service.bundleID] = card
+        return card
+    }
+
+    private func header(for service: MessagingService, web: MessagingWebView) -> MessagingHeader {
+        MessagingHeader(name: service.name, palette: model?.palette ?? .standard,
+                        reload: { [weak web] in web?.reload() },
+                        openApp: { [weak self] in
+                            let app = DockApp(bundleID: service.bundleID, name: service.name)
+                            self?.model?.apps.open(app)
+                            self?.model?.onOpenApp?(app)
+                        },
+                        close: { [weak self] in self?.close() })
     }
 
     /// The dock stays while a card is open, wherever the pointer goes.
@@ -77,75 +140,53 @@ final class MessagingCardController {
 
     /// True when the dock must ignore this event: anything while the file picker is up, or a click in the card.
     func keeps(_ e: NSEvent) -> Bool {
-        guard let open, let panel else { return false }
-        if webs[open.bundleID]?.pickerOpen == true { return true }
-        return e.type != .keyDown && panel.frame.contains(NSEvent.mouseLocation)
+        guard let open, let card = cards[open.bundleID] else { return false }
+        if card.web.pickerOpen { return true }
+        return e.type != .keyDown && card.panel.frame.contains(NSEvent.mouseLocation)
     }
 
     func toggle(_ service: MessagingService, dockWindow: NSRect) {
         if open == service { return close() }
         close()
         model?.section = nil
+        let card = card(for: service)
         open = service
-        idle.removeValue(forKey: service.bundleID)?.invalidate()
-        let web = webs[service.bundleID] ?? MessagingWebView(service: service)
-        webs[service.bundleID] = web
-        web.onPickerClosed = { [weak self, weak web] in
-            guard let self, let web, self.open == web.service else { return }
-            self.panel?.makeKey()
-        }
-        let panel = self.panel ?? MessagingPanel()
-        self.panel = panel
-        let card = MessagingCard(service: service, web: web, palette: model?.palette ?? .standard,
-                                 openApp: { [weak self] in
-                                     self?.model?.apps.open(DockApp(bundleID: service.bundleID, name: service.name))
-                                     self?.model?.onOpenApp?(DockApp(bundleID: service.bundleID, name: service.name))
-                                 },
-                                 close: { [weak self] in self?.close() })
-        panel.contentView = NSHostingView(rootView: card)
-        panel.setFrame(EdgePanelLayout.listFrame(window: dockWindow, card: MessagingPanel.cardSize), display: true)
-        panel.orderFrontRegardless()
-        panel.makeKey()
-        panel.makeFirstResponder(web.view)
+        card.web.retryIfFailed()
+        let palette = model?.palette ?? .standard // the dock's colours now
+        card.header.rootView = header(for: service, web: card.web)
+        card.panel.contentView?.layer?.backgroundColor = palette.baseDark.cgColor
+        card.panel.contentView?.layer?.borderColor = palette.rimTint.withAlphaComponent(0.3).cgColor
+        card.panel.setFrame(EdgePanelLayout.listFrame(window: dockWindow, card: MessagingPanel.cardSize), display: true)
+        card.panel.orderFrontRegardless()
+        card.panel.makeKey()
+        card.panel.makeFirstResponder(card.web.view)
     }
 
     func close() {
         guard let service = open else { return }
         open = nil
-        panel?.orderOut(nil)
-        panel?.contentView = nil
-        idle[service.bundleID] = Timer.scheduledTimer(withTimeInterval: Self.idleLimit, repeats: false) { [weak self] _ in
-            self?.webs[service.bundleID] = nil
-            self?.idle[service.bundleID] = nil
-        }
+        cards[service.bundleID]?.panel.orderOut(nil)
     }
 }
 
-private struct MessagingCard: View {
-    let service: MessagingService
-    let web: MessagingWebView
+private struct MessagingHeader: View {
+    let name: String
     let palette: DockPalette
+    let reload: () -> Void
     let openApp: () -> Void
     let close: () -> Void
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: EdgePanelLayout.cardRadius, style: .continuous)
-        VStack(spacing: 0) {
-            HStack(spacing: 14) {
-                Text(service.name).font(.geist(13, .medium))
-                Spacer()
-                button("arrow.clockwise", "Reload") { web.reload() }
-                button("arrow.up.forward.app", "Open the \(service.name) app", openApp)
-                button("xmark", "Close", close)
-            }
-            .foregroundStyle(palette.inkColor)
-            .padding(.horizontal, 14)
-            .frame(height: EdgePanelLayout.headerHeight)
-            MessagingWebHost(view: web.view)
+        HStack(spacing: 14) {
+            Text(name).font(.geist(13, .medium))
+            Spacer()
+            button("arrow.clockwise", "Reload", reload)
+            button("arrow.up.forward.app", "Open the \(name) app", openApp)
+            button("xmark", "Close", close)
         }
-        .background(palette.baseDarkColor)
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(palette.rimTintColor.opacity(0.3), lineWidth: 1))
+        .foregroundStyle(palette.inkColor)
+        .padding(.horizontal, 14)
+        .frame(height: EdgePanelLayout.headerHeight)
     }
 
     private func button(_ symbol: String, _ help: String, _ action: @escaping () -> Void) -> some View {
@@ -154,18 +195,4 @@ private struct MessagingCard: View {
             .help(help)
             .accessibilityLabel(help)
     }
-}
-
-/// Puts the kept web view into the card.
-private struct MessagingWebHost: NSViewRepresentable {
-    let view: WKWebView
-    func makeNSView(context: Context) -> NSView {
-        let box = NSView()
-        view.frame = box.bounds
-        view.autoresizingMask = [.width, .height]
-        box.addSubview(view)
-        DispatchQueue.main.async { [weak view] in view?.window?.makeFirstResponder(view) }
-        return box
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {}
 }
