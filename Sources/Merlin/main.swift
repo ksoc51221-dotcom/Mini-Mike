@@ -22,9 +22,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let agent = AgentLoop()
     /// Quick answers (a spoken fact question): their own loop, so a running command never blocks one.
     private let answerer = AgentLoop()
-    private lazy var worker = AgentWorker(
-        makeTools: { [weak self] in self?.commands.actions.map { AgentTools(runner: $0, confirmScript: AgentTools.liveConfirmScript) } },
-        saveNote: AgentWorker.liveSaveNote,
+    /// Merlin agents: up to 3 at once, a queue of 5, $1.00 a task and $3.00 a day. Each dialog names its agent.
+    private(set) lazy var agents = AgentPool(
+        makeTools: { [weak self] name in
+            self?.commands.actions.map { runner in
+                AgentTools(runner: runner, confirmScript: { line, source in AgentTools.liveConfirmScript("Agent “\(name)”: \(line)", source) },
+                           mail: MailBackend(read: MailTools.liveRead, compose: MailTools.liveCompose,
+                                             confirmSend: { d, warn in MailTools.liveConfirmSend(d, ["Agent “\(name)” wrote this email.", warn].compactMap { $0 }.joined(separator: " ")) }))
+            }
+        },
+        saveNote: AgentPool.liveSaveNote,
+        openNote: AgentPool.liveOpenNote,
         report: { line in
             let m = NSEvent.mouseLocation
             Toast.show(line, near: NSRect(x: m.x, y: m.y, width: 1, height: 1))
@@ -58,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.runAgent(text) { line in Toast.show(line, near: NSRect(x: spot.x, y: spot.y, width: 1, height: 1)) }
         }
         // Merlin agents: a long task runs in the background (one at a time, a queue behind it), with a row and Stop.
-        agentRow = AgentRowPanel(worker: worker)
+        agentRow = AgentRowPanel(pool: agents)
         // Timers and reminders: banners show while Merlin is in front too; one that ends while Merlin runs also says so here.
         NotificationPresenter.install()
         TimerStore.shared.onFinish = { [weak self] t in
@@ -206,8 +214,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let runner = commands.actions else { return askSpoken(text, mouse: mouse, app: app) }
         let tools = AgentTools(runner: runner, confirmScript: AgentTools.liveConfirmScript)
         tools.onStep = { line in report(line + "…") }
-        tools.saveNote = AgentWorker.liveSaveNote
-        tools.startAgent = { [weak self] task in self?.worker.enqueue(task) ?? "Agents aren't ready." }
+        tools.saveNote = AgentPool.liveSaveNote
+        tools.startAgent = { [weak self] task in self?.agents.start(task) ?? "Agents aren't ready." }
         report("Working on it…")
         agent.run(text, tools: tools) { [weak self] outcome in
             switch outcome {

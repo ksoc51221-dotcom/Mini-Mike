@@ -31,6 +31,8 @@ final class AgentTools {
     var maxSteps = AgentTools.stepCap
     /// Saves text into a note: (note name, text) → a status line. Nil: no `note_save` tool.
     var saveNote: ((String, String) -> String)?
+    /// Called with true when a yes/no dialog of this run opens, false when it closes (an agent's row shows "waiting").
+    var onAsk: ((Bool) -> Void)?
     /// Hands a long task to a background agent: (the task) → a status line. Nil: no `start_agent` tool.
     var startAgent: ((String) -> String)?
     /// The tools this run offers (an agent can't start another agent).
@@ -222,7 +224,10 @@ final class AgentTools {
             return AgentToolResult(text: "Too long to show the user: keep the script under \(Self.maxScript) characters.", isError: true)
         }
         let line = summary.isEmpty ? "Run a \(language == "shell" ? "shell command" : "script") on your Mac" : summary
-        guard onMain({ confirmScript(line, source) }) else {
+        onAsk?(true)
+        let approved = onMain { confirmScript(line, source) }
+        onAsk?(false)
+        guard approved else {
             return AgentToolResult(text: "The user said no. Do not try another way; tell the user it was not done.", isError: true)
         }
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
@@ -245,7 +250,9 @@ final class AgentTools {
         guard !list.isEmpty else { return AgentToolResult(text: "An email to send needs an address.", isError: true) }
         let stranger = MailTools.notInRequest(list, request: request)
         let warning = stranger.isEmpty ? nil : "Check the address: \(stranger.joined(separator: ", ")) is not in your words."
+        onAsk?(true)
         let yes = onMain { mail.confirmSend(draft, warning) }
+        onAsk?(false)
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
         guard yes else {
             let kept = mail.compose(draft, false)
