@@ -67,6 +67,16 @@ final class FixtureSpotifyBackend: SpotifyBackend, @unchecked Sendable {
 
     func isRunning() -> Bool { state != .notRunning }
     func fetch() -> SpotifyState { state }
+    /// Times `launchHidden` was called; each one "starts" Spotify (the state becomes stopped).
+    private var launchCount = 0
+    var launches: Int { lock.lock(); defer { lock.unlock() }; return launchCount }
+    /// False: Spotify is "not on this Mac".
+    var installed = true
+    func isInstalled() -> Bool { installed }
+    func launchHidden() {
+        lock.lock(); launchCount += 1; if current == .notRunning { current = .stopped }; lock.unlock()
+    }
+
     func send(_ command: SpotifyCommand) {
         let source = LiveSpotifyBackend.source(for: command) // nil: no script built (a bad track URI)
         lock.lock(); commands.append(command); if let source { sources.append(source) }; lock.unlock()
@@ -155,6 +165,7 @@ enum EdgeDockFixtures {
     /// A service on the fixture backend, already holding `state` (and the cover, when a song plays).
     static func spotify(_ backend: FixtureSpotifyBackend, cover: NSImage? = nil) -> SpotifyService {
         let s = SpotifyService(backend: backend, loader: FixtureImageLoader(image: cover))
+        s.launchSettle = 0
         s.refresh()
         _ = waitUntil { s.state == backend.state }
         return s

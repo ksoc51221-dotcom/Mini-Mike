@@ -854,20 +854,33 @@ final class EdgePanelModel: ObservableObject {
         }
     }
 
-    /// A row: plays that song in the background (`play track` through Apple Events, no `activate`), only while Spotify
-    /// is open (never launches it). The dock and the card stay; the query and the star filter clear, so the player shows
+    /// A row: plays that song in the background (`play track` through Apple Events, no `activate`). Spotify closed:
+    /// the service starts it hidden (no window, not in front), then plays. The dock and the card stay; the query and the star filter clear, so the player shows
     /// the new song.
     func tapSong(_ song: SpotifySong) {
         guard SpotifyTrackURI.isValid(song.uri) else { return }
-        guard spotify.state != .notRunning else {
-            songsNotice = "Spotify is not open."
+        let closed = spotify.state == .notRunning
+        guard !closed || spotify.isInstalled else {
+            songsNotice = Self.spotifyMissing
             return
         }
-        spotify.play(song.uri)
+        spotify.play(song.uri) // Spotify closed: the service starts it hidden, then plays
         songsQuery = ""
         songsStarredOnly = false
-        songsNotice = nil
+        songsNotice = closed ? Self.startingSpotify : nil
+        if closed {
+            // The line goes once Spotify runs.
+            startingWatch = spotify.$state.first { $0 != .notRunning }.sink { [weak self] _ in
+                guard let self, self.songsNotice == Self.startingSpotify else { return }
+                self.songsNotice = nil
+            }
+        }
     }
+
+    /// The line while a closed Spotify starts hidden for a song.
+    static let startingSpotify = "Starting Spotify in the background…"
+    static let spotifyMissing = "Spotify is not on this Mac."
+    private var startingWatch: AnyCancellable?
 
     func tapSongsStarFilter() { songsStarredOnly.toggle() }
 
@@ -1012,7 +1025,10 @@ final class EdgePanelModel: ObservableObject {
     }
     /// "Open Spotify": the only control that may launch Spotify (through the workspace); with "Search Spotify for …" the
     /// only two that may bring it to the front.
-    func tapOpenSpotify() { apps.open(DockApp(bundleID: LiveSpotifyBackend.bundleID, name: "Spotify")) }
+    func tapOpenSpotify() {
+        spotify.releaseFocus() // the focus guard must not hide the Spotify the user asked for
+        apps.open(DockApp(bundleID: LiveSpotifyBackend.bundleID, name: "Spotify"))
+    }
     /// "+": the add/remove card (it reads the installed apps the first time).
     func tapManageApps() {
         apps.loadInstalled()

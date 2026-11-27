@@ -35,9 +35,18 @@ protocol SpotifyBackend {
     func isRunning() -> Bool
     func fetch() -> SpotifyState          // blocking; called off the main thread
     func send(_ command: SpotifyCommand)  // blocking; called off the main thread
+    /// Starts Spotify hidden in the background (no window, not in front). Only `SpotifyService.play` calls it.
+    func launchHidden()
+    /// Spotify is on this Mac (it can be started).
+    func isInstalled() -> Bool
 }
 
-// MARK: - Live backend (Apple Events; never launches Spotify)
+extension SpotifyBackend {
+    func launchHidden() {}
+    func isInstalled() -> Bool { true }
+}
+
+// MARK: - Live backend (Apple Events; launches Spotify only hidden, for a song from the card)
 
 struct LiveSpotifyBackend: SpotifyBackend {
     static let bundleID = "com.spotify.client"
@@ -103,6 +112,19 @@ struct LiveSpotifyBackend: SpotifyBackend {
         }
     }
 
+    func isInstalled() -> Bool { NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleID) != nil }
+
+    /// `activates = false` and `hides = true`: Spotify starts with no window in front. Never in a test run.
+    func launchHidden() {
+        guard !LiveURLOpener.blocked, !isRunning(),
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: Self.bundleID) else { return }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        config.hides = true
+        config.addsToRecentItems = false
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
+    }
+
     func send(_ command: SpotifyCommand) {
         guard isRunning(), let source = Self.source(for: command) else { return }
         var error: NSDictionary?
@@ -113,8 +135,10 @@ struct LiveSpotifyBackend: SpotifyBackend {
 // MARK: - Focus guard (a song from the mini player never brings Spotify to the front)
 
 /// Spotify brings itself to the front when it gets `play track` (Merlin's script has no `activate`). The guard notes the
-/// front app before the command and, if Spotify then comes to the front, gives the front back: it hides Spotify again
-/// when Spotify was hidden before, else it activates the app that was in front. Cost: Spotify can show for a moment.
+/// front app before the command. If Spotify comes to the front in the next `window` seconds, the guard hides Spotify
+/// (macOS then fronts the app that was in front) and asks that app to come back. It does not rely on `activate()` alone:
+/// macOS 14 ignores `activate()` from an app that is not in front (Merlin's dock is not), and that was the fault.
+/// Cost: Spotify can show for a moment, and a Spotify window that was open behind other apps is hidden too.
 enum SpotifyFocusGuard {
     /// What was true just before the command.
     struct Before: Equatable {
@@ -122,72 +146,138 @@ enum SpotifyFocusGuard {
         let front: pid_t?
         /// Spotify itself was in front: nothing to give back.
         let spotifyWasFront: Bool
-        /// Spotify was hidden (Cmd-H): hide it again rather than leave its window on screen.
-        let spotifyWasHidden: Bool
     }
 
-    enum Repair: Equatable { case none, hideSpotify, activate(pid_t) }
+    enum Repair: Equatable {
+        case none
+        /// Hide Spotify, then ask this app (the one in front before) to come back.
+        case giveBack(to: pid_t?)
+    }
 
-    /// How long after the command a Spotify activation still counts as caused by it.
+    /// How long after the command a Spotify activation still counts as caused by it (the guard listens all this time).
     static let window: TimeInterval = 2
+    /// At most this many repairs for one command (Spotify can come forward twice; never a fight with the user).
+    static let maxRepairs = 3
+    /// When the log notes the front app after the command.
+    static let checkpoints: [TimeInterval] = [0.1, 0.5, 1.5]
 
     /// The repair for an app that just came to the front.
     static func repair(_ before: Before, activatedIsSpotify: Bool) -> Repair {
         guard activatedIsSpotify, !before.spotifyWasFront else { return .none }
-        if before.spotifyWasHidden { return .hideSpotify }
-        if let front = before.front { return .activate(front) }
-        return .none
+        return .giveBack(to: before.front)
     }
 }
 
 /// Watches one command's focus (a fake in the tests: nothing here touches a real app there).
 protocol SpotifyFocusKeeping: AnyObject {
-    /// Called on the main thread just before `play track` is sent.
+    /// Called on the main thread just before `play track` is sent: guard for `SpotifyFocusGuard.window` seconds.
     func keepFocus()
+    /// Guard for `seconds` (a cold start of Spotify for a song). A call while the guard is on keeps the first front app
+    /// and only moves the end.
+    func keepFocus(for seconds: TimeInterval)
+    /// The guard stops now ("Open Spotify": the user wants Spotify in front).
+    func release()
+}
+
+extension SpotifyFocusKeeping {
+    func keepFocus(for seconds: TimeInterval) { keepFocus() }
+    func release() {}
 }
 
 /// The live guard: one `NSWorkspace` activation observer for `SpotifyFocusGuard.window` seconds after each song.
+/// Each song writes a few lines to `~/Library/Logs/Merlin/spotify-focus.log` (app bundle IDs and times only).
 final class LiveSpotifyFocus: SpotifyFocusKeeping {
-    /// One line per repair (`/usr/bin/log show --predicate 'subsystem == "com.kien.merlin" && category == "spotify"'`).
     static let logger = Logger(subsystem: "com.kien.merlin", category: "spotify")
     private var observer: NSObjectProtocol?
     private var token = 0
 
-    func keepFocus() {
+    private var armedUntil = Date.distantPast
+    private var before: SpotifyFocusGuard.Before?
+    private var repairs = 0
+    private var armedAt = Date()
+
+    func keepFocus() { keepFocus(for: SpotifyFocusGuard.window) }
+
+    func keepFocus(for seconds: TimeInterval) {
         let ws = NSWorkspace.shared
-        let spotify = NSRunningApplication.runningApplications(withBundleIdentifier: LiveSpotifyBackend.bundleID).first
-        let front = ws.frontmostApplication
-        let before = SpotifyFocusGuard.Before(front: front?.processIdentifier,
-                                              spotifyWasFront: front?.bundleIdentifier == LiveSpotifyBackend.bundleID,
-                                              spotifyWasHidden: spotify?.isHidden ?? false)
-        if let observer { ws.notificationCenter.removeObserver(observer) }
         token += 1
         let mine = token
-        observer = ws.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil,
-                                                     queue: .main) { [weak self] note in
-            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
-            let repair = SpotifyFocusGuard.repair(before, activatedIsSpotify: app?.bundleIdentifier == LiveSpotifyBackend.bundleID)
-            guard repair != .none else { return }
-            Self.logger.notice("spotify focus: Spotify came to the front after play track; repair \(String(describing: repair), privacy: .public)")
-            Self.apply(repair)
-            self?.stop(mine)
+        if observer == nil || Date() >= armedUntil {
+            // A new guard: note the front app now.
+            let front = ws.frontmostApplication
+            before = SpotifyFocusGuard.Before(front: front?.processIdentifier,
+                                              spotifyWasFront: front?.bundleIdentifier == LiveSpotifyBackend.bundleID)
+            repairs = 0
+            armedAt = Date()
+            Self.write("armed; front before: \(Self.name(front))")
+            if let observer { ws.notificationCenter.removeObserver(observer) }
+            observer = ws.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil,
+                                                         queue: .main) { [weak self] note in self?.activated(note) }
+        } else {
+            Self.write("still armed; the front before stays \(before?.front.map(String.init) ?? "none")")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + SpotifyFocusGuard.window) { [weak self] in self?.stop(mine) }
+        armedUntil = Date().addingTimeInterval(seconds)
+        for t in SpotifyFocusGuard.checkpoints where t < seconds {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) {
+                Self.write("+\(t) s: front is \(Self.name(NSWorkspace.shared.frontmostApplication))")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.stop(mine) }
+    }
+
+    func release() {
+        guard observer != nil else { return }
+        Self.write("released (Open Spotify)")
+        token += 1
+        stop(token)
+    }
+
+    private func activated(_ note: Notification) {
+        guard let before else { return }
+        let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let repair = SpotifyFocusGuard.repair(before, activatedIsSpotify: app?.bundleIdentifier == LiveSpotifyBackend.bundleID)
+        let t = String(format: "%.2f", Date().timeIntervalSince(armedAt))
+        guard repair != .none, repairs < SpotifyFocusGuard.maxRepairs else {
+            Self.write("+\(t) s: \(Self.name(app)) came to the front; no repair")
+            return
+        }
+        repairs += 1
+        Self.write("+\(t) s: Spotify came to the front; hide it, give the front back to pid \(before.front.map(String.init) ?? "none")")
+        Self.logger.notice("spotify focus: Spotify came to the front after play track; hidden, front given back")
+        Self.apply(repair)
     }
 
     private func stop(_ mine: Int) {
         guard mine == token, let observer else { return }
         NSWorkspace.shared.notificationCenter.removeObserver(observer)
         self.observer = nil
+        armedUntil = .distantPast
     }
 
     private static func apply(_ repair: SpotifyFocusGuard.Repair) {
-        switch repair {
-        case .none: break
-        case .hideSpotify:
-            NSRunningApplication.runningApplications(withBundleIdentifier: LiveSpotifyBackend.bundleID).first?.hide()
-        case .activate(let pid):
-            NSRunningApplication(processIdentifier: pid)?.activate()
+        guard case .giveBack(let pid) = repair else { return }
+        // Hiding works from a background app; macOS then fronts the next app (the one in front before).
+        NSRunningApplication.runningApplications(withBundleIdentifier: LiveSpotifyBackend.bundleID).first?.hide()
+        if let pid, let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated {
+            app.activate() // best effort only (macOS 14 can ignore it)
+        }
+    }
+
+    private static func name(_ app: NSRunningApplication?) -> String { app?.bundleIdentifier ?? "none" }
+
+    private static let logQueue = DispatchQueue(label: "merlin.spotify.focuslog", qos: .utility)
+    private static func write(_ line: String) {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        logQueue.async {
+            let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Merlin")
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("spotify-focus.log")
+            let data = Data("\(stamp) \(line)\n".utf8)
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile(); h.write(data); try? h.close()
+            } else {
+                try? data.write(to: url)
+            }
         }
     }
 }
@@ -499,11 +589,53 @@ final class SpotifyService: ObservableObject {
         }
     }
 
-    /// Plays one saved song (`play track`), only while Spotify runs (never launches it). A URI that is not a valid
-    /// `spotify:track:` URI sends nothing.
+    /// Plays one saved song (`play track`). A URI that is not a valid `spotify:track:` URI sends nothing. Spotify closed:
+    /// it is started hidden in the background (`launchHidden`), and the song plays once Spotify runs.
     func play(_ uri: String) {
         guard SpotifyTrackURI.isValid(uri) else { return }
-        send(.playTrack(uri))
+        guard !backend.isRunning() else { send(.playTrack(uri)); return }
+        guard backend.isInstalled() else { return }
+        // One guard from the click until 2 s after `play track` (that send moves the end; the first front app stays).
+        let whole = Self.launchLimit + 2 * launchSettle + SpotifyFocusGuard.window
+        if let focus {
+            if Thread.isMainThread { focus.keepFocus(for: whole) } else { DispatchQueue.main.sync { focus.keepFocus(for: whole) } }
+        }
+        let backend = backend
+        queue.async { backend.launchHidden() }
+        playAfterLaunch(uri, waited: 0)
+    }
+
+    /// Spotify is on this Mac (a closed one can be started for a song).
+    var isInstalled: Bool { backend.isInstalled() }
+    /// "Open Spotify": the focus guard stops, so Spotify can come to the front.
+    func releaseFocus() { focus?.release() }
+
+    /// How often `play` checks that Spotify runs after a launch, and for how long at most.
+    static let launchStep: TimeInterval = 0.25
+    static let launchLimit: TimeInterval = 15
+    /// The wait between "Spotify runs" and `play track` (a cold Spotify ignores a command for a moment). 0 in the tests.
+    var launchSettle: TimeInterval = 2
+
+    private func playAfterLaunch(_ uri: String, waited: TimeInterval) {
+        queue.asyncAfter(deadline: .now() + Self.launchStep) { [weak self] in
+            guard let self else { return }
+            guard self.backend.isRunning() else {
+                if waited < Self.launchLimit { self.playAfterLaunch(uri, waited: waited + Self.launchStep) }
+                return
+            }
+            let settle = self.launchSettle
+            self.queue.asyncAfter(deadline: .now() + settle) { [weak self] in
+                guard let self else { return }
+                DispatchQueue.main.async { self.send(.playTrack(uri)) }
+                guard settle > 0 else { return }
+                // One more try if Spotify was not ready for the first one.
+                self.queue.asyncAfter(deadline: .now() + settle) { [weak self] in
+                    guard let self else { return }
+                    if case .track(let t) = self.backend.fetch(), t.isPlaying { return } // a song plays: no restart
+                    DispatchQueue.main.async { self.send(.playTrack(uri)) }
+                }
+            }
+        }
     }
 
     private func apply(_ new: SpotifyState) {

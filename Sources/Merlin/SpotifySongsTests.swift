@@ -352,11 +352,55 @@ extension FeatureTests {
         let closed = EdgePanelModel(apps: apps, spotify: EdgeDockFixtures.spotify(closedBackend), songs: EdgeDockFixtures.songs())
         closed.urlOpener = FakeURLOpener()
         closed.songsQuery = "m"
-        closed.tapSong(closed.songsVisible[0])
-        closed.submitSongsSearch()
-        EdgeDockFixtures.waitUntil(0.3) { !closedBackend.sent.isEmpty }
-        check("songs card: Spotify not open: a row sends nothing and says so",
-              closedBackend.sent.isEmpty && closedBackend.scripts.isEmpty && closed.songsNotice == "Spotify is not open.")
+        let firstSong = closed.songsVisible[0]
+        closed.tapSong(firstSong)
+        check("songs card: Spotify not open: a row says Spotify starts in the background",
+              closed.songsNotice == EdgePanelModel.startingSpotify)
+        EdgeDockFixtures.waitUntil(1) { !closedBackend.sent.isEmpty }
+        check("songs card: Spotify not open: it is started hidden once, then the song plays",
+              closedBackend.launches == 1 && closedBackend.sent == [.playTrack(firstSong.uri)])
+        EdgeDockFixtures.waitUntil(1) { closed.songsNotice == nil }
+        check("songs card: the 'Starting Spotify' line goes once Spotify runs", closed.songsNotice == nil)
+        let missingBackend = FixtureSpotifyBackend(.notRunning)
+        missingBackend.installed = false
+        let missing = EdgePanelModel(apps: apps, spotify: EdgeDockFixtures.spotify(missingBackend), songs: EdgeDockFixtures.songs())
+        missing.tapSong(missing.songsVisible[0])
+        EdgeDockFixtures.waitUntil(0.3) { missingBackend.launches > 0 }
+        check("songs card: Spotify not on this Mac: nothing starts, and the card says so",
+              missingBackend.launches == 0 && missingBackend.sent.isEmpty && missing.songsNotice == EdgePanelModel.spotifyMissing)
+
+        // MARK: No path from the card brings Spotify forward, except "Open Spotify"
+        do {
+            let ws = FixtureDockWorkspace()
+            let (d2, n2) = EdgeDockFixtures.defaults()
+            defer { EdgeDockFixtures.forget(n2) }
+            let b2 = FixtureSpotifyBackend(.track(EdgeDockFixtures.track))
+            let card = EdgePanelModel(apps: EdgeDockFixtures.appStore(ws, defaults: d2), spotify: EdgeDockFixtures.spotify(b2),
+                                      songs: EdgeDockFixtures.songs())
+            let urls = FakeURLOpener()
+            card.urlOpener = urls
+            card.webSearch = FakeWebSearch(hasKey: true, result: .success([SpotifyHit(uri: uri(8), name: "Hit", artist: "A")]))
+            card.onOpenSettings = {}
+            card.tapSong(card.songsVisible[0])
+            card.songsQuery = "zz"
+            card.searchSpotify()
+            EdgeDockFixtures.waitUntil(0.5) { !card.webHits.isEmpty }
+            if let hit = card.webHits.first { card.tapHit(hit) }
+            card.songsQuery = "m"
+            card.submitSongsSearch()
+            card.tapSongsStarFilter(); card.tapSongsStarFilter()
+            card.tapHeart()
+            card.tapSpotify() // the record opens the card
+            for c: SpotifyCommand in [.playPause, .next, .previous, .stop] { card.tapSpotifyCommand(c) }
+            card.tapSpotify() // and closes it
+            EdgeDockFixtures.waitUntil(0.5) { b2.sent.count >= 7 }
+            let spotifyApp = URL(fileURLWithPath: "/fixture/\(LiveSpotifyBackend.bundleID).app")
+            check("songs card: no row, search, hit, heart, record or transport button opens Spotify, a URL or a launch",
+                  ws.opened.isEmpty && urls.opened.isEmpty && b2.launches == 0
+                  && b2.scripts.allSatisfy { !$0.contains("activate") && !$0.contains("open location") })
+            card.tapOpenSpotify()
+            check("songs card: only Open Spotify opens the Spotify app", ws.opened == [spotifyApp])
+        }
 
         // MARK: The keyboard (three fields, one at a time)
         let edge = EdgePanelController(apps: apps, spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.track(EdgeDockFixtures.track))))

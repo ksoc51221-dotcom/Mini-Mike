@@ -31,8 +31,8 @@ private func solid(_ color: NSColor) -> NSImage {
 extension FeatureTests {
     @MainActor
     static func spotifyDockChecks(_ check: (String, Bool) -> Void) {
-        func wait(_ cond: () -> Bool) {
-            let end = Date().addingTimeInterval(2)
+        func wait(_ limit: TimeInterval = 2, _ cond: () -> Bool) {
+            let end = Date().addingTimeInterval(limit)
             while !cond() && Date() < end { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
         }
         // Every script must COMPILE. Compiling sends no event. It needs Spotify's dictionary, so it runs only while
@@ -71,17 +71,17 @@ extension FeatureTests {
         do {
             typealias G = SpotifyFocusGuard
             let finder: pid_t = 501
-            let fromApp = G.Before(front: finder, spotifyWasFront: false, spotifyWasHidden: false)
-            check("spotify focus: Spotify jumps in front of another app -> that app comes back",
-                  G.repair(fromApp, activatedIsSpotify: true) == .activate(finder))
-            check("spotify focus: Spotify was hidden -> it is hidden again (its window never stays on screen)",
-                  G.repair(G.Before(front: finder, spotifyWasFront: false, spotifyWasHidden: true), activatedIsSpotify: true) == .hideSpotify)
+            let fromApp = G.Before(front: finder, spotifyWasFront: false)
+            check("spotify focus: Spotify jumps in front of another app -> Spotify is hidden and that app gets the front back",
+                  G.repair(fromApp, activatedIsSpotify: true) == .giveBack(to: finder))
+            check("spotify focus: no app was in front -> Spotify is still hidden",
+                  G.repair(G.Before(front: nil, spotifyWasFront: false), activatedIsSpotify: true) == .giveBack(to: nil))
             check("spotify focus: Spotify was already in front -> nothing changes",
-                  G.repair(G.Before(front: 7, spotifyWasFront: true, spotifyWasHidden: false), activatedIsSpotify: true) == .none)
+                  G.repair(G.Before(front: 7, spotifyWasFront: true), activatedIsSpotify: true) == .none)
             check("spotify focus: another app comes to the front (the user's own click) -> nothing changes",
                   G.repair(fromApp, activatedIsSpotify: false) == .none)
-            check("spotify focus: no app was in front and Spotify was showing -> nothing to give back",
-                  G.repair(G.Before(front: nil, spotifyWasFront: false, spotifyWasHidden: false), activatedIsSpotify: true) == .none)
+            check("spotify focus: a late second jump is repaired too (at most 3 repairs, the log notes 0.1, 0.5 and 1.5 s)",
+                  G.maxRepairs == 3 && G.checkpoints == [0.1, 0.5, 1.5])
             check("spotify focus: the guard listens for 2 s at most", G.window == 2)
 
             let player = FakeSpotify(), focus = FakeFocus()
@@ -97,8 +97,9 @@ extension FeatureTests {
             check("spotify focus: a bad URI arms nothing and sends nothing", focus.calls == 1)
             player.running = false
             guarded.play("spotify:track:4uLU6hMCjMI75M1A2tKUQC")
-            wait { player.fetches > 0 }
-            check("spotify focus: Spotify closed -> no play track (never launches it)", player.sent.count == 7)
+            wait(0.4) { player.sent.count > 7 }
+            check("spotify focus: Spotify closed -> the guard arms, and no play track goes out while Spotify is not running",
+                  focus.calls == 2 && player.sent.count == 7)
         }
 
         let fake = FakeSpotify()
