@@ -400,6 +400,33 @@ extension FeatureTests {
         check("shortcuts: a run asks first; a no runs nothing; an unknown name runs nothing and names the near ones",
               scNo.isError && askedAfterNo == 3 && scMissing.text.contains("Log water") && askedAfterMissing == 3 && mk.asked == 4 && mk.shortcuts == ["Morning"])
         check("dates: the time formats Claude may write", MacTools.date("2026-11-28 15:00") != nil && MacTools.date("2026-11-28") != nil && MacTools.date("tomorrow") == nil)
+        // Routing: 20 sentences in Merlin's own style each reach the right path, with no question back.
+        let rctx = ActionContext(apps: [DockApp(bundleID: "com.spotify.client", name: "Spotify"), DockApp(bundleID: "com.apple.Safari", name: "Safari")],
+                                 songs: [], routines: [])
+        let routes: [(String, AgentRequest.Path)] = [
+            ("send Mum a message that I am late", .agent),
+            ("what is the capital of Peru", .quick),
+            ("find five sources on price ceilings and put them in my economics note", .agent),
+            ("email my teacher the essay draft", .agent),
+            ("Hey Merlin, remind me in 10 minutes to drink water", .rule),
+            ("set a timer for 25 minutes", .rule),
+            ("play Blinding Lights by The Weeknd", .agent),
+            ("pause the music", .rule),
+            ("who won the Champions League last year", .quick),
+            ("how many moons does Jupiter have", .quick),
+            ("what does this word mean", .chat),
+            ("explain the difference between a price floor and a price ceiling", .chat),
+            ("add Spotify to the dock", .rule),
+            ("open Safari", .rule),
+            ("schedule something for three minutes later", .agent),
+            ("check my email", .agent),
+            ("research the best laptops under 800 dollars for school", .agent),
+            ("text Dad that I'll be home at 6", .agent),
+            ("what's on my calendar tomorrow", .agent),
+            ("add lunch with Tom to my calendar on Friday at 1pm", .calendar),
+        ]
+        let wrong = routes.filter { AgentRequest.path($0.0, context: rctx) != $0.1 }
+        check("routing: 20 sentences reach the right path (wrong: \(wrong.map { "\($0.0) → \(AgentRequest.path($0.0, context: rctx)) not \($0.1)" }))", wrong.isEmpty)
         var reader = AgentLoop.Reader()
         let a1 = #"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"cache_read_input_tokens":3000,"output_tokens":50}}}"#
         reader.read(a1); reader.read(a1)

@@ -26,6 +26,9 @@ enum AgentRequest {
                                        "internet", "online", "agent", "calendar", "event", "events", "contact", "contacts", "shortcut",
                                        "number", "phone", "mum", "mom", "dad", "teacher", "essay", "draft", "homework"]
     static let maxWords = 30
+    /// The user's own things the agent can read.
+    static let personal: Set<String> = ["calendar", "schedule", "email", "emails", "mail", "inbox", "reminders", "contacts",
+                                        "files", "events", "messages", "agenda"]
     /// "can you", "could you", "please", "I want you to" in front of a request.
     static let politeOpeners = #"^(?:(?:can|could|would|will) you (?:please )?|please |i (?:want|need) you to |go ahead and |i'd like you to )+"#
 
@@ -40,6 +43,22 @@ enum AgentRequest {
     static let quickOpeners: Set<String> = ["what", "what's", "whats", "who", "who's", "whos", "when", "where", "which", "how",
                                             "is", "are", "was", "were", "did", "does", "do", "can", "will"]
 
+    /// Where spoken words go, in the order the app checks them (`main.swift`): a fixed rule, a calendar card, the agent
+    /// loop (a task), a quick answer (a short fact question), or a chat.
+    enum Path: String { case rule, calendar, agent, quick, chat }
+
+    static func path(_ spoken: String, context: ActionContext, sheets: [String] = []) -> Path {
+        let text = CommandCenter.cleaned(spoken)
+        switch CommandCenter.route(text, sheets: sheets, actions: context) {
+        case .calendar: return .calendar
+        case .ask:
+            if looksLikeRequest(text, context: context) { return .agent }
+            return looksLikeQuickQuestion(text) ? .quick : .chat
+        case .video: return .chat
+        default: return .rule
+        }
+    }
+
     /// A short fact question ("who won the World Cup in 2022", "how tall is Everest"): a quick answer in seconds.
     static func looksLikeQuickQuestion(_ text: String) -> Bool {
         let words = ActionCommand.normalize(text).split(separator: " ").map(String.init)
@@ -50,7 +69,13 @@ enum AgentRequest {
     /// True when the words ask Merlin to do something on this Mac (then they go to the loop, not to a chat).
     static func looksLikeRequest(_ text: String, context: ActionContext) -> Bool {
         let words = core(text).split(separator: " ").map(String.init)
-        guard let first = words.first, words.count <= maxWords, !NoteCommand.questionWords.contains(first) else { return false }
+        guard let first = words.first, words.count <= maxWords else { return false }
+        // A question about the user's own things ("what's on my calendar tomorrow", "do I have new emails"): the agent
+        // can read them; a chat can't.
+        if NoteCommand.questionWords.contains(first) || ["what's", "whats", "who's", "any"].contains(first) {
+            let own = words.contains { ["my", "i", "me"].contains($0) }
+            return own && words.contains(where: personal.contains)
+        }
         if actVerbs.contains(first) { return true }
         guard targetVerbs.contains(first) else { return false }
         let rest = Array(words.dropFirst())
