@@ -2,9 +2,9 @@ import AppKit
 import Combine
 import SwiftUI
 
-// Merlin agents on the dock (2026-11-27, round nine): the centre piece next to the record (the record stays). Up to 3
-// small agent orbs sit on an arc just outside the disc, above the record; a "+" orb starts a new one. A click opens the Agents
-// card: a task field, the running jobs (step, time, cost, Stop) and the last results ("Open note").
+// Merlin agents on the dock (2026-11-27, round nine): the Agents orb, the largest control after the record, sits on the
+// rim's middle place (the record stays in the centre); up to 3 small moons beside it show the running agents. A click
+// opens the Agents card: a task field, the running jobs (step, time, cost, Stop) and the last results ("Open note").
 // The jobs come from `AgentPool` (the Merlin assistant session's API); the dock only shows them and calls start/stop.
 
 /// What the dock needs from the agents (`AgentPool` in the app; a fixture in the tests and pictures).
@@ -65,8 +65,8 @@ enum DockAgents {
     static func orbs(jobs: [AgentJobView], history: [AgentJobView], now: Date = Date()) -> [AgentJobView] {
         let rank: (AgentJobView) -> Int = { $0.state == .working || $0.state == .waiting ? 0 : 1 }
         var out = Array(jobs.enumerated().sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
-            .map(\.element).prefix(EdgePanelLayout.agentOrbSlots))
-        for h in history where out.count < EdgePanelLayout.agentOrbSlots {
+            .map(\.element).prefix(EdgePanelLayout.agentSatelliteSlots))
+        for h in history where out.count < EdgePanelLayout.agentSatelliteSlots {
             if let e = h.ended, now.timeIntervalSince(e) < 10 { out.append(h) }
         }
         return out
@@ -74,53 +74,230 @@ enum DockAgents {
 }
 
 extension EdgePanelLayout {
-    /// The agent orbs: on an arc of this radius about the disc's centre, just outside the disc (between it and the app
-    /// orbit), above the record by the screen edge; clear of Chats, the orbit at any turn and the screen edge.
-    static let agentOrbRadius: CGFloat = 165
-    static let agentOrbSize: CGFloat = 24
-    /// With no job, one larger "Ask an agent" orb in the middle place, so the feature is easy to find at rest.
-    static let agentIdleSize: CGFloat = 32
-    static let agentOrbSlots = 3
-    /// Degrees up from the disc's left horizontal; the "+" takes the first free place.
-    static let agentOrbAngles: [CGFloat] = [85, 72.5, 60]
-    /// Place `i` (0...2), from the dock's top-left (y down).
-    static func agentOrbCentre(_ i: Int) -> CGPoint {
-        let a = agentOrbAngles[min(max(i, 0), agentOrbAngles.count - 1)] * .pi / 180
-        return CGPoint(x: dockSize.width - agentOrbRadius * cos(a), y: dockSize.height / 2 - agentOrbRadius * sin(a))
+    /// The satellites: up to 3 small moons close round the Agents orb, on its left (away from the record), so the
+    /// running agents show at a glance.
+    static let agentSatelliteSize: CGFloat = 14
+    static var agentSatelliteRadius: CGFloat { agentHubSize / 2 + 10 + agentSatelliteSize / 2 }
+    static let agentSatelliteSlots = 3
+    /// Satellite `i` of `count`, from the dock's top-left (y down): 1 straight left, 2 at ±20°, 3 at -40°, 0°, 40°.
+    static func agentSatelliteCentre(_ i: Int, of count: Int) -> CGPoint {
+        let n = min(max(count, 1), agentSatelliteSlots)
+        let spread: CGFloat = 40
+        let deg = n == 1 ? 0 : -spread / 2 * CGFloat(n - 1) + spread * CGFloat(min(max(i, 0), n - 1))
+        let a = deg * .pi / 180, h = agentHubCentre
+        return CGPoint(x: h.x - agentSatelliteRadius * cos(a), y: h.y + agentSatelliteRadius * sin(a))
     }
     /// The Agents card: as tall as the add/remove card.
     static var agentsSize: CGSize { CGSize(width: listWidth, height: appsSize.height) }
 }
 
-// MARK: - The orbs on the disc
+extension DockAgents {
+    /// What the Agents orb shows: waiting (a yes/no dialog is open) beats working (or queued), then a check for 10 s after
+    /// a job ended done, else calm. `running`: the working and waiting jobs (the badge, 1 to 3).
+    struct Hub: Equatable {
+        enum State: Equatable { case idle, working, waiting, done }
+        var state: State
+        var running: Int
+        var doneUntil: Date?
+    }
 
-/// The agent orbs and the "+" orb (hidden while the disc's search is open). A click opens the Agents card.
-struct EdgeAgentOrbs: View {
+    static func hub(jobs: [AgentJobView], history: [AgentJobView], now: Date = Date()) -> Hub {
+        let running = jobs.filter { $0.state == .working || $0.state == .waiting }.count
+        if jobs.contains(where: { $0.state == .waiting }) { return Hub(state: .waiting, running: running) }
+        if !jobs.isEmpty { return Hub(state: .working, running: running) }
+        if let last = history.first, last.state == .done, let e = last.ended, now.timeIntervalSince(e) < 10 {
+            return Hub(state: .done, running: 0, doneUntil: e.addingTimeInterval(10))
+        }
+        return Hub(state: .idle, running: 0)
+    }
+}
+
+// MARK: - The Agents orb on the rim
+
+/// The Agents orb (the largest control after the record) with its badge, its ring and its satellites. A click on it or
+/// on a satellite opens the Agents card. Hidden while the disc's search is open (as the rim buttons are).
+struct EdgeAgentHub: View {
     @ObservedObject var model: EdgePanelModel
+    @State private var hovering = false
+
+    static let amber = Color(red: 1.0, green: 0.72, blue: 0.25)
 
     var body: some View {
-        let orbs = model.agentOrbs
+        let _ = DockPerf.tick("agentHub")
+        let hub = model.agentHub
         let p = model.palette
+        let sats = model.agentOrbs
+        let c = EdgePanelLayout.agentHubCentre
+        let size = EdgePanelLayout.agentHubSize
+        // Motion only while the dock shows (a hidden dock draws nothing) and Reduce Motion is off.
+        let live = model.shown && !Motion.still && !Motion.reduceMotion
         ZStack(alignment: .topLeading) {
-            ForEach(Array(orbs.enumerated()), id: \.element.id) { i, job in
-                let c = EdgePanelLayout.agentOrbCentre(i)
-                EdgeAgentOrb(state: job.state, palette: p, help: "\(job.name): \(job.step)", live: model.shown) { model.tapAgents() }
-                    .position(x: c.x, y: c.y)
-                    // motion.dev "spring pop": a new agent springs out from small; an ended one shrinks away.
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
+            ForEach(Array(sats.enumerated()), id: \.element.id) { i, job in
+                let at = EdgePanelLayout.agentSatelliteCentre(i, of: sats.count)
+                EdgeAgentSatellite(job: job, palette: p) { model.tapAgents() }
+                    .position(x: at.x, y: at.y)
+                    // motion.dev "spring pop": a new agent's moon springs out of the orb; an ended one shrinks back in.
+                    .transition(.scale(scale: 0.2, anchor: .center).combined(with: .opacity))
             }
-            if orbs.count < EdgePanelLayout.agentOrbSlots {
-                // No job: the larger "Ask an agent" orb in the middle place. Jobs: a small "+" in the first free place.
-                let idle = orbs.isEmpty
-                let c = EdgePanelLayout.agentOrbCentre(idle ? 1 : orbs.count)
-                EdgeAgentOrb(state: nil, palette: p, help: "Ask an agent", live: model.shown,
-                             size: idle ? EdgePanelLayout.agentIdleSize : EdgePanelLayout.agentOrbSize) { model.tapAgents() }
-                    .position(x: c.x, y: c.y)
-                    .transition(.scale(scale: 0.4).combined(with: .opacity))
-                    .id(idle ? "idle" : "plus")
+            ZStack {
+                EdgeHubRing(state: hub.state, palette: p, size: size, live: live)
+                Button { model.tapAgents() } label: {
+                    ZStack {
+                        Circle().fill(LinearGradient(colors: [p.accentColor, p.accentColor.opacity(0.72)],
+                                                     startPoint: .top, endPoint: .bottom))
+                        // Plain glass light: a soft top light and a light-to-dark rim (no bend).
+                        Circle().fill(LinearGradient(colors: [.white.opacity(0.30), .clear], startPoint: .top, endPoint: .center))
+                        Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .black.opacity(0.25)],
+                                                             startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                        Image(systemName: hub.state == .done ? "checkmark" : "sparkles")
+                            .font(.system(size: 21, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .frame(width: size, height: size)
+                    .shadow(color: p.accentColor.opacity(0.45), radius: 10, x: 0, y: 3)
+                    .scaleEffect(hovering && !Motion.reduceMotion ? 1.06 : 1)
+                    .contentShape(Circle())
+                }
+                .buttonStyle(EdgePressStyle(scale: 0.94))
+                if hub.running > 0 {
+                    Text("\(hub.running)")
+                        .font(.geist(11, .semibold)).monospacedDigit()
+                        .foregroundStyle(.white)
+                        .frame(width: 19, height: 19)
+                        .background(Circle().fill(p.baseDarkColor))
+                        .overlay(Circle().strokeBorder(hub.state == .waiting ? Self.amber : p.accentColor, lineWidth: 1.5))
+                        .offset(x: size * 0.36, y: -size * 0.36)
+                        .transition(.scale.combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(width: size + 16, height: size + 16)
+            .position(x: c.x, y: c.y)
+            .edgeHover { hovering = $0 }
+            .help(helpText(hub))
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(helpText(hub))
+            .accessibilityAddTraits(.isButton)
+        }
+        .animation(Motion.still || Motion.reduceMotion ? nil : Motion.edgePop, value: sats.map(\.id))
+        .animation(Motion.still || Motion.reduceMotion ? nil : Motion.edgePop, value: hub.running)
+        .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
+        // The check goes back to calm 10 s after the job ended (nothing else may redraw the dock then).
+        .task(id: hub.doneUntil) {
+            guard let until = hub.doneUntil else { return }
+            try? await Task.sleep(nanoseconds: UInt64(max(0, until.timeIntervalSinceNow) * 1_000_000_000) + 50_000_000)
+            model.objectWillChange.send()
+        }
+    }
+
+    private func helpText(_ hub: DockAgents.Hub) -> String {
+        switch hub.state {
+        case .idle: return "Agents: ask an agent"
+        case .working: return "Agents: \(hub.running) working"
+        case .waiting: return "Agents: one waits for your yes"
+        case .done: return "Agents: done"
+        }
+    }
+}
+
+/// Round the Agents orb: working = an arc that turns (a still arc under Reduce Motion); waiting = an amber ring that
+/// pulses; idle and done = nothing. It redraws only while it moves.
+private struct EdgeHubRing: View {
+    let state: DockAgents.Hub.State
+    let palette: DockPalette
+    let size: CGFloat
+    let live: Bool
+
+    var body: some View {
+        let d = size + 7
+        switch state {
+        case .working:
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !live)) { ctx in
+                let turn = live ? ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4 : 0.1
+                ZStack {
+                    Circle().stroke(palette.accentColor.opacity(0.18), lineWidth: 3)
+                    Circle().trim(from: 0, to: 0.3)
+                        .stroke(palette.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .rotationEffect(.degrees(turn * 360 - 90))
+                }
+                .frame(width: d, height: d)
+            }
+            .allowsHitTesting(false)
+        case .waiting:
+            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !live)) { ctx in
+                let t = live ? (sin(ctx.date.timeIntervalSinceReferenceDate * 2 * .pi / 1.2) + 1) / 2 : 0.6
+                Circle().stroke(EdgeAgentHub.amber.opacity(0.35 + 0.55 * t), lineWidth: 2.5)
+                    .frame(width: d + 3 * t, height: d + 3 * t)
+            }
+            .allowsHitTesting(false)
+        case .idle, .done:
+            EmptyView()
+        }
+    }
+}
+
+/// A small moon: one agent's state colour. A hover shows its name and step line beside it.
+private struct EdgeAgentSatellite: View {
+    let job: AgentJobView
+    let palette: DockPalette
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        let size = EdgePanelLayout.agentSatelliteSize
+        Button(action: action) {
+            ZStack {
+                Circle().fill(palette.baseDarkColor.opacity(0.9))
+                Circle().strokeBorder(rim, lineWidth: 1.5)
+                core
+            }
+            .frame(width: size, height: size)
+            .scaleEffect(hovering && !Motion.reduceMotion ? 1.25 : 1)
+            .contentShape(Circle().inset(by: -4))
+        }
+        .buttonStyle(EdgePressStyle(scale: 0.9))
+        .overlay(alignment: .trailing) {
+            if hovering {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(job.name).font(.geist(11, .semibold)).foregroundStyle(.primary)
+                    Text(job.step).font(.geist(10)).foregroundStyle(.secondary)
+                }
+                .lineLimit(1)
+                .frame(maxWidth: 170, alignment: .leading)
+                .padding(.horizontal, 8).padding(.vertical, 5)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.baseDarkColor.opacity(0.94)))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(palette.hairlineColor, lineWidth: 1))
+                .fixedSize()
+                .offset(x: -(size + 6))
+                .allowsHitTesting(false)
+                .transition(.opacity)
             }
         }
-        .animation(Motion.still || Motion.reduceMotion ? nil : Motion.edgePop, value: orbs.map(\.id))
+        .zIndex(hovering ? 3 : 0)
+        .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
+        .edgeHover { hovering = $0 }
+        .accessibilityLabel("\(job.name): \(job.step)")
+    }
+
+    private var rim: Color {
+        switch job.state {
+        case .working: return palette.accentColor
+        case .waiting: return EdgeAgentHub.amber
+        case .queued: return palette.accentColor.opacity(0.7)
+        case .done: return palette.accentColor.opacity(0.8)
+        case .stopped, .failed: return Color.gray.opacity(0.6)
+        }
+    }
+
+    @ViewBuilder private var core: some View {
+        switch job.state {
+        case .working: Circle().fill(palette.accentColor).frame(width: 6, height: 6)
+        case .waiting: Circle().fill(EdgeAgentHub.amber).frame(width: 6, height: 6)
+        case .queued: EmptyView()
+        case .done: Image(systemName: "checkmark").font(.system(size: 6, weight: .heavy)).foregroundStyle(palette.accentColor)
+        case .stopped, .failed: Circle().fill(Color.gray.opacity(0.7)).frame(width: 4, height: 4)
+        }
     }
 }
 
@@ -132,7 +309,7 @@ private struct EdgeAgentOrb: View {
     let help: String
     /// The dock shows: only then does a working or waiting orb breathe (a hidden dock draws nothing).
     var live = true
-    var size = EdgePanelLayout.agentOrbSize
+    var size: CGFloat = 24
     let action: () -> Void
     @State private var hovering = false
     @State private var pulse = false
@@ -141,7 +318,7 @@ private struct EdgeAgentOrb: View {
 
     var body: some View {
         let moving = live && !Motion.still && !Motion.reduceMotion && (state == .working || state == .waiting)
-        let idle = state == nil && size > EdgePanelLayout.agentOrbSize
+        let idle = state == nil && size > 24
         Button(action: action) {
             ZStack {
                 Circle().fill(palette.baseDarkColor.opacity(0.88))
@@ -176,7 +353,7 @@ private struct EdgeAgentOrb: View {
 
     @ViewBuilder private var core: some View {
         switch state {
-        case nil where size > EdgePanelLayout.agentOrbSize:
+        case nil where size > 24:
             Image(systemName: "sparkles").font(.system(size: 13, weight: .semibold)).foregroundStyle(palette.accentColor)
         case nil:
             Image(systemName: "plus").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary).opacity(0.8)

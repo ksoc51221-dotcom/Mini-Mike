@@ -436,9 +436,12 @@ struct EdgeDockView: View {
                     .frame(width: s.width, height: s.height)
                     .transition(.opacity)
             }
-            // Merlin agents: up to 3 orbs (and a "+") on an arc just outside the disc, above the record.
-            EdgeAgentOrbs(model: model)
-                .frame(width: s.width, height: s.height)
+            // Merlin agents: the Agents orb on the rim's middle place and its moons (hidden while the disc's search is open).
+            if !model.searchOpen {
+                EdgeAgentHub(model: model)
+                    .frame(width: s.width, height: s.height)
+                    .transition(.opacity)
+            }
             // Chats and Notes: fixed on the disc's rim (not on the orbit); they hide while a query filters the apps.
             if !model.isFiltering {
                 ForEach(Array([EdgePanelModel.Item.chats, .notes].enumerated()), id: \.element.id) { i, item in

@@ -272,37 +272,44 @@ enum EdgePanelLayout {
         return NSPoint(x: d.minX + c.x, y: d.maxY - c.y)
     }
 
-    /// Chats above "+" and Notes below collapse, on the same rim circle as the three small buttons, `fixedItemGap` clear
-    /// of them. From the dock's top-left (y down).
-    static let fixedItemGap: CGFloat = 10
-    static func fixedCentre(_ s: EdgePanelModel.Section) -> CGPoint {
-        let chord = itemSize / 2 + plusSize / 2 + fixedItemGap
-        let a = discButtonStep + 2 * asin(chord / (2 * discButtonRadius))
-        let signed = s == .notes ? a : -a
-        return CGPoint(x: dockSize.width - discButtonRadius * cos(signed), y: dockSize.height / 2 + discButtonRadius * sin(signed))
+    /// The rim column (2026-11-27, round nine), top to bottom on the rim circle (centres ON the rim), `rimGap` clear between
+    /// neighbours: Chats, search, "+", the Agents orb (on the horizontal centre line, the largest control after the
+    /// record), collapse, Notes. Angles in radians about the disc's centre, negative up. From the dock's top-left (y down).
+    static let rimGap: CGFloat = 10
+    /// The Agents orb on the rim's middle place (the centre line).
+    static let agentHubSize: CGFloat = 56
+    private static func rimStep(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
+        2 * asin((a / 2 + b / 2 + rimGap) / (2 * discButtonRadius))
     }
+    static func rimPoint(_ angle: CGFloat) -> CGPoint {
+        CGPoint(x: dockSize.width - discButtonRadius * cos(angle), y: dockSize.height / 2 + discButtonRadius * sin(angle))
+    }
+    static var plusAngle: CGFloat { -rimStep(agentHubSize, plusSize) }
+    static var searchAngle: CGFloat { plusAngle - rimStep(plusSize, plusSize) }
+    static var chatsAngle: CGFloat { searchAngle - rimStep(plusSize, itemSize) }
+    static var collapseAngle: CGFloat { rimStep(agentHubSize, plusSize) }
+    static var notesAngle: CGFloat { collapseAngle + rimStep(plusSize, itemSize) }
+    /// Kept for the callers: the old name of the rim gap between Chats or Notes and their neighbour.
+    static var fixedItemGap: CGFloat { rimGap }
+    static func fixedCentre(_ s: EdgePanelModel.Section) -> CGPoint { rimPoint(s == .notes ? notesAngle : chatsAngle) }
 
     /// The cover's centre (on the screen edge, in the middle) and the "+" button's centre, from the dock's top-left (y down).
     static var coverCentre: CGPoint { CGPoint(x: dockSize.width, y: dockSize.height / 2) }
 
-    /// The disc's three small buttons ("+", search, collapse): on a circle of `discButtonRadius` about the disc's centre,
-    /// so their centres sit ON the rim (the semicircle's circumference), `discButtonPitch` apart centre to centre, the
-    /// middle one on the horizontal centre line.
     static var discButtonRadius: CGFloat { discRadius }
-    static let discButtonPitch: CGFloat = 54
-    /// The angle between two neighbouring buttons about the disc's centre (radians; the pitch is the chord).
-    static var discButtonStep: CGFloat { 2 * asin(discButtonPitch / (2 * discButtonRadius)) }
+    /// The three places of the rim's middle: "+" (0), the Agents orb (1), collapse (2). (The bars' room and the lens
+    /// shapes read these.)
     static func discButtonCentre(_ row: Int) -> CGPoint {
-        let a = CGFloat(row - 1) * discButtonStep
-        return CGPoint(x: dockSize.width - discButtonRadius * cos(a), y: dockSize.height / 2 + discButtonRadius * sin(a))
+        rimPoint(row == 0 ? plusAngle : row == 2 ? collapseAngle : 0)
     }
-    static var plusCentre: CGPoint { discButtonCentre(0) }
-    static var searchCentre: CGPoint { discButtonCentre(1) }
-    static var collapseCentre: CGPoint { discButtonCentre(2) }
-    /// The search field in the disc: on the centre line, from 6 pt right of the search button to 8 pt from the screen
-    /// edge (the record hides while it shows).
+    static var plusCentre: CGPoint { rimPoint(plusAngle) }
+    static var agentHubCentre: CGPoint { rimPoint(0) }
+    static var searchCentre: CGPoint { rimPoint(searchAngle) }
+    static var collapseCentre: CGPoint { rimPoint(collapseAngle) }
+    /// The search field in the disc: on the centre line, from 6 pt right of the Agents orb's place to 8 pt from the
+    /// screen edge (the record and the rim controls hide while it shows).
     static var searchFieldFrame: CGRect {
-        let left = searchCentre.x + plusSize / 2 + 6
+        let left = agentHubCentre.x + plusSize / 2 + 6
         return CGRect(x: left, y: dockSize.height / 2 - 14, width: dockSize.width - 8 - left, height: 28)
     }
     /// The "No app" line under the field.
@@ -664,6 +671,7 @@ final class EdgePanelModel: ObservableObject {
     var agentJobs: [AgentJobView] { agentSource?.agentJobs ?? [] }
     var agentHistory: [AgentJobView] { agentSource?.agentHistory ?? [] }
     var agentOrbs: [AgentJobView] { DockAgents.orbs(jobs: agentJobs, history: agentHistory) }
+    var agentHub: DockAgents.Hub { DockAgents.hub(jobs: agentJobs, history: agentHistory) }
 
     /// An orb or the "+": opens the Agents card, or closes it when it is open.
     func tapAgents() { toggle(.agents) }

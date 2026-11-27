@@ -316,48 +316,54 @@ extension FeatureTests {
                       > L.discButtonRadius + L.plusSize / 2 + 4 })
         }
         let chats = L.itemCentre(.chats, window: local), notes = L.itemCentre(.notes, window: local)
-        check("edge dock: in window coordinates (y up) Chats is above Notes", chats.y > notes.y && abs(chats.x - notes.x) < 0.01)
-        // Chats and Notes off the orbit (2026-11-27): fixed on the disc's rim, past "+" and collapse, clear of the three
-        // buttons, the timer chip, the record's waves and every orbit place; so all 10 places are apps.
+        check("edge dock: in window coordinates (y up) Chats is above Notes", chats.y > notes.y)
+        // The rim column (round nine): Chats, search, "+", the Agents orb on the centre line, collapse, Notes; centres on
+        // the rim, equal gaps; all clear of the record's waves, the timer chip and every orbit place. 10 places are apps.
         do {
-            let fixed = [L.fixedCentre(.chats), L.fixedCentre(.notes)]
             let centre = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
-            let rim = [L.plusCentre, L.searchCentre, L.collapseCentre]
-            let half = L.itemSize / 2
-            let chip = L.timerChipFrame.insetBy(dx: -half, dy: -half)
-            let orbit = (0..<L.visibleSlots).map { L.orbitPlace($0, of: 20, offset: 0).centre }
-            check("edge dock: Chats and Notes sit on the disc's rim, Chats above \"+\" and Notes below collapse",
-                  fixed.allSatisfy { abs(hypot($0.x - centre.x, $0.y - centre.y) - L.discButtonRadius) < 0.01 }
-                  && fixed[0].y < L.plusCentre.y && fixed[1].y > L.collapseCentre.y
-                  && abs(fixed[0].x - fixed[1].x) < 0.01)
-            check("edge dock: Chats and Notes are clear of the rim buttons, the timer chip and the record's waves",
-                  fixed.allSatisfy { f in
-                      rim.allSatisfy { hypot($0.x - f.x, $0.y - f.y) >= half + L.plusSize / 2 + 8 }
-                      && !chip.contains(f) && hypot(f.x - centre.x, f.y - centre.y) - half > L.discWavesRadius
+            let column: [(CGPoint, CGFloat)] = [(L.fixedCentre(.chats), L.itemSize), (L.searchCentre, L.plusSize),
+                                                (L.plusCentre, L.plusSize), (L.agentHubCentre, L.agentHubSize),
+                                                (L.collapseCentre, L.plusSize), (L.fixedCentre(.notes), L.itemSize)]
+            let gaps = zip(column, column.dropFirst()).map { a, b in hypot(a.0.x - b.0.x, a.0.y - b.0.y) - a.1 / 2 - b.1 / 2 }
+            check("edge dock: the rim column runs Chats, search, +, Agents, collapse, Notes, top to bottom, centres on the rim",
+                  zip(column, column.dropFirst()).allSatisfy { $0.0.y < $1.0.y }
+                  && column.allSatisfy { abs(hypot($0.0.x - centre.x, $0.0.y - centre.y) - L.discRadius) < 0.01 })
+            check("edge dock: equal \(L.rimGap) pt gaps between the rim controls (\(gaps.map { String(format: "%.1f", $0) }))",
+                  gaps.allSatisfy { abs($0 - L.rimGap) < 0.01 })
+            check("edge dock: the Agents orb sits on the centre line and is the largest control after the record",
+                  abs(L.agentHubCentre.y - centre.y) < 0.001 && L.agentHubSize > L.itemSize && L.agentHubSize > L.plusSize
+                  && L.agentHubSize < L.coverSize)
+            let chip = L.timerChipFrame
+            check("edge dock: no rim control touches the record's waves, the timer chip or the screen edge",
+                  column.allSatisfy { c, d in
+                      hypot(c.x - centre.x, c.y - centre.y) - d / 2 > L.discWavesRadius
+                      && !chip.insetBy(dx: -d / 2, dy: -d / 2).contains(c) && c.x + d / 2 * L.liftScale < L.dockSize.width
                   })
-            check("edge dock: Chats and Notes are clear of all 10 orbit places",
-                  fixed.allSatisfy { f in orbit.allSatisfy { hypot($0.x - f.x, $0.y - f.y) >= L.itemSize * L.liftScale + 4 } })
-        }
-        // Merlin agents (round nine): up to 3 orbs on an arc just outside the disc, above the record; the record stays.
-        do {
-            let orbs = (0..<L.agentOrbSlots).map { L.agentOrbCentre($0) }
-            let centre = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
-            let half = L.agentOrbSize / 2
+            let orbit = (0..<20).map { L.orbitPlace($0, of: 20, offset: 0).centre }
             let ringCentre = L.ringCentre
-            check("agents: the orbs are above the record, outside the disc and inside the screen edge",
-                  orbs.allSatisfy { o in o.y < centre.y - L.discWavesRadius && hypot(o.x - centre.x, o.y - centre.y) - half > L.discRadius
-                      && o.x + half * 1.12 < L.dockSize.width && o.y - half > 0 })
-            check("agents: the orbs never touch each other, Chats, the rim buttons or an orbit item at any turn",
-                  zip(orbs, orbs.dropFirst()).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) >= L.agentOrbSize * 1.12 + 4 }
-                  && orbs.allSatisfy { o in
-                      [L.fixedCentre(.chats), L.plusCentre].allSatisfy { hypot($0.x - o.x, $0.y - o.y) >= L.itemSize / 2 + half + 4 }
-                      && hypot(o.x - ringCentre.x, o.y - ringCentre.y) + half + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
-                  })
-            let idle = L.agentOrbCentre(1), ih = L.agentIdleSize / 2
-            check("agents: the larger idle orb (no job) is clear of Chats, the orbit and the screen edge",
-                  hypot(idle.x - L.fixedCentre(.chats).x, idle.y - L.fixedCentre(.chats).y) >= L.itemSize / 2 + ih + 4
-                  && hypot(idle.x - ringCentre.x, idle.y - ringCentre.y) + ih + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
-                  && idle.x + ih * 1.12 < L.dockSize.width && hypot(idle.x - centre.x, idle.y - centre.y) - ih > L.discRadius)
+            check("edge dock: no rim control touches an orbit place at any turn",
+                  column.allSatisfy { c, d in hypot(c.x - ringCentre.x, c.y - ringCentre.y) + d / 2 + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale }
+                  && column.allSatisfy { c, d in orbit.prefix(L.visibleSlots).allSatisfy { hypot($0.x - c.x, $0.y - c.y) >= L.itemSize / 2 * L.liftScale + d / 2 + 4 } })
+            // The moons: up to 3 close round the Agents orb, on its left, clear of its ring, each other, "+", collapse and the orbit.
+            let ringOuter = (L.agentHubSize + 7 + 3) / 2 + 1.5
+            let sh = L.agentSatelliteSize / 2 * 1.25
+            for n in 1...L.agentSatelliteSlots {
+                let sats = (0..<n).map { L.agentSatelliteCentre($0, of: n) }
+                check("agents: \(n) moon(s) beside the Agents orb are clear of its ring, each other, the rim buttons and the orbit",
+                      sats.allSatisfy { m in
+                          let h = hypot(m.x - L.agentHubCentre.x, m.y - L.agentHubCentre.y)
+                          return h - sh > ringOuter && m.x < L.agentHubCentre.x
+                              && [L.plusCentre, L.collapseCentre].allSatisfy { hypot($0.x - m.x, $0.y - m.y) >= L.plusSize / 2 + sh + 4 }
+                              && hypot(m.x - ringCentre.x, m.y - ringCentre.y) + sh + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
+                      }
+                      && zip(sats, sats.dropFirst()).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) >= 2 * sh + 3 })
+            }
+            check("agents: the hub is calm with no job, works with jobs, waits when a dialog is open, shows a check for 10 s",
+                  DockAgents.hub(jobs: [], history: []).state == .idle
+                  && DockAgents.hub(jobs: [AgentPool.fixtures[0]], history: []) == DockAgents.Hub(state: .working, running: 1)
+                  && DockAgents.hub(jobs: Array(AgentPool.fixtures.prefix(3)), history: []) == DockAgents.Hub(state: .waiting, running: 2))
+        }
+        do {
             let (dA, nameA) = EdgeDockFixtures.defaults()
             defer { EdgeDockFixtures.forget(nameA) }
             let am = EdgePanelModel(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: dA),
@@ -420,11 +426,8 @@ extension FeatureTests {
         }
         check("edge dock: \"+\", search and collapse: 39 pt, centres on the rim (the semicircle's circumference)",
               L.plusSize == 39 && onCircle && straddle)
-        let pitch1 = hypot(buttons[1].x - buttons[0].x, buttons[1].y - buttons[0].y)
-        let pitch2 = hypot(buttons[2].x - buttons[1].x, buttons[2].y - buttons[1].y)
-        check("edge dock: the buttons are 54 pt apart centre to centre, the middle one on the centre line, in order",
-              abs(pitch1 - 54) < 0.001 && abs(pitch2 - 54) < 0.001 && abs(buttons[1].y - mid.y) < 0.001
-              && buttons[0].y < buttons[1].y && buttons[1].y < buttons[2].y)
+        check("edge dock: search above \"+\", collapse below the centre line (the Agents orb between them)",
+              buttons[1].y < buttons[0].y && buttons[0].y < mid.y && buttons[2].y > mid.y)
         check("edge dock: the buttons are clear of the record's waves",
               buttons.allSatisfy { b in hypot(b.x - cover.x, b.y - cover.y) - L.plusSize / 2 > Double(disc.outer) })
         check("edge dock: the record at rest is 130 pt on the disc's centre; its waves reach 180 to 190 pt across",
@@ -433,8 +436,8 @@ extension FeatureTests {
         let field = L.searchFieldFrame
         let fieldCorners = [CGPoint(x: field.minX, y: field.minY), CGPoint(x: field.minX, y: field.maxY)]
         check("edge dock: the search field sits on the centre line, right of the search button, inside the disc",
-              abs(field.midY - L.searchCentre.y) < 0.001 && field.maxX < L.dockSize.width
-              && field.minX > L.searchCentre.x + L.plusSize / 2
+              abs(field.midY - mid.y) < 0.001 && field.maxX < L.dockSize.width
+              && field.minX > L.agentHubCentre.x + L.plusSize / 2
               && fieldCorners.allSatisfy { hypot($0.x - mid.x, $0.y - mid.y) <= L.discRadius - 4 })
         // The timer chip (about 60 × 22): inside the disc, clear of the bottom button and the record's waves.
         let chip = CGRect(x: L.timerChipCentre.x - 30, y: L.timerChipCentre.y - L.timerChipHeight / 2, width: 60,
