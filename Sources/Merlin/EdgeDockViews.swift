@@ -436,6 +436,18 @@ struct EdgeDockView: View {
                     .frame(width: s.width, height: s.height)
                     .transition(.opacity)
             }
+            // Chats and Notes: fixed on the disc's rim (not on the orbit); they hide while a query filters the apps.
+            if !model.isFiltering {
+                ForEach(Array([EdgePanelModel.Item.chats, .notes].enumerated()), id: \.element.id) { i, item in
+                    let c = EdgePanelLayout.fixedCentre(i == 0 ? .chats : .notes)
+                    EdgeRingItem(model: model, item: item, index: i) { h in
+                        if h { hovered = item.id } else if hovered == item.id { hovered = nil }
+                    }
+                    .position(x: c.x, y: c.y)
+                    .zIndex(hovered == item.id ? 2 : 1)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                }
+            }
             ForEach(Array(items.enumerated()).filter { places[$0.offset].shown > 0 }, id: \.element.id) { i, item in
                 let place = places[i]
                 EdgeRingItem(model: model, item: item, index: i) { h in

@@ -317,6 +317,27 @@ extension FeatureTests {
         }
         let chats = L.itemCentre(.chats, window: local), notes = L.itemCentre(.notes, window: local)
         check("edge dock: in window coordinates (y up) Chats is above Notes", chats.y > notes.y && abs(chats.x - notes.x) < 0.01)
+        // Chats and Notes off the orbit (2026-11-27): fixed on the disc's rim, past "+" and collapse, clear of the three
+        // buttons, the timer chip, the record's waves and every orbit place; so all 10 places are apps.
+        do {
+            let fixed = [L.fixedCentre(.chats), L.fixedCentre(.notes)]
+            let centre = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
+            let rim = [L.plusCentre, L.searchCentre, L.collapseCentre]
+            let half = L.itemSize / 2
+            let chip = L.timerChipFrame.insetBy(dx: -half, dy: -half)
+            let orbit = (0..<L.visibleSlots).map { L.orbitPlace($0, of: 20, offset: 0).centre }
+            check("edge dock: Chats and Notes sit on the disc's rim, Chats above \"+\" and Notes below collapse",
+                  fixed.allSatisfy { abs(hypot($0.x - centre.x, $0.y - centre.y) - L.discButtonRadius) < 0.01 }
+                  && fixed[0].y < L.plusCentre.y && fixed[1].y > L.collapseCentre.y
+                  && abs(fixed[0].x - fixed[1].x) < 0.01)
+            check("edge dock: Chats and Notes are clear of the rim buttons, the timer chip and the record's waves",
+                  fixed.allSatisfy { f in
+                      rim.allSatisfy { hypot($0.x - f.x, $0.y - f.y) >= half + L.plusSize / 2 + 8 }
+                      && !chip.contains(f) && hypot(f.x - centre.x, f.y - centre.y) - half > L.discWavesRadius
+                  })
+            check("edge dock: Chats and Notes are clear of all 10 orbit places",
+                  fixed.allSatisfy { f in orbit.allSatisfy { hypot($0.x - f.x, $0.y - f.y) >= L.itemSize * L.liftScale + 4 } })
+        }
         let cover = L.coverCentre, mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
         // The disc's three buttons ("+", search, collapse). Round five (Stitch) replaces the old column inside the disc
         // (14 pt from the rim, 12 pt gaps): 30 pt buttons on a 117 pt circle about the disc's centre, straddling the rim,
@@ -606,7 +627,7 @@ extension FeatureTests {
         edge.debugRevealWithoutWindow()
         m.openSearch()
         check("edge search: the button opens the field; an empty query leaves the ring as it was",
-              m.searchOpen && m.query.isEmpty && m.ringItems == m.items)
+              m.searchOpen && m.query.isEmpty && m.ringItems == m.ringApps.map { .app($0) })
         m.query = "fig"
         check("edge search: a query shows only its match (Chats and Notes hide)", m.ringItems == [.app(figma)])
         m.query = "LA"
@@ -625,7 +646,7 @@ extension FeatureTests {
         m.query = "cl"
         m.closeSearch()
         check("edge search: Esc (or a click outside, or loss of the keyboard) closes search and clears the query",
-              !m.searchOpen && m.query.isEmpty && m.ringItems == m.items)
+              !m.searchOpen && m.query.isEmpty && m.ringItems == m.ringApps.map { .app($0) })
         m.openSearch()
         m.query = "cl"
         edge.hide(leaveZoneFirst: true)

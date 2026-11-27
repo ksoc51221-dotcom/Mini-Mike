@@ -265,9 +265,21 @@ enum EdgePanelLayout {
         return NSPoint(x: d.minX + c.x, y: d.maxY - c.y)
     }
 
-    /// Chats (item 0) or Notes (item 1) with `count` items on the ring.
+    /// Chats or Notes: fixed on the disc's rim (2026-11-27: off the orbit, so all `visibleSlots` places are apps), in a
+    /// window frame's coordinates (y up). `count` is not used any more (kept for the callers).
     static func itemCentre(_ s: EdgePanelModel.Section, count: Int = 2, window: NSRect) -> NSPoint {
-        itemCentre(s == .notes ? 1 : 0, of: max(count, 2), window: window)
+        let d = dockFrame(window: window), c = fixedCentre(s)
+        return NSPoint(x: d.minX + c.x, y: d.maxY - c.y)
+    }
+
+    /// Chats above "+" and Notes below collapse, on the same rim circle as the three small buttons, `fixedItemGap` clear
+    /// of them. From the dock's top-left (y down).
+    static let fixedItemGap: CGFloat = 10
+    static func fixedCentre(_ s: EdgePanelModel.Section) -> CGPoint {
+        let chord = itemSize / 2 + plusSize / 2 + fixedItemGap
+        let a = discButtonStep + 2 * asin(chord / (2 * discButtonRadius))
+        let signed = s == .notes ? a : -a
+        return CGPoint(x: dockSize.width - discButtonRadius * cos(signed), y: dockSize.height / 2 + discButtonRadius * sin(signed))
     }
 
     /// The cover's centre (on the screen edge, in the middle) and the "+" button's centre, from the dock's top-left (y down).
@@ -475,7 +487,7 @@ final class EdgePanelModel: ObservableObject {
     var isFiltering: Bool { searchOpen && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var searchMatch: DockApp? { searchOpen ? Self.match(query, in: ringApps) : nil }
 
-    /// The orbit's turn in places (0: Chats on top). Whole numbers at rest; between them while a scroll moves it.
+    /// The orbit's turn in places (0: the first app on top). Whole numbers at rest; between them while a scroll moves it.
     @Published var orbitOffset: CGFloat = 0
     /// Scroll input not yet settled (a trackpad sends many small steps, then momentum).
     private var orbitSettleWork: DispatchWorkItem?
@@ -508,9 +520,10 @@ final class EdgePanelModel: ObservableObject {
         }
     }
 
-    /// What the ring draws: every item, or while a query is typed only its match (at the ring's middle-left point).
+    /// What the orbit draws: the pinned apps (Chats and Notes sit fixed on the disc's rim), or while a query is typed only
+    /// its match (at the ring's middle-left point).
     var ringItems: [Item] {
-        guard isFiltering else { return items }
+        guard isFiltering else { return ringApps.map { .app($0) } }
         return searchMatch.map { [.app($0)] } ?? []
     }
 
