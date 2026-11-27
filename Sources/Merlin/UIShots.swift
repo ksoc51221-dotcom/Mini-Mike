@@ -185,6 +185,10 @@ enum UIShots {
             let kick = edgeModel(.spotify, music: true)
             kick.spotify.beat.pinned = BeatSample(level: 0.9, bass: 0.9, kick: 1)
             shot("edge-18-strings-kick", margin: 0, edgeWall(mode, EdgePanelView(model: kick).clipped(), pad: 0))
+            // The bars round the record with a lead note and two earlier ones (a pinned frame).
+            let notes = edgeModel(.spotify, music: true)
+            notes.spotify.beat.pinned = BeatSample(level: 0.8, bass: 0.5, kick: 0, lead: 1, leadPitch: 0.7, leadNote: 3)
+            shot("edge-24-bars-notes", margin: 0, edgeWall(mode, EdgePanelView(model: notes).clipped(), pad: 0))
 
             // Round five, against the Stitch pictures: the whole window, 7 ring items (Chats, Notes, five apps with their
             // real icons). At rest with the fixture song PAUSED (the strings are three still circles); the Spotify card

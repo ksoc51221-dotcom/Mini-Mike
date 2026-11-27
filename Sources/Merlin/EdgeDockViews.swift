@@ -695,7 +695,7 @@ private struct EdgeDockDisc: View {
         case .track(let t):
             let c = EdgePanelLayout.coverCentre
             // While a timer shows, the beat room also stops short of its chip.
-            EdgeWaves(palette: p, place: timers.next == nil ? .disc : .discWithChip, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
+            MelodyBars(palette: p, place: timers.next == nil ? .disc : .discWithChip, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
                 .frame(width: EdgeDockArt.orbRadius * 2, height: EdgeDockArt.orbRadius * 2)
                 .position(x: c.x, y: c.y)
             EdgeCoverDisc(image: model.spotify.cover, spinning: t.isPlaying && model.shown && !Motion.still && !Motion.reduceMotion,
@@ -1711,7 +1711,7 @@ struct EdgeSpotifyCard: View {
             .frame(width: L.spotifyRecord, height: L.spotifyRecord)
             .background {
                 if let t {
-                    EdgeWaves(palette: p, place: .card, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
+                    MelodyBars(palette: p, place: .card, beat: model.spotify.beat, moving: (t.isPlaying || SpotifyBeat.pausedPulse) && model.shown)
                         .frame(width: orb, height: orb)
                 }
             }
