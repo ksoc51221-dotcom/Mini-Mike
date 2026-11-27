@@ -13,7 +13,7 @@ extension FeatureTests {
     /// The messaging mini windows. No page is loaded and no window is shown.
     static func messagingChecks(_ check: (String, Bool) -> Void) {
         let all = MessagingService.all
-        check("chat cards: the table holds Telegram, WhatsApp and Instagram, on https", all.map(\.name) == ["Telegram", "WhatsApp", "Instagram"] && all.allSatisfy { $0.url.scheme == "https" })
+        check("chat cards: the table holds Telegram, WhatsApp, Instagram and Claude, on https", all.map(\.name) == ["Telegram", "WhatsApp", "Instagram", "Claude"] && all.allSatisfy { $0.url.scheme == "https" })
         check("chat cards: each service has its own data store",
               Set(all.map(\.storeID)).count == all.count
                   && MessagingWebView.configuration(for: .telegram).websiteDataStore.identifier == MessagingService.telegram.storeID)

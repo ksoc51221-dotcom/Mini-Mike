@@ -26,7 +26,11 @@ struct MessagingService: Equatable {
     static let instagram = MessagingService(name: "Instagram", bundleID: "merlin.chat.instagram",
                                             url: URL(string: "https://www.instagram.com/direct/inbox/")!,
                                             storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C703")!)
-    static let all = [telegram, whatsApp, instagram]
+    /// claude.ai. "Continue with Google" opens a new window, which goes to the browser: sign in with email (a code) instead.
+    static let claude = MessagingService(name: "Claude", bundleID: "com.anthropic.claudefordesktop",
+                                         url: URL(string: "https://claude.ai/new")!,
+                                         storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C704")!)
+    static let all = [telegram, whatsApp, instagram, claude]
     /// Services with no Mac app, offered in the dock's app list as if installed.
     static let webOnlyApps = [DockApp(bundleID: instagram.bundleID, name: instagram.name)]
 
