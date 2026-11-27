@@ -1464,14 +1464,14 @@ private struct EdgeSongsList: View {
                     .edgeScrim(2)
                     .frame(maxWidth: .infinity).frame(height: 16)
             }
-            if model.songs.songs.isEmpty && !model.songsSearchRowShown {
+            if model.songs.songs.isEmpty && !model.songsSearchRowShown && model.webHits.isEmpty {
                 EdgeQuietLine(text: "Play a song in Spotify. It shows here.")
                 Spacer(minLength: 0)
             } else {
                 let content = VStack(spacing: 4) {
                     if model.songs.songs.isEmpty {
                         EdgeQuietLine(text: model.songsNotice ?? "Play a song in Spotify. It shows here.")
-                    } else if rows.isEmpty {
+                    } else if rows.isEmpty && model.webHits.isEmpty {
                         // One short line, above the Spotify search row ("Not in your songs yet." after Return).
                         Text(model.songsNotice ?? "No song found").font(.geist(12)).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1481,9 +1481,14 @@ private struct EdgeSongsList: View {
                     ForEach(rows) { song in
                         EdgeSongRow(song: song, cover: cover(for: song), palette: palette) { model.tapSong(song) }
                     }
+                    // Spotify results (Web API): a click plays the song in the background, as a My songs row does.
+                    ForEach(model.webHits) { hit in
+                        EdgeSongRow(song: SpotifySong(uri: hit.uri, name: hit.name, artist: hit.artist, artworkURL: nil,
+                                                      lastPlayed: Date(), starred: false),
+                                    cover: nil, palette: palette, fromSpotify: true) { model.tapHit(hit) }
+                    }
                     if model.songsSearchRowShown {
-                        EdgeSpotifySearchRow(query: model.songsQuery.trimmingCharacters(in: .whitespacesAndNewlines),
-                                             palette: palette) { model.searchSpotify() }
+                        EdgeSpotifySearchRow(label: searchLabel, palette: palette) { model.searchSpotify() }
                     }
                 }
                 if Motion.still {
@@ -1497,6 +1502,13 @@ private struct EdgeSongsList: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
+    /// The search row's text: no key, searching, or the query.
+    private var searchLabel: String {
+        if !model.webSearch.hasKey { return "Add a Spotify key in Settings" }
+        if model.webSearching { return "Searching Spotify\u{2026}" }
+        return "Search Spotify for \u{201C}\(model.songsQuery.trimmingCharacters(in: .whitespacesAndNewlines))\u{201D}"
+    }
+
     /// Only an image already loaded: the current song's cover. No new loads for rows.
     private func cover(for song: SpotifySong) -> NSImage? {
         guard let art = song.artworkURL, art == model.track?.artworkURL?.absoluteString else { return nil }
@@ -1504,9 +1516,10 @@ private struct EdgeSongsList: View {
     }
 }
 
-/// The last row while a query is typed: `Search Spotify for "<query>"`, which opens Spotify's own search.
+/// The last row while a query is typed: `Search Spotify for "<query>"`. It lists Spotify's songs in the card (Web API); it
+/// never opens the Spotify app. Without a key it says "Add a Spotify key in Settings" and opens Settings.
 private struct EdgeSpotifySearchRow: View {
-    let query: String
+    let label: String
     let palette: DockPalette
     let action: () -> Void
     @State private var hovering = false
@@ -1520,11 +1533,10 @@ private struct EdgeSpotifySearchRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 28, height: 28)
                     .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(palette.rimTintColor.opacity(0.12)))
-                Text("Search Spotify for \u{201C}\(query)\u{201D}").font(.geist(12, .medium)).foregroundStyle(.primary)
-                    .lineLimit(1).truncationMode(.middle)
+                Text(label).font(.geist(12, .medium)).foregroundStyle(.primary)
+                    .lineLimit(1).minimumScaleFactor(0.8).truncationMode(.middle)
                     .edgeScrim(3)
                 Spacer(minLength: 6)
-                Image(systemName: "arrow.up.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
             }
             .padding(.leading, 5)
             .padding(.trailing, 10)
@@ -1536,8 +1548,8 @@ private struct EdgeSpotifySearchRow: View {
         .buttonStyle(EdgePressStyle(scale: 0.98))
         .animation(Motion.still ? nil : Motion.edgeState, value: hovering)
         .edgeHover { hovering = $0 }
-        .help("Search Spotify for \u{201C}\(query)\u{201D}")
-        .accessibilityLabel("Search Spotify for \(query)")
+        .help(label)
+        .accessibilityLabel(label)
     }
 }
 
@@ -1545,6 +1557,8 @@ private struct EdgeSongRow: View {
     let song: SpotifySong
     let cover: NSImage?
     let palette: DockPalette
+    /// A Spotify result (not in My songs): a Spotify mark in place of the note, and no star.
+    var fromSpotify = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -1553,7 +1567,10 @@ private struct EdgeSongRow: View {
         Button(action: action) {
             HStack(spacing: 9) {
                 Group {
-                    if let cover {
+                    if fromSpotify {
+                        Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(palette.accentColor)
+                    } else if let cover {
                         Image(nsImage: cover).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
                     } else {
                         Image(systemName: "music.note").font(.system(size: 11, weight: .semibold))
@@ -1570,10 +1587,12 @@ private struct EdgeSongRow: View {
                 .lineLimit(1)
                 .edgeScrim(3)
                 Spacer(minLength: 6)
-                Image(systemName: song.starred ? "star.fill" : "star")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(song.starred ? AnyShapeStyle(palette.accentColor) : AnyShapeStyle(.tertiary))
-                    .accessibilityLabel(song.starred ? "Starred" : "Not starred")
+                if !fromSpotify {
+                    Image(systemName: song.starred ? "star.fill" : "star")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(song.starred ? AnyShapeStyle(palette.accentColor) : AnyShapeStyle(.tertiary))
+                        .accessibilityLabel(song.starred ? "Starred" : "Not starred")
+                }
             }
             .padding(.leading, 5)
             .padding(.trailing, 10)

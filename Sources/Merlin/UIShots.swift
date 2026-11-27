@@ -170,6 +170,7 @@ enum UIShots {
             // "My songs": "mi" typed (three sample rows, one starred) in the record's place; the star filter on with no
             // saved song (the empty-list line). The query is set on the model (a text stand-in for the field).
             shot("edge-13-songs-list", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(query: "mi")).clipped(), pad: 0))
+            shot("edge-13b-songs-spotify", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSpotifyHitsModel()).clipped(), pad: 0))
             shot("edge-14-songs-empty", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(starred: true, empty: true)).clipped(), pad: 0))
 
             // The dock taking its colours from generated covers: very bright, grey, blue. The full dock (six apps) with the
@@ -518,6 +519,16 @@ enum UIShots {
         return m
     }
 
+    /// The Spotify card after a Web API search (a fake search: no key, no network): no saved match, five Spotify songs.
+    private static func edgeSpotifyHitsModel() -> EdgePanelModel {
+        let m = edgeSongsModel(query: "harbour lights")
+        m.webSearch = PictureWebSearch()
+        m.searchSpotify()
+        let end = Date().addingTimeInterval(1)
+        while m.webHits.isEmpty && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        return m
+    }
+
     private static func edgeAppsModel(query: String = "", apps count: Int = 2,
                                       filter: EdgePanelModel.AppsFilter = .all) -> EdgePanelModel {
         let m = edgeModel(.apps, apps: count)
@@ -703,5 +714,17 @@ private struct ShotDockWorkspace: DockWorkspace {
             return FixtureDockWorkspace().icon(for: url)
         }
         return NSWorkspace.shared.icon(forFile: real.path)
+    }
+}
+
+/// Five made-up Spotify songs for the pictures (no network).
+private final class PictureWebSearch: SpotifyWebSearching {
+    var hasKey: Bool { true }
+    func search(_ query: String) async -> Result<[SpotifyHit], SpotifyWebSearch.Failure> {
+        let rows = [("Harbour Lights", "Mira Vale"), ("Lights Over the Harbour", "Lo Fen"), ("Harbour", "North Coast"),
+                    ("Harbour Lights (Live)", "Mira Vale"), ("Night Harbour", "Ka, Oren Pell")]
+        return .success(rows.enumerated().map { i, r in
+            SpotifyHit(uri: "spotify:track:" + String(format: "%022d", 900 + i), name: r.0, artist: r.1)
+        })
     }
 }

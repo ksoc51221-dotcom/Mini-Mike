@@ -638,7 +638,17 @@ final class EdgePanelModel: ObservableObject {
 
     /// The songs field has the keyboard. Only a click on the field activates it (never the card opening).
     @Published private(set) var songsSearchActive = false
-    @Published var songsQuery = "" { didSet { if songsQuery != oldValue { songsNotice = nil } } }
+    @Published var songsQuery = "" {
+        didSet { if songsQuery != oldValue { songsNotice = nil; webHits = []; webSearching = false } }
+    }
+    /// Songs found on Spotify for the query (up to 5), below My songs. A click plays one in the background.
+    @Published private(set) var webHits: [SpotifyHit] = []
+    /// A Spotify search runs (the row shows "Searching…").
+    @Published private(set) var webSearching = false
+    /// The Spotify Web API search (Merlin's own developer key). Tests put a fake here.
+    var webSearch: SpotifyWebSearching = SpotifyWebSearch.shared
+    /// Opens Settings (where the Spotify key is pasted). Tests count the calls.
+    var onOpenSettings: () -> Void = { LibraryHooks.openSettings?() }
     /// The star filter: starred songs only.
     @Published var songsStarredOnly = false
     /// A line about the last row click ("Spotify is not open.").
@@ -669,30 +679,59 @@ final class EdgePanelModel: ObservableObject {
         if !songsQuery.isEmpty { songsQuery = "" } else { deactivateSongsSearch() }
     }
 
-    /// Opens `spotify:search:` URLs (Spotify's own search). Tests put a fake here.
+    /// Nothing in the card opens a URL any more (2026-11-27, Part S: `spotify:search:` brought the Spotify app forward).
+    /// Kept so the tests can prove that the card opens nothing.
     var urlOpener: URLOpening = LiveURLOpener()
 
-    /// The list ends with "Search Spotify for …" while a query is typed.
-    var songsSearchRowShown: Bool { songsListShown && SpotifySearch.url(for: songsQuery) != nil }
+    /// The list ends with the Spotify search row while a query is typed and no Spotify results show.
+    var songsSearchRowShown: Bool {
+        songsListShown && !songsQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && webHits.isEmpty
+    }
 
-    /// "Search Spotify for …": opens Spotify's own search for the query (with "Open Spotify", the only controls that may
-    /// bring Spotify to the front). An empty query does nothing.
+    /// The search row: finds the query on Spotify (Web API, never the Spotify app) and lists up to 5 songs. Without a key
+    /// it says so and opens Settings, where the key is pasted. An empty query does nothing.
     func searchSpotify() {
-        guard let url = SpotifySearch.url(for: songsQuery) else { return }
-        urlOpener.open(url)
+        let q = songsQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty, !webSearching else { return }
+        guard webSearch.hasKey else {
+            songsNotice = SpotifyWebSearch.Failure.noKey.message
+            onOpenSettings()
+            return
+        }
+        webSearching = true
+        let search = webSearch
+        Task { @MainActor [weak self] in
+            let result = await search.search(q)
+            guard let self, self.songsQuery.trimmingCharacters(in: .whitespacesAndNewlines) == q else { return } // typed on
+            self.webSearching = false
+            switch result {
+            case .success(let hits):
+                self.webHits = hits
+                if hits.isEmpty { self.songsNotice = "Spotify found no song." }
+            case .failure(let f):
+                self.songsNotice = f.message
+            }
+        }
+    }
+
+    /// A Spotify result: plays it in the background (`play track` through the focus guard), as a My songs row does.
+    func tapHit(_ hit: SpotifyHit) {
+        tapSong(SpotifySong(uri: hit.uri, name: hit.name, artist: hit.artist, artworkURL: nil, lastPlayed: Date(), starred: false))
     }
 
     /// The line above the "Search Spotify for …" row after Return with no song match.
     static let notInSongs = "Not in your songs yet."
 
-    /// Return in the songs field: plays the first result. With no song match it only says so (never opens Spotify:
-    /// only a click on the "Search Spotify for …" row or on the arrow may bring Spotify forward).
+    /// Return in the songs field: plays the first of My songs, else the first Spotify result, else searches Spotify (with
+    /// a key) or says "Not in your songs yet." (without one). Never opens the Spotify app.
     func submitSongsSearch() {
         guard songsListShown else { return }
         if let first = songsVisible.first {
             tapSong(first)
-        } else if SpotifySearch.url(for: songsQuery) != nil {
-            songsNotice = Self.notInSongs
+        } else if let hit = webHits.first {
+            tapHit(hit)
+        } else if !songsQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if webSearch.hasKey { searchSpotify() } else { songsNotice = Self.notInSongs }
         }
     }
 

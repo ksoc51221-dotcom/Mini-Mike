@@ -316,6 +316,7 @@ struct LibrarySettingsView: View {
                 }
             }
             LSVoice()
+            LSSpotifyKey()
         }
     }
 
@@ -730,6 +731,92 @@ private struct LSVoice: View {
         Task { @MainActor in
             let result = await GroqTranscriber.check(key: key, transport: GroqTranscriber.liveTransport)
             status = result.message
+            testing = false
+        }
+    }
+}
+
+/// The Spotify key: the client ID and secret of Merlin's own Spotify developer app (Keychain; only whether one is saved is
+/// ever shown). The songs card uses it to find songs that are not in My songs, without opening the Spotify app.
+private struct LSSpotifyKey: View {
+    @State private var hasKey = false
+    @State private var id = ""
+    @State private var secret = ""
+    @State private var status = ""
+    @State private var testing = false
+    private let keys: GroqKeyStore
+
+    init(keys: GroqKeyStore = SpotifyKeys.shared) { self.keys = keys }
+
+    private var canSave: Bool {
+        !id.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !secret.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        LSGroup {
+            LSRow("Spotify key", "Client ID and secret of your Spotify developer app, kept in the macOS Keychain. The songs card uses it to search Spotify.") {
+                HStack(spacing: 8) {
+                    if hasKey {
+                        Text("Saved").font(.geist(12)).foregroundStyle(Theme.inkSecondary.color)
+                        LSButton(testing ? "Testing…" : "Test", enabled: !testing) { test() }
+                        LSButton("Remove", role: .destructive) {
+                            SpotifyKeys.remove(in: keys)
+                            hasKey = false
+                            status = ""
+                        }
+                    } else {
+                        field("Client ID", text: $id, secure: false)
+                        field("Client secret", text: $secret, secure: true)
+                        LSButton("Save", enabled: canSave) { save() }
+                    }
+                }
+                .fixedSize()
+            }
+            if !status.isEmpty {
+                HStack {
+                    Spacer(minLength: 8)
+                    Text(status).font(.geist(12, .medium))
+                        .foregroundStyle(status == Self.works ? Theme.ink.color : Theme.alert.color)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+            }
+        }
+        .onAppear { hasKey = SpotifyKeys.pair(keys) != nil } // one Keychain read per showing
+    }
+
+    static let works = "The key works."
+
+    private func field(_ hint: String, text: Binding<String>, secure: Bool) -> some View {
+        ZStack(alignment: .leading) {
+            if text.wrappedValue.isEmpty {
+                Text(hint).font(.geist(13)).foregroundStyle(Theme.inkTertiary.color).allowsHitTesting(false)
+            }
+            Group {
+                if secure { SecureField("", text: text) } else { TextField("", text: text) }
+            }
+            .textFieldStyle(.plain).font(.geist(13)).foregroundStyle(Theme.ink.color)
+            .onSubmit { if canSave { save() } }
+        }
+        .padding(.horizontal, 8).frame(width: 130, height: 26)
+        .lsInputBox()
+    }
+
+    private func save() {
+        let ok = SpotifyKeys.save(id: id, secret: secret, in: keys)
+        id = ""; secret = "" // the fields never keep the key
+        guard ok else { status = "Couldn't save the key"; return }
+        hasKey = true
+        status = ""
+    }
+
+    private func test() {
+        testing = true
+        status = ""
+        let check = SpotifyWebSearch(keys: keys, transport: SpotifyWebSearch.liveTransport)
+        Task { @MainActor in
+            let failure = await check.checkKey()
+            status = failure?.message ?? Self.works
+            if failure == .noKey { hasKey = false }
             testing = false
         }
     }

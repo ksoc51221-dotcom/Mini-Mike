@@ -502,6 +502,9 @@ extension FeatureTests {
                                     songs: EdgeDockFixtures.songs())
             let opener = CountingURLOpener()
             pm.urlOpener = opener
+            var settingsOpened = 0
+            pm.onOpenSettings = { settingsOpened += 1 }
+            pm.webSearch = SpotifyWebSearch(keys: MemoryGroqKeyStore(), transport: { _ in throw URLError(.notConnectedToInternet) })
             var hides = 0
             pm.onOpenApp = { _ in hides += 1 }
             pm.onCollapse = { hides += 1 }
@@ -532,9 +535,10 @@ extension FeatureTests {
             check("edge spotify play: play/pause, next, previous, stop and the heart open nothing and keep the dock",
                   player.sent.count == 6 && opener.count == 0 && ws3.opened.isEmpty && hides == 0 && pm.section == .spotify)
             pm.searchSpotify()
-            check("edge spotify play: the \"Search Spotify for …\" row opens Spotify's search once", opener.count == 1 && ws3.opened.isEmpty)
+            check("edge spotify play: the search row with no key opens Settings, never a URL or the Spotify app",
+                  settingsOpened == 1 && opener.count == 0 && ws3.opened.isEmpty && hides == 0)
             pm.tapOpenSpotify()
-            check("edge spotify play: the arrow (\"Open Spotify\") opens Spotify once", opener.count == 1 && ws3.opened.count == 1)
+            check("edge spotify play: the arrow (\"Open Spotify\") opens Spotify once", opener.count == 0 && ws3.opened.count == 1)
         }
         closed.tapSpotifyCommand(.playPause)
         closed.tapSpotifyCommand(.stop)

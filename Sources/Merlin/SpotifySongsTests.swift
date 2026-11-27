@@ -6,6 +6,33 @@ private final class FakeURLOpener: URLOpening {
     func open(_ url: URL) { opened.append(url) }
 }
 
+/// A Spotify Web API search with no network: records the queries, returns `result`.
+private final class FakeWebSearch: SpotifyWebSearching {
+    var hasKey: Bool
+    var result: Result<[SpotifyHit], SpotifyWebSearch.Failure>
+    private(set) var queries: [String] = []
+    init(hasKey: Bool, result: Result<[SpotifyHit], SpotifyWebSearch.Failure> = .success([])) {
+        self.hasKey = hasKey; self.result = result
+    }
+    func search(_ query: String) async -> Result<[SpotifyHit], SpotifyWebSearch.Failure> {
+        queries.append(query)
+        return result
+    }
+}
+
+/// Requests sent through a fake transport, and the replies it gives in order (an empty reply list: no connection).
+private final class FakeWire {
+    var requests: [URLRequest] = []
+    var replies: [(Data, Int)] = []
+    var transport: SpotifyWebSearch.Transport {
+        { request in
+            self.requests.append(request)
+            guard !self.replies.isEmpty else { throw URLError(.notConnectedToInternet) }
+            return self.replies.removeFirst()
+        }
+    }
+}
+
 /// "My songs" (B2): the store in a temp folder only, the track URI rule against hostile values, the `play track` script
 /// through the fixture backend, the card's model (heart, rows, star filter) and the songs field's keyboard path.
 /// No real Apple Event, network, app launch, file or defaults of the user.
@@ -21,6 +48,66 @@ extension FeatureTests {
         func uri(_ n: Int) -> String { "spotify:track:" + String(format: "%022d", n) }
         func track(_ n: Int, _ name: String = "Song", _ artist: String = "Artist", playing: Bool = true) -> SpotifyTrack {
             SpotifyTrack(title: name, artist: artist, artworkURL: nil, isPlaying: playing, uri: uri(n))
+        }
+
+        // MARK: Spotify Web API search (Part S): a store in memory and a fake transport, never the network or Keychain
+        do {
+            let store = MemoryGroqKeyStore()
+            check("spotify key: an empty store has no pair", SpotifyKeys.pair(store) == nil)
+            check("spotify key: a blank half is not saved", !SpotifyKeys.save(id: " ", secret: "s", in: store) && store.read() == nil)
+            check("spotify key: both halves are saved trimmed",
+                  SpotifyKeys.save(id: " abc ", secret: "xyz\n", in: store)
+                  && SpotifyKeys.pair(store).map { $0.id == "abc" && $0.secret == "xyz" } == true)
+            func run(_ api: SpotifyWebSearch, _ q: String) -> Result<[SpotifyHit], SpotifyWebSearch.Failure>? {
+                var out: Result<[SpotifyHit], SpotifyWebSearch.Failure>?
+                Task { @MainActor in out = await api.search(q) }
+                _ = EdgeDockFixtures.waitUntil { out != nil }
+                return out
+            }
+            let token = Data(#"{"access_token":"T1","token_type":"Bearer","expires_in":3600}"#.utf8)
+            let found = Data(#"{"tracks":{"items":[{"name":"Song A","uri":"spotify:track:4uLU6hMCjMI75M1A2tKUQC","artists":[{"name":"X"},{"name":"Y"}]},{"name":"Bad","uri":"spotify:album:1","artists":[]}]}}"#.utf8)
+            let songA = SpotifyHit(uri: "spotify:track:4uLU6hMCjMI75M1A2tKUQC", name: "Song A", artist: "X, Y")
+            let wire = FakeWire()
+            wire.replies = [(token, 200), (found, 200)]
+            let api = SpotifyWebSearch(keys: store, transport: wire.transport)
+            check("spotify search: a hit keeps the name, the artists and a valid track URI; others are dropped",
+                  run(api, " a b ") == .success([songA]))
+            let tokenRequest = wire.requests.first, searchRequest = wire.requests.last
+            let items = searchRequest?.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems } ?? []
+            func item(_ n: String) -> String? { items.first { $0.name == n }?.value }
+            check("spotify search: the token request is client credentials with Basic id:secret",
+                  wire.requests.count == 2 && tokenRequest?.url == SpotifyWebSearch.tokenURL && tokenRequest?.httpMethod == "POST"
+                  && tokenRequest?.value(forHTTPHeaderField: "Authorization") == "Basic " + Data("abc:xyz".utf8).base64EncodedString()
+                  && tokenRequest?.httpBody == Data("grant_type=client_credentials".utf8))
+            check("spotify search: the search sends the trimmed query, tracks only, 5 results, a market and the bearer token",
+                  searchRequest?.url?.host == "api.spotify.com" && item("q") == "a b" && item("type") == "track" && item("limit") == "5"
+                  && item("market")?.count == 2 && searchRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer T1")
+            wire.replies = [(found, 200)]
+            check("spotify search: a second search reuses the token", run(api, "c") == .success([songA]) && wire.requests.count == 3)
+            wire.replies = [(Data(), 401), (token, 200), (found, 200)]
+            check("spotify search: an old token (401) gets one fresh token and one retry",
+                  run(api, "d") == .success([songA]) && wire.requests.count == 6)
+            wire.replies = [(Data(), 401), (token, 200), (Data(), 401)]
+            check("spotify search: a second 401 says the key is wrong", run(api, "e") == .failure(.badKey))
+            let fresh = FakeWire()
+            fresh.replies = [(Data(), 400)]
+            check("spotify search: a refused token says the key is wrong",
+                  run(SpotifyWebSearch(keys: store, transport: fresh.transport), "f") == .failure(.badKey))
+            check("spotify search: no connection says so",
+                  run(SpotifyWebSearch(keys: store, transport: FakeWire().transport), "g") == .failure(.offline))
+            let none = FakeWire()
+            check("spotify search: no key: no request, \"Add a Spotify key in Settings.\"",
+                  run(SpotifyWebSearch(keys: MemoryGroqKeyStore(), transport: none.transport), "h") == .failure(.noKey)
+                  && none.requests.isEmpty && SpotifyWebSearch.Failure.noKey.message == "Add a Spotify key in Settings.")
+            let cache = MemoryGroqKeyStore()
+            let cached = SpotifyWebSearch(keys: cache, transport: FakeWire().transport)
+            let before = cached.hasKey
+            SpotifyKeys.save(id: "i", secret: "s", in: cache)
+            let stale = cached.hasKey
+            cached.forgetKey()
+            check("spotify search: the key is read once and again only after forgetKey (a save or remove)",
+                  !before && !stale && cached.hasKey)
+            check("spotify search: the tests' shared key store is in memory, not the Keychain", SpotifyKeys.shared is MemoryGroqKeyStore)
         }
 
         // MARK: Spotify's own search URL (no web API; nothing is opened here)
@@ -207,25 +294,57 @@ extension FeatureTests {
         EdgeDockFixtures.waitUntil { backend.sent.count == 2 }
         check("songs card: Return plays the first result", backend.sent.last == .playTrack(current))
         check("songs card: Return with a match opens no search and clears the query", opener.opened.isEmpty && m.songsQuery.isEmpty)
+        let noKey = FakeWebSearch(hasKey: false)
+        var settingsOpened = 0
+        m.webSearch = noKey
+        m.onOpenSettings = { settingsOpened += 1 }
         m.songsQuery = "zzz"
         m.submitSongsSearch()
         EdgeDockFixtures.waitUntil(0.2) { backend.sent.count > 2 }
-        check("songs card: no match: Return plays nothing, opens nothing and says \"Not in your songs yet.\"",
-              m.songsVisible.isEmpty && backend.sent.count == 2 && opener.opened.isEmpty
+        check("songs card: no match, no key: Return plays nothing, opens nothing and says \"Not in your songs yet.\"",
+              m.songsVisible.isEmpty && backend.sent.count == 2 && opener.opened.isEmpty && settingsOpened == 0
               && m.songsNotice == EdgePanelModel.notInSongs && m.songsQuery == "zzz")
+        m.searchSpotify()
+        check("songs card: no key: the search row says \"Add a Spotify key in Settings.\", opens Settings once, opens no URL",
+              m.songsNotice == SpotifyWebSearch.Failure.noKey.message && settingsOpened == 1 && opener.opened.isEmpty
+              && noKey.queries.isEmpty && backend.sent.count == 2)
+        let hits = [SpotifyHit(uri: uri(7), name: "Art House", artist: "Lo Fen"), SpotifyHit(uri: uri(8), name: "Art Room", artist: "Ka")]
+        let web = FakeWebSearch(hasKey: true, result: .success(hits))
+        m.webSearch = web
         m.songsQuery = "  Art House  "
         m.searchSpotify()
-        check("songs card: only the search row's click opens Spotify's search for the trimmed query, once",
-              opener.opened.map(\.absoluteString) == ["spotify:search:Art%20House"] && backend.sent.count == 2)
+        EdgeDockFixtures.waitUntil { !m.webHits.isEmpty }
+        check("songs card: with a key, the search row lists Spotify's songs for the trimmed query; it opens nothing",
+              web.queries == ["Art House"] && m.webHits == hits && !m.songsSearchRowShown && opener.opened.isEmpty
+              && settingsOpened == 1 && backend.sent.count == 2)
+        m.tapHit(hits[1])
+        EdgeDockFixtures.waitUntil { backend.sent.count == 3 }
+        check("songs card: a Spotify result plays with play track and clears the query and the results",
+              backend.sent.last == .playTrack(uri(8)) && m.songsQuery.isEmpty && m.webHits.isEmpty && opener.opened.isEmpty)
+        m.songsQuery = "qqq"
+        m.submitSongsSearch()
+        EdgeDockFixtures.waitUntil { !m.webHits.isEmpty }
+        check("songs card: with a key, Return with no match searches Spotify", web.queries.count == 2 && m.webHits == hits)
+        m.submitSongsSearch()
+        EdgeDockFixtures.waitUntil { backend.sent.count == 4 }
+        check("songs card: a second Return plays the first Spotify result", backend.sent.last == .playTrack(uri(7)))
+        web.result = .failure(.badKey)
+        m.songsQuery = "qqx"
+        m.searchSpotify()
+        EdgeDockFixtures.waitUntil { m.songsNotice != nil }
+        check("songs card: a refused key says so in the card", m.songsNotice == SpotifyWebSearch.Failure.badKey.message && m.webHits.isEmpty)
+        m.songsQuery = "qqy"
+        check("songs card: typing clears the notice", m.songsNotice == nil && m.songsSearchRowShown)
         m.songsQuery = "   "
         m.submitSongsSearch(); m.searchSpotify()
-        check("songs card: a blank query shows no search row and opens nothing", !m.songsSearchRowShown && opener.opened.count == 1)
+        check("songs card: a blank query shows no search row and searches nothing",
+              !m.songsSearchRowShown && web.queries.count == 3 && opener.opened.isEmpty)
         m.songsQuery = ""
         m.tapSongsStarFilter()
         check("songs card: the star filter shows starred songs only (none yet)", m.songsListShown && m.songsVisible.isEmpty)
         m.submitSongsSearch()
         check("songs card: the star filter with no query: no search row, Return opens nothing",
-              !m.songsSearchRowShown && opener.opened.count == 1)
+              !m.songsSearchRowShown && opener.opened.isEmpty)
         m.tapSongsStarFilter()
         check("songs card: the filter toggles off", !m.songsStarredOnly && !m.songsListShown)
 
