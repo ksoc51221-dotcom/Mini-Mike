@@ -97,6 +97,18 @@ extension FeatureTests {
                 && cap2.map { near($0.source.minX, $0.global.minX - second.minX) && near($0.source.minY, second.maxY - $0.global.maxY)
                     && $0.source.maxX <= second.width + 0.01 } == true
                 && EdgeLensPolicy.pixelSize(NSRect(x: 0, y: 0, width: 100.4, height: 50), scale: 2) == (201, 100))
+        do {
+            // 2026-11-27: the compositor load. Half-size frames at 60 a second (half the old pixel rate), and with no card
+            // open only the dock's strip is copied.
+            let w = NSRect(x: 1000, y: 100, width: 741, height: 641)
+            let dock = EdgeLensPolicy.glassRect(window: w, cardOpen: false), all = EdgeLensPolicy.glassRect(window: w, cardOpen: true)
+            check("lens: 60 frames a second at half the screen's pixel scale (half the old pixel rate)",
+                  EdgeLensPolicy.framesPerSecond == 60 && EdgeLensPolicy.captureScale == 0.5)
+            check("lens: no card open -> only the dock's strip at the right edge is copied, full height (\(dock.width) of \(w.width) pt)",
+                  dock.maxX == w.maxX && dock.minY == w.minY && dock.height == w.height
+                  && dock.width == EdgePanelLayout.dockSize.width + EdgeLensPolicy.dockGlassPad && dock.width < w.width / 2)
+            check("lens: a card open -> the whole window is copied", all == w)
+        }
         // Every sample from any edge point of every surface stays in the captured rect (the disc's right half runs past
         // the screen edge: there the clamp holds it in, as the texture's clamp does on the GPU).
         var inside = true

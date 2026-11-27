@@ -38,8 +38,21 @@ enum EdgeLensPolicy {
     /// No frame this long after the dock showed: the system glass instead (until frames flow). The first real-screen run
     /// measured 588 ms from show to first frame; until the frame the lens draws its body dim and rim only.
     static let firstFrameTimeout: TimeInterval = 1.2
-    /// About 30 frames a second.
-    static let framesPerSecond = 30
+    /// About 60 frames a second (2026-11-27: 30 made the glass trail a page that scrolls behind it).
+    static let framesPerSecond = 60
+    /// The stream's pixels per screen pixel: half (a quarter of the pixels), so 60 frames a second cost the compositor
+    /// less than the old full-size 30 (Merlin chose a slightly softer picture for glass that keeps up).
+    static let captureScale: CGFloat = 0.5
+    /// Room round the dock's own width when no card is open (the hover lift and the rim light).
+    static let dockGlassPad: CGFloat = 16
+
+    /// Where the glass is (screen coordinates): the whole panel window while a card is open, else only the dock at the
+    /// window's right edge (the rest of the window is empty, so its pixels need no copy).
+    static func glassRect(window: NSRect, cardOpen: Bool) -> NSRect {
+        guard !cardOpen else { return window }
+        let w = min(window.width, EdgePanelLayout.dockSize.width + dockGlassPad)
+        return NSRect(x: window.maxX - w, y: window.minY, width: w, height: window.height)
+    }
     /// The room round the panel's rectangle for the bend and the frost (at least `EdgeLensProfile.maxShiftLimit`).
     static let margin: CGFloat = 24
 
@@ -78,7 +91,7 @@ enum EdgeLensPolicy {
         return (g, CGRect(x: g.minX - display.minX, y: display.maxY - g.maxY, width: g.width, height: g.height))
     }
 
-    /// The stream's size in pixels (the display's pixel scale, so the centre stays 1:1 sharp).
+    /// The stream's size in pixels (`scale`: the display's pixel scale times `captureScale`).
     static func pixelSize(_ rect: NSRect, scale: CGFloat) -> (width: Int, height: Int) {
         (max(1, Int((rect.width * scale).rounded())), max(1, Int((rect.height * scale).rounded())))
     }
@@ -132,7 +145,12 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
     /// listing (most of the show-to-first-frame wait). Nothing is captured while hidden.
     private var listed: (window: CGWindowID, display: CGDirectDisplayID, scWindow: SCWindow, scDisplay: SCDisplay)?
 
-    private struct Key: Equatable { let window: Int; let frame: NSRect; let display: CGDirectDisplayID }
+    private struct Key: Equatable { let window: Int; let frame: NSRect; let display: CGDirectDisplayID; var region: NSRect }
+    /// What each stream size shows: a frame's pixel size says which rectangle it is (the region changes live, by
+    /// `updateConfiguration`, and the old size's frames may still land after it).
+    private var rectBySize: [String: NSRect] = [:]
+    private var config: SCStreamConfiguration?
+    private static func sizeKey(_ w: Int, _ h: Int) -> String { "\(w)x\(h)" }
     private var key: Key?
     private var token: UUID?
     private var stream: SCStream?
@@ -159,13 +177,50 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
 
     /// The controller calls this on show, on hide (after the fade) and when the style changes: starts, keeps, restarts
     /// (another display or rectangle) or stops the stream.
-    func sync(requested: EdgeGlassStyle, shown: Bool, window: NSWindow?) {
+    func sync(requested: EdgeGlassStyle, shown: Bool, window: NSWindow?, cardOpen: Bool = true) {
         guard EdgeLensPolicy.mayRun(requested: requested, shown: shown, flat: EdgeDockArt.flat, runAllowed: EdgeLensPolicy.allowedHere),
               let window, let screen = window.screen ?? NSScreen.main, let display = screen.displayID else { return stop() }
-        let k = Key(window: window.windowNumber, frame: window.frame, display: display)
+        let k = Key(window: window.windowNumber, frame: window.frame, display: display,
+                    region: EdgeLensPolicy.glassRect(window: window.frame, cardOpen: cardOpen))
         if k == key, token != nil { return }
+        // Only the region changed (a card opened or closed): the running stream copies the new rectangle.
+        if var old = key, token != nil, stream != nil, let config, old.window == k.window, old.frame == k.frame,
+           old.display == k.display {
+            old.region = k.region
+            if old == k, retarget(region: k.region, screen: screen, config: config, window: window, display: display, key: k) {
+                key = k
+                return
+            }
+        }
         stop()
         start(window: window, screen: screen, display: display, key: k)
+    }
+
+    /// Points the running stream at a new region. False: no stream or no rectangle (the caller restarts).
+    private func retarget(region: NSRect, screen: NSScreen, config: SCStreamConfiguration, window: NSWindow,
+                          display: CGDirectDisplayID, key k: Key) -> Bool {
+        guard let s = stream, let rect = EdgeLensPolicy.captureRect(window: region, display: screen.frame) else { return false }
+        let size = EdgeLensPolicy.pixelSize(rect.global, scale: screen.backingScaleFactor * EdgeLensPolicy.captureScale)
+        rectBySize[Self.sizeKey(size.width, size.height)] = rect.global
+        config.sourceRect = rect.source
+        config.width = size.width
+        config.height = size.height
+        let token = self.token
+        Task { @MainActor [weak self] in
+            do { try await s.updateConfiguration(config) } catch {
+                guard let self, self.token == token else { return }
+                self.stop() // the next sync starts afresh
+            }
+        }
+        // A shrink (a card closed): the wide picture still covers the dock, so it stays until a new frame lands.
+        if captureRect.contains(rect.global) { return true }
+        // A widen: a still backdrop may send no new frame; none of the new size soon -> restart on the new region.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self, weak window] in
+            guard let self, let window, self.token == token, self.key == k, self.captureRect != rect.global else { return }
+            self.stop()
+            self.start(window: window, screen: screen, display: display, key: k)
+        }
+        return true
     }
 
     private func start(window: NSWindow, screen: NSScreen, display: CGDirectDisplayID, key k: Key) {
@@ -190,7 +245,7 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
         hasDevice = renderer.device != nil
         evaluate()
         guard decision.drawsLens, let device = renderer.device,
-              let rect = EdgeLensPolicy.captureRect(window: window.frame, display: screen.frame) else { return }
+              let rect = EdgeLensPolicy.captureRect(window: k.region, display: screen.frame) else { return }
         captureRect = rect.global
         // The views kept from the last show drop its picture now, and follow the slide-in (an ancestor moves them, which
         // they do not hear about) until the first frames land.
@@ -219,7 +274,8 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
             CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &c)
             lock.lock(); cache = c; lock.unlock()
         }
-        let size = EdgeLensPolicy.pixelSize(rect.global, scale: screen.backingScaleFactor)
+        let size = EdgeLensPolicy.pixelSize(rect.global, scale: screen.backingScaleFactor * EdgeLensPolicy.captureScale)
+        rectBySize = [Self.sizeKey(size.width, size.height): rect.global]
         let windowID = CGWindowID(window.windowNumber)
         DispatchQueue.main.asyncAfter(deadline: .now() + EdgeLensPolicy.firstFrameTimeout + 0.01) { [weak self] in
             guard let self, self.token == token else { return }
@@ -256,6 +312,7 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
                 config.pixelFormat = kCVPixelFormatType_32BGRA
                 config.colorSpaceName = CGColorSpace.sRGB
                 config.queueDepth = 3
+                self.config = config
                 let s = SCStream(filter: filter, configuration: config, delegate: self)
                 try s.addStreamOutput(self, type: .screen, sampleHandlerQueue: self.queue)
                 self.stream = s
@@ -275,6 +332,7 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
     func stop() {
         token = nil
         key = nil
+        config = nil
         if let s = stream {
             stream = nil
             Task { try? await s.stopCapture() }
@@ -325,8 +383,12 @@ final class EdgeLensCapture: NSObject, ObservableObject, SCStreamOutput, SCStrea
         CVMetalTextureCacheCreateTextureFromImage(kCFAllocatorDefault, cache, pixels, nil, .bgra8Unorm,
                                                   CVPixelBufferGetWidth(pixels), CVPixelBufferGetHeight(pixels), 0, &made)
         guard let made else { return }
+        let sizeKey = Self.sizeKey(CVPixelBufferGetWidth(pixels), CVPixelBufferGetHeight(pixels))
         DispatchQueue.main.async { [weak self] in
             guard let self, self.stream === stream, self.token != nil else { return }
+            // The rectangle this frame shows (it changes when a card opens or closes).
+            guard let shows = self.rectBySize[sizeKey] else { return }
+            self.captureRect = shows
             self.latest = made
             self.latestPixels = pixels
             self.texture = CVMetalTextureGetTexture(made)

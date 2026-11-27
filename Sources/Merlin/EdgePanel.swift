@@ -1404,6 +1404,7 @@ final class EdgePanelController {
     private var dotState: EdgeDotState = .absent
     /// A style change on a shown panel starts or stops the lens stream.
     private var lensStyleWatch: AnyCancellable?
+    private var lensSectionWatch: AnyCancellable?
 
     /// Point to ask (and anything else the app knows about) stops the panel from showing.
     var isBlocked: () -> Bool = { false }
@@ -1428,6 +1429,9 @@ final class EdgePanelController {
         model.onDelete = { [weak self] id in self?.onDelete?(id) }
         lensStyleWatch = model.$glassStyle.dropFirst().removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { self?.syncLens() } // after the new value has landed
+        }
+        lensSectionWatch = model.$section.dropFirst().map { $0 != nil }.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.syncLens() } // a card opened or closed: the copied region follows
         }
         model.onOpenNote = { [weak self] id in
             self?.hide(leaveZoneFirst: true)
@@ -1596,7 +1600,9 @@ final class EdgePanelController {
     /// The lens stream runs only while the dock shows in the `lens` style (`EdgeLensPolicy.mayRun`); a new screen or
     /// rectangle restarts it.
     private func syncLens() {
-        EdgeLensCapture.shared.sync(requested: model.glassStyle, shown: reveal.visible && window?.isVisible == true, window: window)
+        // A card widens the copied region; with none open only the dock's strip is copied.
+        EdgeLensCapture.shared.sync(requested: model.glassStyle, shown: reveal.visible && window?.isVisible == true, window: window,
+                                    cardOpen: model.section != nil)
     }
 
     /// The music is read only while the panel shows, and the live service only in the app (never in a test).
