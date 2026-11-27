@@ -12,6 +12,11 @@ private final class FakeSpotify: SpotifyBackend, @unchecked Sendable {
     func send(_ command: SpotifyCommand) { sent.append(command) }
 }
 
+private final class FakeFocus: SpotifyFocusKeeping {
+    var calls = 0
+    func keepFocus() { calls += 1 }
+}
+
 private struct FakeLoader: DockImageLoader {
     var image: NSImage?
     func load(_ url: URL, completion: @escaping (NSImage?) -> Void) { completion(image) }
@@ -61,6 +66,40 @@ extension FeatureTests {
 
         let url = URL(string: "https://i.scdn.co/image/abc")
         let playing = SpotifyTrack(title: "T", artist: "A", artworkURL: url, isPlaying: true)
+
+        // The focus guard: Spotify comes to the front on `play track`; Merlin gives the front back.
+        do {
+            typealias G = SpotifyFocusGuard
+            let finder: pid_t = 501
+            let fromApp = G.Before(front: finder, spotifyWasFront: false, spotifyWasHidden: false)
+            check("spotify focus: Spotify jumps in front of another app -> that app comes back",
+                  G.repair(fromApp, activatedIsSpotify: true) == .activate(finder))
+            check("spotify focus: Spotify was hidden -> it is hidden again (its window never stays on screen)",
+                  G.repair(G.Before(front: finder, spotifyWasFront: false, spotifyWasHidden: true), activatedIsSpotify: true) == .hideSpotify)
+            check("spotify focus: Spotify was already in front -> nothing changes",
+                  G.repair(G.Before(front: 7, spotifyWasFront: true, spotifyWasHidden: false), activatedIsSpotify: true) == .none)
+            check("spotify focus: another app comes to the front (the user's own click) -> nothing changes",
+                  G.repair(fromApp, activatedIsSpotify: false) == .none)
+            check("spotify focus: no app was in front and Spotify was showing -> nothing to give back",
+                  G.repair(G.Before(front: nil, spotifyWasFront: false, spotifyWasHidden: false), activatedIsSpotify: true) == .none)
+            check("spotify focus: the guard listens for 2 s at most", G.window == 2)
+
+            let player = FakeSpotify(), focus = FakeFocus()
+            let guarded = SpotifyService(backend: player, loader: FakeLoader(image: nil), focus: focus)
+            guarded.play("spotify:track:4uLU6hMCjMI75M1A2tKUQC")
+            wait { player.sent.count == 1 }
+            check("spotify focus: a saved song arms the guard once and sends one play track",
+                  focus.calls == 1 && player.sent == [.playTrack("spotify:track:4uLU6hMCjMI75M1A2tKUQC")])
+            for c: SpotifyCommand in [.playPause, .play, .pause, .next, .previous, .stop] { guarded.send(c) }
+            wait { player.sent.count == 7 }
+            check("spotify focus: play/pause, next, previous and stop never arm it", focus.calls == 1 && player.sent.count == 7)
+            guarded.play("not a uri")
+            check("spotify focus: a bad URI arms nothing and sends nothing", focus.calls == 1)
+            player.running = false
+            guarded.play("spotify:track:4uLU6hMCjMI75M1A2tKUQC")
+            wait { player.fetches > 0 }
+            check("spotify focus: Spotify closed -> no play track (never launches it)", player.sent.count == 7)
+        }
 
         let fake = FakeSpotify()
         let svc = SpotifyService(backend: fake, loader: FakeLoader(image: solid(.red)))

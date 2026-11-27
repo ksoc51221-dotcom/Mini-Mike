@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import Combine
 
 // MARK: - Model
@@ -94,6 +95,88 @@ struct LiveSpotifyBackend: SpotifyBackend {
         guard isRunning(), let source = Self.source(for: command) else { return }
         var error: NSDictionary?
         _ = NSAppleScript(source: source)?.executeAndReturnError(&error)
+    }
+}
+
+// MARK: - Focus guard (a song from the mini player never brings Spotify to the front)
+
+/// Spotify brings itself to the front when it gets `play track` (Merlin's script has no `activate`). The guard notes the
+/// front app before the command and, if Spotify then comes to the front, gives the front back: it hides Spotify again
+/// when Spotify was hidden before, else it activates the app that was in front. Cost: Spotify can show for a moment.
+enum SpotifyFocusGuard {
+    /// What was true just before the command.
+    struct Before: Equatable {
+        /// The app in front (its process id), nil when none.
+        let front: pid_t?
+        /// Spotify itself was in front: nothing to give back.
+        let spotifyWasFront: Bool
+        /// Spotify was hidden (Cmd-H): hide it again rather than leave its window on screen.
+        let spotifyWasHidden: Bool
+    }
+
+    enum Repair: Equatable { case none, hideSpotify, activate(pid_t) }
+
+    /// How long after the command a Spotify activation still counts as caused by it.
+    static let window: TimeInterval = 2
+
+    /// The repair for an app that just came to the front.
+    static func repair(_ before: Before, activatedIsSpotify: Bool) -> Repair {
+        guard activatedIsSpotify, !before.spotifyWasFront else { return .none }
+        if before.spotifyWasHidden { return .hideSpotify }
+        if let front = before.front { return .activate(front) }
+        return .none
+    }
+}
+
+/// Watches one command's focus (a fake in the tests: nothing here touches a real app there).
+protocol SpotifyFocusKeeping: AnyObject {
+    /// Called on the main thread just before `play track` is sent.
+    func keepFocus()
+}
+
+/// The live guard: one `NSWorkspace` activation observer for `SpotifyFocusGuard.window` seconds after each song.
+final class LiveSpotifyFocus: SpotifyFocusKeeping {
+    /// One line per repair (`/usr/bin/log show --predicate 'subsystem == "com.kien.merlin" && category == "spotify"'`).
+    static let logger = Logger(subsystem: "com.kien.merlin", category: "spotify")
+    private var observer: NSObjectProtocol?
+    private var token = 0
+
+    func keepFocus() {
+        let ws = NSWorkspace.shared
+        let spotify = NSRunningApplication.runningApplications(withBundleIdentifier: LiveSpotifyBackend.bundleID).first
+        let front = ws.frontmostApplication
+        let before = SpotifyFocusGuard.Before(front: front?.processIdentifier,
+                                              spotifyWasFront: front?.bundleIdentifier == LiveSpotifyBackend.bundleID,
+                                              spotifyWasHidden: spotify?.isHidden ?? false)
+        if let observer { ws.notificationCenter.removeObserver(observer) }
+        token += 1
+        let mine = token
+        observer = ws.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil,
+                                                     queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            let repair = SpotifyFocusGuard.repair(before, activatedIsSpotify: app?.bundleIdentifier == LiveSpotifyBackend.bundleID)
+            guard repair != .none else { return }
+            Self.logger.notice("spotify focus: Spotify came to the front after play track; repair \(String(describing: repair), privacy: .public)")
+            Self.apply(repair)
+            self?.stop(mine)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + SpotifyFocusGuard.window) { [weak self] in self?.stop(mine) }
+    }
+
+    private func stop(_ mine: Int) {
+        guard mine == token, let observer else { return }
+        NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        self.observer = nil
+    }
+
+    private static func apply(_ repair: SpotifyFocusGuard.Repair) {
+        switch repair {
+        case .none: break
+        case .hideSpotify:
+            NSRunningApplication.runningApplications(withBundleIdentifier: LiveSpotifyBackend.bundleID).first?.hide()
+        case .activate(let pid):
+            NSRunningApplication(processIdentifier: pid)?.activate()
+        }
     }
 }
 
@@ -312,7 +395,7 @@ struct DockPalette: Equatable {
 // MARK: - Service
 
 final class SpotifyService: ObservableObject {
-    static let shared = SpotifyService()
+    static let shared = SpotifyService(focus: LiveSpotifyFocus())
     static let notificationName = Notification.Name("com.spotify.client.PlaybackStateChanged")
 
     @Published private(set) var state: SpotifyState = .notRunning
@@ -321,6 +404,8 @@ final class SpotifyService: ObservableObject {
 
     private let backend: SpotifyBackend
     private let loader: DockImageLoader
+    /// Gives the front back after a song starts (nil: no guard; only the shared live service has one).
+    private let focus: SpotifyFocusKeeping?
     private let queue = DispatchQueue(label: "merlin.spotify", qos: .userInitiated)
     private var timer: Timer?
     private var observer: NSObjectProtocol?
@@ -333,9 +418,10 @@ final class SpotifyService: ObservableObject {
     private var motionObserver: NSObjectProtocol?
 
     init(backend: SpotifyBackend = LiveSpotifyBackend(), loader: DockImageLoader = LiveDockImageLoader(),
-         beat: SpotifyBeat = SpotifyBeat()) {
+         beat: SpotifyBeat = SpotifyBeat(), focus: SpotifyFocusKeeping? = nil) {
         self.backend = backend
         self.loader = loader
+        self.focus = focus
         self.beat = beat
     }
 
@@ -389,6 +475,11 @@ final class SpotifyService: ObservableObject {
 
     func send(_ command: SpotifyCommand) {
         let backend = backend
+        // Spotify brings itself to the front on `play track` (the mini player's songs and the assistant's "play X"):
+        // `focus` gives the front back (`SpotifyFocusGuard`). The other commands leave the front alone.
+        if case .playTrack = command, let focus {
+            if Thread.isMainThread { focus.keepFocus() } else { DispatchQueue.main.sync { focus.keepFocus() } }
+        }
         queue.async { [weak self] in
             if backend.isRunning() { backend.send(command) }
             let s = backend.isRunning() ? backend.fetch() : .notRunning
