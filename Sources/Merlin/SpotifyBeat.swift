@@ -165,6 +165,7 @@ struct BeatAnalyzer {
 /// 1. A Hann-windowed FFT of the last `size` samples (43 ms at 48 kHz, so a sound shows about 21 ms after it starts).
 /// 2. The power of each band in dB, weighted toward the middle (`weight`): the bass and the cymbals show, lower.
 /// 3. 0...1 against an automatic 32 dB range under the loudest band (the top rises at once, falls 6 dB a second).
+/// 3b. Contrast: each band against its own 1 s average (as projectM compares bass, mid and treble with theirs).
 /// 4. A note boost (spectral flux): a band from 200 Hz to 4 kHz that rose in the last 21 ms jumps higher, then the
 ///    boost decays in 80 ms. Piano and guitar notes then show sharply.
 /// The values are kept at their maximum until `takeHeld`, so no hop is lost between two frames.
@@ -184,6 +185,9 @@ final class SpectrumMeter {
     static let boostDecay = 0.08
     static let boostGain = 0.45
     static let boostLow = 200.0, boostHigh = 4000.0
+    /// How far a band sinks toward its own average (0 none, 1 all the way), and that average's time.
+    static let contrast = 0.6
+    static let meanTime = 1.0
 
     /// The analysis's own delay: half the window (the middle of what the FFT sees) and half a hop.
     static func lag(sampleRate: Double) -> Double {
@@ -213,7 +217,7 @@ final class SpectrumMeter {
     private(set) var sampleRate: Double = 48_000
     private let setup: FFTSetup
     private let ring, window, frame, real, imag, magnitude: UnsafeMutablePointer<Float>
-    private let level, held, boost, gains, history: UnsafeMutablePointer<Double>
+    private let level, held, boost, gains, history, mean: UnsafeMutablePointer<Double>
     private let lowBin, highBin: UnsafeMutablePointer<Int>
     private let boosted: UnsafeMutablePointer<Bool>
     private static let half = size / 2
@@ -231,6 +235,7 @@ final class SpectrumMeter {
         real = make(Self.half, 0); imag = make(Self.half, 0); magnitude = make(Self.half, 0)
         level = make(Self.bands, 0); held = make(Self.bands, 0); boost = make(Self.bands, 0); gains = make(Self.bands, 0)
         history = make(Self.bands * Self.fluxLag, Self.silence)
+        mean = make(Self.bands, 0)
         lowBin = make(Self.bands, 0); highBin = make(Self.bands, 0); boosted = make(Self.bands, false)
         vDSP_hann_window(window, vDSP_Length(Self.size), Int32(vDSP_HANN_DENORM))
         reset(sampleRate: sampleRate)
@@ -239,7 +244,7 @@ final class SpectrumMeter {
     deinit {
         vDSP_destroy_fftsetup(setup)
         for p in [ring, window, frame, real, imag, magnitude] { p.deallocate() }
-        for p in [level, held, boost, gains, history] { p.deallocate() }
+        for p in [level, held, boost, gains, history, mean] { p.deallocate() }
         lowBin.deallocate(); highBin.deallocate(); boosted.deallocate()
     }
 
@@ -253,8 +258,10 @@ final class SpectrumMeter {
             // Each band gets at least the bin nearest its middle (the low bands share bins).
             let a = Int((lo / binHz).rounded(.up)), b = Int((hi / binHz).rounded(.down))
             let mid = min(Self.half - 1, max(1, Int((Self.centre(i) / binHz).rounded())))
-            lowBin[i] = a <= b ? max(1, a) : mid
-            highBin[i] = a <= b ? min(Self.half - 1, b) : mid
+            // Clamped to the FFT's bins, low never above high: at a low sample rate the top bands lie past the
+            // Nyquist frequency and read the last bin (an empty range would trap on the audio thread).
+            lowBin[i] = min(Self.half - 1, a <= b ? max(1, a) : mid)
+            highBin[i] = max(lowBin[i], min(Self.half - 1, a <= b ? b : mid))
             gains[i] = Self.weight(Self.centre(i))
             boosted[i] = Self.centre(i) >= Self.boostLow && Self.centre(i) <= Self.boostHigh
         }
@@ -262,6 +269,7 @@ final class SpectrumMeter {
         level.update(repeating: 0, count: Self.bands)
         held.update(repeating: 0, count: Self.bands)
         boost.update(repeating: 0, count: Self.bands)
+        mean.update(repeating: 0, count: Self.bands)
         history.update(repeating: Self.silence, count: Self.bands * Self.fluxLag)
         ringHead = 0; filled = 0; sinceHop = 0; historyHead = 0
         top = Self.silence
@@ -331,7 +339,12 @@ final class SpectrumMeter {
         let floor = top - Self.range
         for i in 0..<Self.bands {
             let db = level[i]
-            let v = db <= Self.silence ? 0 : BeatMath.clamp01((db - floor) / Self.range + boost[i])
+            let base = db <= Self.silence ? 0 : BeatMath.clamp01((db - floor) / Self.range)
+            // Contrast: a band sinks toward its own 1 s average, so a sound that stays (a held chord, a pad) goes
+            // low and what changes (a new note, a hit) stands out. The loudest steady band still reads 1.
+            mean[i] += (base - mean[i]) * (1 - exp(-dt / Self.meanTime))
+            let k = Self.contrast * mean[i]
+            let v = db <= Self.silence ? 0 : BeatMath.clamp01((base - k) / (1 - k) + boost[i])
             level[i] = v
             held[i] = max(held[i], v)
         }

@@ -98,10 +98,74 @@ extension FeatureTests {
         let hatBands = SpectrumMeter.band(of: 5000)..<SpectrumMeter.bands
         let hatPeak = mix.map { f in hatBands.map { f.bands[$0] }.max() ?? 0 }.max() ?? 0
         check("spectrum mix: the hi-hat stays low (\(String(format: "%.2f", hatPeak)))", hatPeak < 0.6)
+        // A rock-like mix (140 BPM, 12 s): kick and snare, hi-hat on eighths, a bass line, a rhythm guitar on eighths, a held
+        // guitar part and a vocal line with vibrato. The vocal must lead, and the ring must not be full all the time.
+        do {
+            let rate = 48_000.0, beat = 60.0 / 140
+            func voice(_ u: Double, _ hz: Double, _ amps: [Double], vibrato: Double = 0) -> Double {
+                var phase = 2 * .pi * hz * u
+                if vibrato > 0 { phase -= hz * (pow(2, vibrato / 12) - 1) / 5.5 * cos(2 * .pi * 5.5 * u) }
+                var v = 0.0
+                for (i, a) in amps.enumerated() { v += a * sin(Double(i + 1) * phase) }
+                return v
+            }
+            let melody = [392.0, 440, 493.88, 440, 392, 349.23, 329.63, 392]
+            var vocal: [(at: Double, length: Double, hz: Double)] = []
+            var t = 0.5, k = 0
+            while t < 11.5 {
+                let length = beat * (k % 3 == 2 ? 2 : 1)
+                vocal.append((t, length * 0.95, melody[k % melody.count]))
+                t += length; k += 1
+            }
+            let chords = [[146.83, 220.0], [164.81, 246.94], [130.81, 196.0], [110.0, 164.81]]
+            var low = 0.0, last = 0.0
+            let frames = Synth.hear(12, rate: rate) { t, noise in
+                let b = t / beat, n = Int(b), f = (b - Double(n)) * beat
+                var v = 0.0
+                if n % 2 == 0 { v += 0.35 * exp(-f / 0.08) * sin(2 * .pi * (55 * f + 2.4 * (1 - exp(-f / 0.02)))) }
+                low += 0.3 * (noise - low)
+                if n % 2 == 1 { v += 0.3 * exp(-f / 0.12) * (0.6 * low + 0.4 * sin(2 * .pi * 190 * f)) }
+                let eighth = (b * 2).truncatingRemainder(dividingBy: 1) * beat / 2
+                v += 0.12 * exp(-eighth / 0.025) * (noise - last)
+                last = noise
+                let chord = chords[Int(b / 4) % chords.count]
+                v += 0.18 * voice(f, chord[0] / 2, [1, 0.5, 0.2])
+                for hz in chord { v += 0.07 * exp(-eighth / 0.3) * voice(eighth, hz, [1, 0.8, 0.6, 0.5, 0.4, 0.3]) }
+                v += 0.05 * voice(t, chord[1] * 2, [1, 0.6, 0.4, 0.3])
+                for n in vocal where t >= n.at && t < n.at + n.length {
+                    let u = t - n.at
+                    v += 0.16 * min(1, u / 0.02) * min(1, (n.length - u) / 0.03) * voice(u, n.hz, [1, 0.6, 0.4, 0.25, 0.15], vibrato: 0.3)
+                }
+                return v
+            }
+            var risen: [Double] = []
+            for n in vocal {
+                let b = SpectrumMeter.band(of: n.hz)
+                if let f = frames.first(where: { $0.time >= n.at && $0.time <= n.at + 0.06 && $0.bands[b] > 0.6 }) { risen.append(f.time - n.at) }
+            }
+            var lead = 0, total = 0
+            for f in frames {
+                guard let n = vocal.first(where: { f.time >= $0.at + 0.03 && f.time < $0.at + $0.length }) else { continue }
+                total += 1
+                if abs(Synth.tallest(f) - SpectrumMeter.band(of: n.hz)) <= 2 { lead += 1 }
+            }
+            let up = frames.map { f in Double(f.bands.filter { $0 > MelodyBarsMotion.gate }.count) / Double(SpectrumMeter.bands) }
+            let busy = up.reduce(0, +) / Double(up.count)
+            check("spectrum rock mix: every vocal note's bars rise within 40 ms (\(risen.count)/\(vocal.count), worst \(ms(risen.max() ?? 1)))",
+                  risen.count == vocal.count && (risen.max() ?? 1) <= 0.04)
+            check("spectrum rock mix: the vocal is the tallest group most of the time (\(String(format: "%.0f", 100 * Double(lead) / Double(max(total, 1)))) %)",
+                  Double(lead) / Double(max(total, 1)) > 0.7)
+            check("spectrum rock mix: the ring is not full all the time (\(String(format: "%.0f", busy * 100)) % of the bars up)", busy < 0.45)
+        }
         // A chord: both notes rise.
         let chord = Synth.hear(1) { t, _ in Synth.piano(t, at: 0.3, hz: 261.63) + Synth.piano(t, at: 0.3, hz: 659.25) }
         let both = [261.63, 659.25].allSatisfy { hz in chord.contains { $0.time >= 0.3 && $0.time <= 0.33 && $0.bands[SpectrumMeter.band(of: hz)] > 0.6 } }
         check("spectrum: both notes of a chord rise within 30 ms", both)
+        // Low sample rates: the top bands lie past the Nyquist frequency; the analysis must not trap and stays in range.
+        for rate in [8_000.0, 16_000, 22_050] {
+            let low = Synth.hear(0.5, rate: rate) { t, noise in 0.2 * sin(2 * .pi * 440 * t) + 0.05 * noise }
+            check("spectrum at \(Int(rate)) Hz: runs and stays in 0...1", low.allSatisfy { $0.bands.allSatisfy { $0 >= 0 && $0 <= 1 } })
+        }
         let silent = Synth.hear(1) { _, _ in 0 }
         check("spectrum: silence is 0 in every band", silent.allSatisfy { $0.bands.allSatisfy { $0 == 0 } })
         let held = Synth.hear(3) { t, _ in 0.2 * sin(2 * .pi * 440 * t) }.filter { $0.time > 0.5 }.map { $0.bands[SpectrumMeter.band(of: 440)] }
