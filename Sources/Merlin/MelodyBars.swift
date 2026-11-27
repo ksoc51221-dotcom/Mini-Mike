@@ -184,8 +184,8 @@ final class MelodyBarsMotion {
     }
 }
 
-/// The bars round the record. One `TimelineView` runs only while `moving` (and for the short settle after it): 60 frames
-/// a second, 30 for a paused song's soft motion. A still ring under `Motion.still` and Reduce Motion; a pinned sample
+/// The bars round the record. One `TimelineView` runs only while `moving` (and for the short settle after it), at 60
+/// frames a second at most. A still ring under `Motion.still` and Reduce Motion; a pinned sample
 /// (the pictures) draws one fixed frame.
 struct MelodyBars: View {
     let palette: DockPalette
@@ -195,6 +195,10 @@ struct MelodyBars: View {
     @State private var motion = MelodyBarsMotion()
     @State private var settling = false
     @State private var settleToken = 0
+
+    /// The bars move only while a song plays and the dock shows. A paused song (and no song) gives a still ring and
+    /// no redraws once it settles: the paused pulse of the old strings is not kept.
+    static func moves(playing: Bool, shown: Bool) -> Bool { playing && shown }
 
     /// Only the mini window shows the whole circle.
     private var half: Bool { place != .card }
@@ -206,7 +210,7 @@ struct MelodyBars: View {
             } else if beat?.pinned != nil || Motion.still || Motion.reduceMotion {
                 bars { motion.rest() }
             } else {
-                TimelineView(.animation(minimumInterval: beat?.isPaused == true ? 1.0 / 30 : 1.0 / 60, paused: !(moving || settling))) { ctx in
+                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !(moving || settling))) { ctx in
                     let now = ctx.date.timeIntervalSinceReferenceDate
                     bars {
                         let sample = moving ? (beat?.sample(now: now) ?? .zero) : .zero

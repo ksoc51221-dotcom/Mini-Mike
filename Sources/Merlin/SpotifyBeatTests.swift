@@ -140,7 +140,12 @@ extension FeatureTests {
             }
             best = min(best, (ProcessInfo.processInfo.systemUptime - start) / 10)
         }
+        // Timing means something only in an optimised build: a debug build runs the same code many times slower.
+        #if DEBUG
+        print("  [measure] lead: analysis cost \(String(format: "%.1f", best * 100)) % of one core (debug build: not checked)")
+        #else
         check("lead: the analysis costs under 2 % of one core (\(String(format: "%.2f", best * 100)) %)", best < 0.02)
+        #endif
         let shared = LeadMeter.unpack(UInt64(65535) << 48 | UInt64(32768) << 32 | 7)
         check("lead: the packed reading unpacks", shared.strength == 1 && abs(shared.pitch - 0.5) < 0.001 && shared.notes == 7)
     }
@@ -212,6 +217,13 @@ extension FeatureTests {
         let still = M()
         still.pin(note(0, 0, lead: 0), half: true)
         check("bars: a pinned sample with no note is the still ring", still.heights.allSatisfy { $0 == 0 })
+        check("bars: they move only while a song plays and the dock shows (a paused song: still, no redraws)",
+              MelodyBars.moves(playing: true, shown: true) && !MelodyBars.moves(playing: false, shown: true)
+              && !MelodyBars.moves(playing: true, shown: false))
+        let paused = M()
+        run(paused, 0, 0.5, note(1, 0.6))
+        run(paused, 0.52, 1, note(1, 0.6), moving: false)
+        check("bars: after a pause they settle to the still ring", paused.heights.allSatisfy { $0 == 0 } && paused.energy == 0)
     }
 
     @MainActor
