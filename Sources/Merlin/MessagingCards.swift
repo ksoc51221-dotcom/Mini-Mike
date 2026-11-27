@@ -30,7 +30,9 @@ struct MessagingService: Equatable {
     static let claude = MessagingService(name: "Claude", bundleID: "com.anthropic.claudefordesktop",
                                          url: URL(string: "https://claude.ai/new")!,
                                          storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C704")!)
-    static let all = [telegram, whatsApp, instagram, claude]
+    /// Claude is left out: claude.ai's bot check (Cloudflare) stopped the kept web view in about half the tries and did not
+    /// clear, so the Claude icon opens the Claude app (the planned fallback; no work-around).
+    static let all = [telegram, whatsApp, instagram]
     /// Services with no Mac app, offered in the dock's app list as if installed.
     static let webOnlyApps = [DockApp(bundleID: instagram.bundleID, name: instagram.name)]
 
