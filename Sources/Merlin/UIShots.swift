@@ -172,6 +172,9 @@ enum UIShots {
             shot("edge-13-songs-list", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(query: "mi")).clipped(), pad: 0))
             shot("edge-13b-songs-spotify", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSpotifyHitsModel()).clipped(), pad: 0))
             shot("edge-25-agents-orbs", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false)).clipped(), pad: 0))
+            shot("edge-27-orbit-20", margin: 0, edgeWall(mode, EdgePanelView(model: edgeOrbitModel()).clipped(), pad: 0))
+            shot("edge-28-agents-one", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false, jobs: 1)).clipped(), pad: 0))
+            shot("edge-29-agents-done", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false, jobs: 0, done: true)).clipped(), pad: 0))
             shot("edge-26-agents-card", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: true)).clipped(), pad: 0))
             shot("edge-14-songs-empty", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(starred: true, empty: true)).clipped(), pad: 0))
 
@@ -536,9 +539,22 @@ enum UIShots {
     }
 
     /// The dock with the agent fixtures (one job in each state): the orbs, or the Agents card open.
-    private static func edgeAgentsModel(card: Bool) -> EdgePanelModel {
+    private static func edgeAgentsModel(card: Bool, jobs: Int = 3, done: Bool = false) -> EdgePanelModel {
         let m = edgeModel(card ? .agents : nil, music: true, apps: 6)
-        m.agentSource = FixtureDockAgents.sample()
+        let sample = FixtureDockAgents.sample()
+        if jobs < 3 || done {
+            let ended = sample.history.map { j -> AgentJobView in var j = j; j.ended = Date().addingTimeInterval(-3); return j }
+            m.agentSource = FixtureDockAgents(jobs: Array(sample.jobs.prefix(jobs)), history: done ? ended : sample.history)
+        } else {
+            m.agentSource = sample
+        }
+        return m
+    }
+
+    /// 20 pinned apps with the orbit turned 4 places: 10 on the arc, the ends fading behind the disc.
+    private static func edgeOrbitModel() -> EdgePanelModel {
+        let m = edgeModel(nil, music: true, apps: 20)
+        m.orbitOffset = 4.5
         return m
     }
 
@@ -716,6 +732,18 @@ private struct ShotDockWorkspace: DockWorkspace {
         DockApp(bundleID: "com.apple.Preview", name: "Preview"),
         DockApp(bundleID: "com.apple.Maps", name: "Maps"),
         DockApp(bundleID: "com.apple.Photos", name: "Photos"),
+        DockApp(bundleID: "com.apple.reminders", name: "Reminders"),
+        DockApp(bundleID: "com.apple.FaceTime", name: "FaceTime"),
+        DockApp(bundleID: "com.apple.MobileSMS", name: "Messages"),
+        DockApp(bundleID: "com.apple.TextEdit", name: "TextEdit"),
+        DockApp(bundleID: "com.apple.calculator", name: "Calculator"),
+        DockApp(bundleID: "com.apple.weather", name: "Weather"),
+        DockApp(bundleID: "com.apple.podcasts", name: "Podcasts"),
+        DockApp(bundleID: "com.apple.TV", name: "TV"),
+        DockApp(bundleID: "com.apple.AddressBook", name: "Contacts"),
+        DockApp(bundleID: "com.apple.freeform", name: "Freeform"),
+        DockApp(bundleID: "com.apple.stocks", name: "Stocks"),
+        DockApp(bundleID: "com.apple.Terminal", name: "Terminal"),
     ]
 
     func url(forBundleID id: String) -> URL? { URL(fileURLWithPath: "/fixture/\(id).app") }

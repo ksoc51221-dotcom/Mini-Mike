@@ -11,8 +11,9 @@ import SwiftUI
 
 /// When the edge panel shows and hides. The caller passes the time and where the pointer is, so it's tested without a clock.
 struct EdgeReveal {
-    /// The pointer must rest in the hot zone this long before the panel shows.
-    static let dwell: TimeInterval = 0.12
+    /// The pointer must rest in the hot zone this long before the panel shows (0.08 s since the 2026-11-27 review: with the
+    /// window built ahead of time the dock's first frame comes under 150 ms after the pointer reaches the edge).
+    static let dwell: TimeInterval = 0.08
     /// The pointer must be away from the panel this long before it hides.
     static let linger: TimeInterval = 0.4
 
@@ -1622,6 +1623,9 @@ final class EdgePanelController {
     func start() {
         guard !started else { return }
         started = true
+        // The window and its SwiftUI views are built once, just after launch (off screen, never shown), so the first open
+        // does not pay for them (2026-11-27 review: about 110 ms on the first open, 15 to 35 ms after).
+        DispatchQueue.main.async { [weak self] in self?.prewarm() }
         MessagingCardController.shared.attach(model) { [weak self] in EdgePanelLayout.windowFrame(screen: self?.screen ?? .zero) }
         refreshZones()
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -1731,6 +1735,13 @@ final class EdgePanelController {
         let p = NSEvent.mouseLocation
         if let s = EdgeGeometry.screen(containing: p, screens: screens), EdgeGeometry.zone(on: s, screens: screens) != nil { return s }
         return screens.first { EdgeGeometry.zone(on: $0, screens: screens) != nil } ?? screens.first ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
+    /// Builds the window and lays out its views without showing it.
+    func prewarm() {
+        let w = ensureWindow()
+        guard !w.isVisible else { return }
+        w.contentView?.layoutSubtreeIfNeeded()
     }
 
     private func ensureWindow() -> EdgePanelWindow {

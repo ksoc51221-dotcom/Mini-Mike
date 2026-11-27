@@ -18,9 +18,9 @@ extension FeatureTests {
     static func edgePanelChecks(_ check: (String, Bool) -> Void) {
         // When it shows.
         var r = EdgeReveal()
-        check("edge: not shown before 120 ms in the zone", r.update(inZone: true, overPanel: false, blocked: false, now: 10) == .none
-              && r.update(inZone: true, overPanel: false, blocked: false, now: 10.11) == .none && !r.visible)
-        check("edge: shown after 120 ms in the zone", r.update(inZone: true, overPanel: false, blocked: false, now: 10.13) == .show && r.visible)
+        check("edge: not shown before 80 ms in the zone", r.update(inZone: true, overPanel: false, blocked: false, now: 10) == .none
+              && r.update(inZone: true, overPanel: false, blocked: false, now: 10.07) == .none && !r.visible)
+        check("edge: shown after 80 ms in the zone", r.update(inZone: true, overPanel: false, blocked: false, now: 10.09) == .show && r.visible)
 
         r = EdgeReveal()
         _ = r.update(inZone: true, overPanel: false, blocked: false, now: 0)
@@ -412,6 +412,16 @@ extension FeatureTests {
             am.tapAgents(); am.tapAgents()
             check("agents: a second click on an orb closes the card", am.section == nil && !am.agentTaskActive)
             check("agents: the tests never reach the app's pool", DockAgents.live() == nil)
+            // Review (2026-11-27): full-screen apps and the open time.
+            let win = EdgePanelWindow()
+            check("edge window: joins every Space and shows over full-screen apps, above normal windows",
+                  win.collectionBehavior.contains(.canJoinAllSpaces) && win.collectionBehavior.contains(.fullScreenAuxiliary)
+                  && win.level.rawValue >= NSWindow.Level.statusBar.rawValue)
+            let warm = EdgePanelController(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: dA),
+                                           spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.stopped)))
+            warm.prewarm()
+            check("edge open time: the window is built ahead of time and stays hidden; the dwell is 80 ms",
+                  warm.debugWindow != nil && !warm.debugWindowIsOrderedIn && EdgeReveal.dwell == 0.08)
         }
         let cover = L.coverCentre, mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
         // The disc's three buttons ("+", search, collapse). Round five (Stitch) replaces the old column inside the disc
