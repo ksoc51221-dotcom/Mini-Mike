@@ -22,7 +22,13 @@ struct MessagingService: Equatable {
                                            url: URL(string: "https://web.whatsapp.com/")!,
                                            storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C702")!,
                                            agentSuffix: "Version/26.3 Safari/605.1.15")
-    static let all = [telegram, whatsApp]
+    /// Instagram has no Mac app: its ring item is this name in the dock's list, not an installed app.
+    static let instagram = MessagingService(name: "Instagram", bundleID: "merlin.chat.instagram",
+                                            url: URL(string: "https://www.instagram.com/direct/inbox/")!,
+                                            storeID: UUID(uuidString: "6E1F3B52-7C0A-4C9E-9B0D-2A5E8F41C703")!)
+    static let all = [telegram, whatsApp, instagram]
+    /// Services with no Mac app, offered in the dock's app list as if installed.
+    static let webOnlyApps = [DockApp(bundleID: instagram.bundleID, name: instagram.name)]
 
     /// The services loaded ahead of a click: only those on the ring.
     static func toPreload(pinned: [DockApp]) -> [MessagingService] { all.filter { s in pinned.contains { $0.bundleID == s.bundleID } } }
@@ -139,7 +145,12 @@ final class MessagingCardController {
                         reload: { [weak web] in web?.reload() },
                         openApp: { [weak self] in
                             let app = DockApp(bundleID: service.bundleID, name: service.name)
-                            self?.model?.apps.open(app)
+                            // No Mac app (Instagram): the site opens in the default browser.
+                            if NSWorkspace.shared.urlForApplication(withBundleIdentifier: service.bundleID) == nil {
+                                NSWorkspace.shared.open(service.url)
+                            } else {
+                                self?.model?.apps.open(app)
+                            }
                             self?.model?.onOpenApp?(app)
                         },
                         close: { [weak self] in self?.close() })

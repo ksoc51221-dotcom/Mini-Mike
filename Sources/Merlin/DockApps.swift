@@ -41,6 +41,7 @@ struct LiveDockWorkspace: DockWorkspace {
                 byID[id] = DockApp(bundleID: id, name: name)
             }
         }
+        for app in MessagingService.webOnlyApps where byID[app.bundleID] == nil { byID[app.bundleID] = app } // Instagram's card
         return byID.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }

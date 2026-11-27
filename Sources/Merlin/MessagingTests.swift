@@ -13,7 +13,7 @@ extension FeatureTests {
     /// The messaging mini windows. No page is loaded and no window is shown.
     static func messagingChecks(_ check: (String, Bool) -> Void) {
         let all = MessagingService.all
-        check("chat cards: the table holds Telegram and WhatsApp, on https", all.map(\.name) == ["Telegram", "WhatsApp"] && all.allSatisfy { $0.url.scheme == "https" })
+        check("chat cards: the table holds Telegram, WhatsApp and Instagram, on https", all.map(\.name) == ["Telegram", "WhatsApp", "Instagram"] && all.allSatisfy { $0.url.scheme == "https" })
         check("chat cards: each service has its own data store",
               Set(all.map(\.storeID)).count == all.count
                   && MessagingWebView.configuration(for: .telegram).websiteDataStore.identifier == MessagingService.telegram.storeID)
@@ -24,6 +24,9 @@ extension FeatureTests {
         check("chat cards: only a service on the ring is loaded ahead",
               MessagingService.toPreload(pinned: []).isEmpty
                   && MessagingService.toPreload(pinned: [DockApp(bundleID: MessagingService.whatsApp.bundleID, name: "WhatsApp")]) == [.whatsApp])
+
+        check("chat cards: Instagram is in the dock's app list without a Mac app",
+              LiveDockWorkspace().installedApps().contains { $0.bundleID == MessagingService.instagram.bundleID })
 
         func link(_ s: String, clicked: Bool = true) -> MessagingWebView.LinkAction {
             MessagingWebView.linkAction(URL(string: s)!, clicked: clicked, service: .telegram)
