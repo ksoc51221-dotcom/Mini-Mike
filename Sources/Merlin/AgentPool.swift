@@ -12,8 +12,8 @@ import SwiftUI
 // thread; `AgentPool` is an `ObservableObject`.
 
 /// One agent job as a view shows it.
-struct AgentJobView: Identifiable, Equatable {
-    enum State: String, Equatable {
+struct AgentJobView: Identifiable, Equatable, Codable {
+    enum State: String, Equatable, Codable {
         /// In the queue: it starts when one of the 3 places is free.
         case queued
         case working
@@ -66,13 +66,19 @@ final class AgentPool: ObservableObject {
     private let openNote: (String) -> Void
     private let report: (String) -> Void
     private let spend: AgentSpend
+    private let store: UserDefaults
+    static let historyKey = "agentHistory"
     private var loops: [UUID: AgentLoop] = [:]
     private var wroteNote: [UUID: String] = [:]
 
     init(profile: AgentLoop.Profile = .worker, makeTools: @escaping (String) -> AgentTools?,
          saveNote: @escaping (String, String) -> String, openNote: @escaping (String) -> Void = { _ in },
-         report: @escaping (String) -> Void, spend: AgentSpend = AgentSpend()) {
+         report: @escaping (String) -> Void, spend: AgentSpend = AgentSpend(), store: UserDefaults = .standard) {
         self.profile = profile
+        self.store = store
+        if let data = store.data(forKey: Self.historyKey), let saved = try? JSONDecoder().decode([AgentJobView].self, from: data) {
+            history = Array(saved.prefix(Self.historySize))
+        }
         self.makeTools = makeTools
         self.saveNote = saveNote
         self.openNote = openNote
@@ -90,8 +96,10 @@ final class AgentPool: ObservableObject {
     func start(_ task: String) -> String {
         let task = task.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task.isEmpty else { return "Give the agent a task." }
-        guard spend.today < Self.dailyCapUSD else {
-            return String(format: "The agents used their $%.2f for today. Nothing was started.", Self.dailyCapUSD)
+        // Each running agent may still spend up to its own cap: count that, so the day's total never passes the limit.
+        let reserve = Double(running + 1) * (profile.budgetUSD ?? 0)
+        guard spend.today + reserve <= Self.dailyCapUSD + 0.0001 else {
+            return String(format: "The agents can spend $%.2f a day, and the rest of today's money is taken. Try again tomorrow, or stop a running agent first.", Self.dailyCapUSD)
         }
         guard jobs.filter({ $0.state == .queued }).count < Self.maxQueue else {
             return "\(Self.maxQueue) agent tasks wait already. Nothing was added."
@@ -208,6 +216,7 @@ final class AgentPool: ObservableObject {
     private func remember(_ j: AgentJobView) {
         history.insert(j, at: 0)
         if history.count > Self.historySize { history.removeLast(history.count - Self.historySize) }
+        if let data = try? JSONEncoder().encode(history) { store.set(data, forKey: Self.historyKey) }
     }
 
     // MARK: Words

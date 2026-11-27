@@ -265,13 +265,31 @@ extension FeatureTests {
         let spendSuite = "merlin.agentspend.test"
         let sd = UserDefaults(suiteName: spendSuite)!
         sd.removePersistentDomain(forName: spendSuite)
-        let pool = AgentPool(makeTools: { _ in nil }, saveNote: { _, _ in "x" }, report: { reports.append($0) }, spend: AgentSpend(defaults: sd))
+        let pool = AgentPool(makeTools: { _ in nil }, saveNote: { _, _ in "x" }, report: { reports.append($0) }, spend: AgentSpend(defaults: sd), store: sd)
         let line = pool.start("find sources on price ceilings")
         check("pool: with no tools the job fails at once, says so, and goes to the history",
               pool.jobs.isEmpty && pool.history.first?.state == .failed && reports.first?.contains("tools aren't ready") == true && line.contains("started"))
-        AgentSpend(defaults: sd).add(3.0)
-        check("pool: after $3.00 in a day it starts nothing", pool.start("another task").contains("$3.00 for today") && pool.history.count == 1)
+        let again = AgentPool(makeTools: { _ in nil }, saveNote: { _, _ in "x" }, report: { _ in }, spend: AgentSpend(defaults: sd), store: sd)
+        check("pool: the history stays on disk (a quit keeps the results)", again.history.count == 1 && again.history.first?.task == "find sources on price ceilings")
+        AgentSpend(defaults: sd).add(1.5)
+        let okAt15 = pool.start("a task at $1.50 spent")
+        AgentSpend(defaults: sd).add(1.0)
+        let noAt25 = pool.start("a task at $2.50 spent")
+        check("pool: the day cap keeps $1.00 free for each agent it starts ($1.50 spent: starts; $2.50: refused, in plain words)",
+              okAt15.contains("started") && noAt25.contains("$3.00 a day") && noAt25.contains("Try again tomorrow") && pool.history.count == 2)
         sd.removePersistentDomain(forName: spendSuite)
+        let stubborn = Process()
+        stubborn.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        stubborn.arguments = ["-c", "trap '' TERM; sleep 20"]
+        try? stubborn.run()
+        Thread.sleep(forTimeInterval: 0.3)
+        let killAt = Date()
+        AgentLoop.hardStop(stubborn, grace: 0.5)
+        while stubborn.isRunning && Date().timeIntervalSince(killAt) < 4 { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        check("pool: a run that ignores Stop is forced to end (no job hangs)", !stubborn.isRunning && Date().timeIntervalSince(killAt) < 2)
+        check("agent: the error lines tell a beginner what to do",
+              ["Install it from claude.com/code", "type claude once to sign in", "Check the internet connection"].allSatisfy { line in
+                  (try? String(contentsOfFile: #filePath.replacingOccurrences(of: "AgentTests.swift", with: "AgentLoop.swift"), encoding: .utf8))?.contains(line) ?? true })
         check("pool: 3 at once, 5 waiting, 10 in the history, $3.00 a day",
               AgentPool.size == 3 && AgentPool.maxQueue == 5 && AgentPool.historySize == 10 && AgentPool.dailyCapUSD == 3.0)
         check("pool: a short name from the task", AgentPool.name(for: "find five sources on price ceilings") == "Five sources price"
@@ -453,7 +471,8 @@ extension FeatureTests {
         let spendSuite = "merlin.agentspend.live"
         UserDefaults(suiteName: spendSuite)!.removePersistentDomain(forName: spendSuite)
         let pool = AgentPool(makeTools: { _ in tools() }, saveNote: { n, t in notes.append((n, t)); return "Saved in the note \(n)" },
-                             report: { lines.append($0) }, spend: AgentSpend(defaults: UserDefaults(suiteName: spendSuite)!))
+                             report: { lines.append($0) }, spend: AgentSpend(defaults: UserDefaults(suiteName: spendSuite)!),
+                             store: UserDefaults(suiteName: spendSuite)!)
         let task = "Read my newest email, then find two web sources on price ceilings and put a short summary with their links in my economics note"
         let task2 = "Look up the boiling point of water at the top of Mount Everest, with one source"
         print("AGENTS: \(task) | \(task2)")

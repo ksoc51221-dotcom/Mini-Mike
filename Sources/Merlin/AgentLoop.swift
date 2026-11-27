@@ -353,14 +353,14 @@ final class AgentLoop {
         tools.maxSteps = profile.steps
         stopReason = nil
         guard !isRunning else { return finish(.failed("Merlin is still working on the last request.")) }
-        guard let cli = ClaudeSession.claudePath else { return finish(.failed("The claude command isn't installed.")) }
+        guard let cli = ClaudeSession.claudePath else { return finish(.failed("Merlin needs Claude Code for this, and it isn't installed. Install it from claude.com/code, then try again.")) }
         isRunning = true
         self.tools = tools
         let server = AgentServer(tools: tools)
         self.server = server
         server.start { [weak self] port in
             guard let self else { return }
-            guard let port else { return self.end(.failed("Merlin couldn't start its tools."), finish) }
+            guard let port else { return self.end(.failed("Merlin couldn't start its tools. Quit Merlin, open it again, and try again."), finish) }
             let p = ClaudeSession.cliProcess(cli, arguments: Self.arguments(request: request, port: port, token: server.token,
                                                                                  model: model ?? profile.model, profile: profile))
             p.standardInput = FileHandle.nullDevice
@@ -387,12 +387,12 @@ final class AgentLoop {
                 if reader.tokens > profile.tokenCap, stoppedFor == nil {
                     stoppedFor = "it reached the \(profile.tokenCap / 1000)k token limit"
                     tools.cancelled = true
-                    p.terminate()
+                    Self.hardStop(p)
                 }
                 if tools.capped, tools.steps > tools.maxSteps + 1, stoppedFor == nil {
                     stoppedFor = "it reached the \(tools.maxSteps) step limit"
                     tools.cancelled = true
-                    p.terminate()
+                    Self.hardStop(p)
                 }
             }
             // The clock: one tick a second, not counted while a yes/no dialog is open.
@@ -404,7 +404,7 @@ final class AgentLoop {
                 if elapsed > profile.timeLimit {
                     lock.lock(); stoppedFor = stoppedFor ?? "it took over \(Int(profile.timeLimit)) s"; lock.unlock()
                     tools.cancelled = true
-                    p.terminate()
+                    Self.hardStop(p)
                     return
                 }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1) { tick() }
@@ -428,7 +428,7 @@ final class AgentLoop {
                         stop = "it reached the $\(String(format: "%.2f", b)) limit"
                     }
                     if let stop { return self.end(.done("Stopped: \(stop).\(result.map { " " + $0 } ?? "")"), finish) }
-                    guard let result, !result.isEmpty else { return self.end(.failed("Claude didn't answer."), finish) }
+                    guard let result, !result.isEmpty else { return self.end(.failed("Claude didn't send an answer. Check the internet connection and your Claude usage limit, then try again."), finish) }
                     if result == "QUESTION" { return self.end(.question, finish) }
                     self.end(.done(result), finish)
                 }
@@ -436,8 +436,8 @@ final class AgentLoop {
             do {
                 try p.run()
                 self.process = p
-                if self.stopReason != nil { tools.cancelled = true; p.terminate() } // Stop pressed while it started
-            } catch { self.end(.failed("Couldn't start claude."), finish) }
+                if self.stopReason != nil { tools.cancelled = true; Self.hardStop(p) } // Stop pressed while it started
+            } catch { self.end(.failed("Claude Code didn't start. Open Terminal, type claude once to sign in, then try again."), finish) }
         }
     }
 
@@ -446,7 +446,17 @@ final class AgentLoop {
         guard isRunning else { return }
         stopReason = "you stopped it"
         tools?.cancelled = true
-        process?.terminate()
+        if let p = process { Self.hardStop(p) }
+    }
+
+    /// Ends a `claude` run: a polite stop, then a forced one after `grace` seconds if it still runs (so no job hangs).
+    static func hardStop(_ p: Process, grace: TimeInterval = 3) {
+        guard p.isRunning else { return }
+        p.terminate()
+        let pid = p.processIdentifier
+        DispatchQueue.global().asyncAfter(deadline: .now() + grace) {
+            if p.isRunning { kill(pid, SIGKILL) }
+        }
     }
 
     private func end(_ outcome: Outcome, _ finish: (Outcome) -> Void) {

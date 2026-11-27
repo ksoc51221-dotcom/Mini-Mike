@@ -2,6 +2,13 @@ import AppKit
 import AVFoundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Merlin quits: no agent keeps working (and spending) without it.
+    func applicationWillTerminate(_ notification: Notification) {
+        agents.stopAll()
+        agent.stop()
+        answerer.stop()
+    }
+
     private let watcher = SelectionWatcher()
     private let trigger = TriggerIcon()
     private let dock = AgentDock()
