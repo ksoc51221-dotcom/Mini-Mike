@@ -20,6 +20,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// "Open microeconomics note", "show my chats": commands that act and open no chat (spoken here, typed in a blank chat).
     private lazy var commands = CommandRunner.live(dock: dock)
     private let agent = AgentLoop()
+    private lazy var worker = AgentWorker(
+        makeTools: { [weak self] in self?.commands.actions.map { AgentTools(runner: $0, confirmScript: AgentTools.liveConfirmScript) } },
+        saveNote: AgentWorker.liveSaveNote,
+        report: { line in
+            let m = NSEvent.mouseLocation
+            Toast.show(line, near: NSRect(x: m.x, y: m.y, width: 1, height: 1))
+        })
+    private var agentRow: AgentRowPanel?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         ThemeStore.shared.applyMode()
@@ -47,6 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AgentLoop.typedHook = { [weak self] text, spot in
             self?.runAgent(text) { line in Toast.show(line, near: NSRect(x: spot.x, y: spot.y, width: 1, height: 1)) }
         }
+        // Merlin agents: a long task runs in the background (one at a time, a queue behind it), with a row and Stop.
+        agentRow = AgentRowPanel(worker: worker)
         // Timers and reminders: banners show while Merlin is in front too; one that ends while Merlin runs also says so here.
         NotificationPresenter.install()
         TimerStore.shared.onFinish = { [weak self] t in
@@ -190,6 +200,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let runner = commands.actions else { return askSpoken(text, mouse: mouse, app: app) }
         let tools = AgentTools(runner: runner, confirmScript: AgentTools.liveConfirmScript)
         tools.onStep = { line in report(line + "…") }
+        tools.saveNote = AgentWorker.liveSaveNote
+        tools.startAgent = { [weak self] task in self?.worker.enqueue(task) ?? "Agents aren't ready." }
         report("Working on it…")
         agent.run(text, tools: tools) { [weak self] outcome in
             switch outcome {
@@ -372,6 +384,7 @@ if let i = arguments.firstIndex(of: "--assistantcheck"), i + 1 < arguments.count
 if let i = arguments.firstIndex(of: "--livecheck"), i + 1 < arguments.count { MainActor.assumeIsolated { LiveCheck.run(directory: arguments[i + 1]) } }
 if let i = arguments.firstIndex(of: "--settingsshots"), arguments.indices.contains(i + 1) { MainActor.assumeIsolated { LibrarySettingsView.renderShots(to: URL(fileURLWithPath: arguments[i + 1])); LibrarySettingsView.renderShortcutShots(to: URL(fileURLWithPath: arguments[i + 1])) }; exit(0) }
 if arguments.contains("--agenttest") { FeatureTests.agentLiveTest() }
+if arguments.contains("--workertest") { FeatureTests.workerLiveTest() }
 if arguments.contains("--unittest") { SelfTest.unitTests() }
 if let i = arguments.firstIndex(of: "--orbtest") { OrbTests.golden(path: argument(after: i) ?? "third_party/thinking-orbs/orbs-golden.json") }
 if arguments.contains("--localtest") { LocalTests.live(withClaude: arguments.contains("claude")) }

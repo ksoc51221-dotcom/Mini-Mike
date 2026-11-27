@@ -27,6 +27,19 @@ final class AgentTools {
     let runScript: (String, String) -> AgentToolResult
     /// The title Spotify gives a track id (its public oEmbed page), or nil if Spotify doesn't know it.
     let trackTitle: (String) -> String?
+    /// The tool-call cap for this run (the quick loop: `stepCap`; an agent: more).
+    var maxSteps = AgentTools.stepCap
+    /// Saves text into a note: (note name, text) → a status line. Nil: no `note_save` tool.
+    var saveNote: ((String, String) -> String)?
+    /// Hands a long task to a background agent: (the task) → a status line. Nil: no `start_agent` tool.
+    var startAgent: ((String) -> String)?
+    /// The tools this run offers (an agent can't start another agent).
+    var visibleList: [[String: Any]] {
+        Self.list.filter { t in
+            let n = t["name"] as? String
+            return !(n == "note_save" && saveNote == nil) && !(n == "start_agent" && startAgent == nil)
+        }
+    }
     /// Apple Mail: read the inbox, write or send an email (a send only after a yes).
     let mail: MailBackend
     /// The user's own words for this run: an email address not in them gets a warning in the send dialog.
@@ -90,6 +103,10 @@ final class AgentTools {
              ["to": ["type": "string", "description": "Email addresses, comma-separated; empty for a draft without one"],
               "subject": ["type": "string"], "body": ["type": "string"], "send": ["type": "boolean"]],
              required: ["to", "subject", "body", "send"]),
+        tool("note_save", "Put text into one of the user's Merlin notes (a note with that name gets the text added at its end; otherwise a new note is made).",
+             ["note": ["type": "string", "description": "The note's name"], "text": ["type": "string"]], required: ["note", "text"]),
+        tool("start_agent", "Hand a long task to a background Merlin agent (Sonnet, the web, up to 10 minutes): research, finding sources, comparing options, a summary into a note. Give the task in the user's own words.",
+             ["task": ["type": "string"]], required: ["task"]),
     ]
 
     static var names: [String] { list.compactMap { $0["name"] as? String } }
@@ -113,9 +130,9 @@ final class AgentTools {
     func call(_ name: String, _ args: [String: Any]) -> AgentToolResult {
         steps += 1
         guard !cancelled else { return AgentToolResult(text: "This request was stopped.", isError: true) }
-        guard steps <= Self.stepCap else {
+        guard steps <= maxSteps else {
             capped = true
-            return AgentToolResult(text: "Step limit reached (\(Self.stepCap) tools). Stop now and tell the user what was done.", isError: true)
+            return AgentToolResult(text: "Step limit reached (\(maxSteps) tools). Stop now and tell the user what was done.", isError: true)
         }
         func str(_ k: String) -> String { (args[k] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
         func minutes() -> Int? {
@@ -149,6 +166,18 @@ final class AgentTools {
         case "routine_run": return act(Action(type: "routine_run", title: str("name")), "Running \(str("name"))")
         case "play_spotify_track": return playTrack(str("track_url"), title: str("title"))
         case "run_script": return script(str("language"), str("script"), summary: str("summary"))
+        case "note_save":
+            guard let save = saveNote else { return AgentToolResult(text: "No tool called note_save.", isError: true) }
+            let note = str("note"), text = (args["text"] as? String) ?? ""
+            guard !note.isEmpty, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return AgentToolResult(text: "note_save needs a note name and a text.", isError: true)
+            }
+            return AgentToolResult(text: onMain { onStep?("Writing in \(note)"); return save(note, text) }, isError: false)
+        case "start_agent":
+            guard let start = startAgent else { return AgentToolResult(text: "No tool called start_agent.", isError: true) }
+            let task = str("task")
+            guard !task.isEmpty else { return AgentToolResult(text: "start_agent needs the task.", isError: true) }
+            return AgentToolResult(text: onMain { start(task) }, isError: false)
         case "mail_read":
             let n = (args["count"] as? Double).map { Int($0) } ?? (args["count"] as? Int) ?? 5
             onMain { onStep?("Reading your inbox") }
