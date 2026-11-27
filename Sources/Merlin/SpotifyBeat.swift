@@ -592,6 +592,7 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
     private var analyzer = BeatAnalyzer() // main thread only
     private var lastPublished: UInt64 = 0 // main thread only
     private var lastBands: [Double] = [] // main thread only
+    private var bandsTime: TimeInterval = 0 // main thread only
     // The tap queue's own state.
     private var wanted = false
     private var tap = AudioObjectID(kAudioObjectUnknown)
@@ -632,9 +633,11 @@ final class LiveSpotifyBeatSource: SpotifyBeatSource {
         let heard = shared.heard.exchange(false, ordering: .relaxed)
         let v = shared.load()
         var sample = analyzer.update(rms: v.rms, low: v.low, dt: dt)
-        // No callback since the last frame: keep the last spectrum (the bars' fall does the rest).
+        // No callback since the last frame: keep the last spectrum for a moment (callbacks come about every 10 ms).
+        // No callback for longer (the tap stopped): silence, so the bars never stay up on an old frame.
         let count = shared.published.load(ordering: .acquiring)
-        if count != lastPublished || lastBands.isEmpty {
+        if count != lastPublished || lastBands.isEmpty || now - bandsTime > 0.05 {
+            if count != lastPublished { bandsTime = now }
             lastPublished = count
             lastBands = shared.takeBands()
         }
