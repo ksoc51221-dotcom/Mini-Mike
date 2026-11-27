@@ -193,7 +193,11 @@ enum EdgePanelLayout {
     static let minItemGap: CGFloat = 8
     /// The angle between two neighbouring items on the ring, in degrees (a 77.0 pt chord on 217 pt: 22 pt clear
     /// between 55 pt items, as in Stitch).
-    static let itemStep: CGFloat = 20.44
+    /// 16.8°: ten places fit the visible arc with equal gaps (a 63.4 pt chord, 8.4 pt between 55 pt items), none cut by
+    /// the screen edge (2026-11-27: 20 app slots, 10 places on the arc, an orbit scroll).
+    static let itemStep: CGFloat = 16.8
+    /// The places on the visible arc; more items wait behind the disc and come round on a scroll.
+    static let visibleSlots = 10
     /// An item under the pointer grows to 1.08 and rises 2 pt (the dock keeps room for it).
     static let liftScale: CGFloat = 1.08
     static let liftRise: CGFloat = 2
@@ -216,10 +220,10 @@ enum EdgePanelLayout {
     /// From the card's right side to the screen edge: the dock and the bridge.
     static var listInset: CGFloat { dockSize.width + cardGap }
 
-    /// The dock: the disc, the ring and every item on it, lifted ones included (fixed, sized for `maxItems`). The
+    /// The dock: the disc, the ring and every item on it, lifted ones included (fixed, sized for `visibleSlots` places). The
     /// disc's centre is the middle of its right side.
     static var dockSize: CGSize {
-        let half = (CGFloat(maxItems - 1) / 2 * itemStep) * .pi / 180
+        let half = (CGFloat(visibleSlots - 1) / 2 * itemStep) * .pi / 180
         let lifted = itemSize / 2 * liftScale
         let h = max(discRadius, ringRadius * sin(half) + lifted + liftRise)
         // The width stops at the leftmost item's edge (the ring's leftmost point and half an item; a lifted item's
@@ -233,10 +237,24 @@ enum EdgePanelLayout {
     /// Item `index` of `count` on the ring, from the dock's top-left corner (y down). Spread evenly around the horizontal
     /// axis with `itemStep` between neighbours; item 0 (Chats) is the top one.
     static func itemCentre(_ index: Int, of count: Int) -> CGPoint {
-        let s = dockSize
-        let a = (CGFloat(index) - CGFloat(count - 1) / 2) * itemStep * .pi / 180
-        return CGPoint(x: s.width - ringOffset - ringRadius * cos(a), y: s.height / 2 + ringRadius * sin(a))
+        orbitPlace(index, of: count, offset: 0).centre
     }
+
+    /// The orbit: item `index` of `count` with the ring turned by `offset` places (0: item 0 in the top place). At most
+    /// `visibleSlots` places show, spread evenly round the horizontal axis; an item past either end keeps moving along
+    /// the circle toward the screen edge (behind the disc, like a moon behind its planet), shrinking and fading out over
+    /// one place. `shown`: 1 in a place, 0 one place past an end.
+    static func orbitPlace(_ index: Int, of count: Int, offset: CGFloat) -> (centre: CGPoint, shown: CGFloat) {
+        let s = dockSize
+        let slots = min(max(count, 1), visibleSlots)
+        let rel = CGFloat(index) - offset
+        let a = (rel - CGFloat(slots - 1) / 2) * itemStep * .pi / 180
+        let past = max(0, -rel, rel - CGFloat(slots - 1))
+        return (CGPoint(x: s.width - ringOffset - ringRadius * cos(a), y: s.height / 2 + ringRadius * sin(a)), max(0, 1 - past))
+    }
+
+    /// How far the orbit can turn for `count` items (0 when all fit).
+    static func maxOrbitOffset(count: Int) -> CGFloat { CGFloat(max(0, count - visibleSlots)) }
 
     /// Every item's centre for `count` items.
     static func itemCentres(count: Int) -> [CGPoint] { (0..<max(count, 0)).map { itemCentre($0, of: count) } }
@@ -456,6 +474,39 @@ final class EdgePanelModel: ObservableObject {
     /// Search is open with a non-empty query (the ring shows only the match).
     var isFiltering: Bool { searchOpen && !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var searchMatch: DockApp? { searchOpen ? Self.match(query, in: ringApps) : nil }
+
+    /// The orbit's turn in places (0: Chats on top). Whole numbers at rest; between them while a scroll moves it.
+    @Published var orbitOffset: CGFloat = 0
+    /// Scroll input not yet settled (a trackpad sends many small steps, then momentum).
+    private var orbitSettleWork: DispatchWorkItem?
+
+    /// Turns the orbit by `places` (a scroll); it settles on a whole place a moment after the last step.
+    func scrollOrbit(by places: CGFloat) {
+        let limit = EdgePanelLayout.maxOrbitOffset(count: ringItems.count)
+        guard limit > 0, !isFiltering else { return }
+        orbitOffset = min(limit + 0.3, max(-0.3, orbitOffset + places)) // a little give past the ends
+        orbitSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.settleOrbit() }
+        orbitSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    /// One whole place up (-1) or down (+1), animated (the mouse wheel's notch; Reduce Motion's gesture).
+    func stepOrbit(_ places: Int) {
+        let limit = EdgePanelLayout.maxOrbitOffset(count: ringItems.count)
+        let target = min(limit, max(0, orbitOffset.rounded() + CGFloat(places)))
+        withAnimation(Motion.still || Motion.reduceMotion ? nil : .spring(duration: 0.35, bounce: 0.2)) { orbitOffset = target }
+    }
+
+    /// Snaps the orbit to the nearest whole place inside its range.
+    func settleOrbit() {
+        let limit = EdgePanelLayout.maxOrbitOffset(count: ringItems.count)
+        let target = min(limit, max(0, orbitOffset.rounded()))
+        guard target != orbitOffset else { return }
+        withAnimation(Motion.still ? nil : (Motion.reduceMotion ? .easeOut(duration: 0.12) : .spring(duration: 0.35, bounce: 0.2))) {
+            orbitOffset = target
+        }
+    }
 
     /// What the ring draws: every item, or while a query is typed only its match (at the ring's middle-left point).
     var ringItems: [Item] {
@@ -1659,6 +1710,21 @@ final class EdgePanelController {
             if e.type == .keyDown, e.keyCode == 48, self.model.wantsKeyboard, e.window === self.window { return nil }
             if e.type == .keyDown || e.window !== self.window { self.outside(e) }
             return e
+        }) { monitors.append(m) }
+        // The orbit scroll: a wheel or two fingers over the dock (not over a card, whose list scrolls itself).
+        if let m = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel], handler: { [weak self] e in
+            guard let self, let window = self.window, e.window === window,
+                  EdgePanelLayout.dockFrame(window: window.frame).contains(NSEvent.mouseLocation) else { return e }
+            let up = e.scrollingDeltaY > 0
+            if !e.hasPreciseScrollingDeltas {
+                if e.scrollingDeltaY != 0 { self.model.stepOrbit(up ? -1 : 1) } // a wheel notch: one place
+            } else if Motion.reduceMotion {
+                // Reduce Motion: one plain step per gesture, no momentum.
+                if e.phase == .began { self.model.stepOrbit(up ? -1 : 1) }
+            } else {
+                self.model.scrollOrbit(by: -e.scrollingDeltaY / 36) // two fingers, with the trackpad's own momentum
+            }
+            return nil
         }) { monitors.append(m) }
     }
 

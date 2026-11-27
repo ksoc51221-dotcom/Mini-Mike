@@ -214,15 +214,15 @@ extension FeatureTests {
         // Round five (Stitch): these replace the 110 pt disc, the 144 pt ring concentric with it and the 22° step.
         // 2026-11-26: the disc 30 % larger (108 -> 140), the items 25 % larger (44 -> 55), the ring moved out to keep
         // Stitch's 62.5 pt from the rim to an item's inner edge, 22 pt between neighbours.
-        check("edge dock: a 140 pt disc, a 217 pt ring 13 pt left of the disc's centre, 55 pt items 20.44° apart",
-              L.discRadius == 140 && L.ringRadius == 217 && L.ringOffset == 13 && L.itemSize == 55 && L.itemStep == 20.44
-              && L.maxItems == 8 && L.ringLineRadius == L.ringRadius)
+        check("edge dock: a 140 pt disc, a 217 pt ring 13 pt left of the disc's centre, 55 pt items 16.8° apart, 10 places",
+              L.discRadius == 140 && L.ringRadius == 217 && L.ringOffset == 13 && L.itemSize == 55 && L.itemStep == 16.8
+              && L.visibleSlots == 10 && L.maxItems == 22 && L.ringLineRadius == L.ringRadius)
         check("edge dock: an app icon image is 50 pt, inside its 55 pt target", L.appIconSize == 50 && L.itemSize == 55)
         check("edge dock: the card is 256 pt wide, corner 15.5, 171 pt from the dock (the leftmost item edge)",
               L.listWidth == 256 && L.cardRadius == 15.5 && L.cardGap == 171 && L.listInset == 257.5 + 171)
-        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 257.5, height: 476))
+        check("edge dock: the dock is the ring and its lifted items, flush right", L.dockSize == CGSize(width: 257.5, height: 484))
         check("edge dock: the window holds the card, the bridge and the dock",
-              L.windowSize == CGSize(width: (256 + 428.5 + 56).rounded(.up), height: max(481, 476) + 112))
+              L.windowSize == CGSize(width: (256 + 428.5 + 56).rounded(.up), height: max(481, 484) + 112))
         // The ring line runs through the middle of every item: each centre is on the line's circle, for every count.
         let lineCentre = L.ringCentre
         let onLine = (1...L.maxItems).allSatisfy { n in
@@ -232,8 +232,26 @@ extension FeatureTests {
         check("edge dock: the ring line is 3 pt, solid accent (more prominent than the old hairline)", EdgeDockArt.ringLineWidth == 3)
         // The angle step: Stitch's 22 pt between neighbours' edges (66 pt chord).
         let chord = 2 * L.ringRadius * sin(L.itemStep / 2 * .pi / 180)
-        check("edge dock: 22 pt between neighbours' edges (chord \(String(format: "%.2f", chord)))",
-              abs(chord - L.itemSize - 22) < 0.1 && chord - L.itemSize >= L.minItemGap)
+        check("edge dock: 8.4 pt between neighbours' edges (chord \(String(format: "%.2f", chord)); 10 places fit)",
+              abs(chord - L.itemSize - 8.4) < 0.1 && chord - L.itemSize >= L.minItemGap)
+        // The orbit (20 apps, 10 places): every place inside the dock, none cut by the screen edge; turning moves each
+        // item one place; past an end an item fades out over one place and heads behind the disc.
+        do {
+            let n = L.maxItems
+            let rest = (0..<L.visibleSlots).map { L.orbitPlace($0, of: n, offset: 0) }
+            check("edge orbit: 10 places at rest, each fully shown, inside the dock, clear of the screen edge",
+                  rest.allSatisfy { $0.shown == 1 && $0.centre.x + L.itemSize / 2 <= L.dockSize.width - 1
+                      && $0.centre.y - L.itemSize / 2 >= 0 && $0.centre.y + L.itemSize / 2 <= L.dockSize.height }
+                  && L.orbitPlace(L.visibleSlots, of: n, offset: 0).shown == 0)
+            let turned = L.orbitPlace(5, of: n, offset: 3), placed = L.orbitPlace(2, of: n, offset: 0)
+            check("edge orbit: a turn of 3 brings item 5 to place 2",
+                  abs(turned.centre.x - placed.centre.x) < 0.001 && abs(turned.centre.y - placed.centre.y) < 0.001)
+            let half = L.orbitPlace(0, of: n, offset: 0.5)
+            check("edge orbit: half a place past the top end, an item is half shown and closer to the screen edge",
+                  abs(half.shown - 0.5) < 0.001 && half.centre.x > L.orbitPlace(0, of: n, offset: 0).centre.x)
+            check("edge orbit: 22 items turn 12 places at most; 10 or fewer do not turn",
+                  L.maxOrbitOffset(count: 22) == 12 && L.maxOrbitOffset(count: 10) == 0 && L.maxOrbitOffset(count: 4) == 0)
+        }
         check("edge dock: the glass blends only below the least rest gap", L.glassBlend > 0 && L.glassBlend < L.minItemGap)
         // The card's shadow (radius 22, 16 pt down: about 60 pt below, 44 pt to the sides) stays inside the window.
         check("edge dock: the slack holds the card's shadow", L.slack == 56 && L.slack >= 16 + 22 * 1.8 && L.slack >= 22 * 2)
@@ -285,7 +303,7 @@ extension FeatureTests {
             check("edge dock (\(n) items): every straight path from an item to the nearest card edge stays in the hover frame",
                   bridge)
             let edgeGaps = (1..<n).map { hypot(c[$0].x - c[$0 - 1].x, c[$0].y - c[$0 - 1].y) - L.itemSize }
-            check("edge dock (\(n) items): 22 pt between neighbours' edges", edgeGaps.allSatisfy { abs($0 - 22) < 0.1 })
+            check("edge dock (\(n) items): 8.4 pt between neighbours' edges", edgeGaps.allSatisfy { abs($0 - 8.4) < 0.1 })
             let ys = c.map(\.y)
             check("edge dock (\(n) items): Chats is first and on top; the items go down in order", ys == ys.sorted() && ys[0] < L.dockSize.height / 2)
             // The ring's centre is 13 pt left of the disc's centre (the screen edge).
@@ -533,7 +551,9 @@ extension FeatureTests {
         check("edge apps: the card lists the pinned apps first, then the rest",
               Array(m.manageRows.prefix(2)) == apps.pinned && m.manageRows.count == FixtureDockWorkspace.sample.count)
         for app in FixtureDockWorkspace.sample where !apps.isPinned(app.bundleID) { m.tapPin(app) }
-        check("edge apps: Add stops at 6", apps.pinned.count == DockAppStore.maxPinned && !apps.canPin && m.items.count == L.maxItems)
+        var fill = 0
+        while apps.canPin { _ = apps.pin(DockApp(bundleID: "x.fill\(fill)", name: "Fill\(fill)")); fill += 1 }
+        check("edge apps: Add stops at 20", apps.pinned.count == DockAppStore.maxPinned && !apps.canPin && m.items.count == L.maxItems)
         m.tapUnpin(apps.pinned[1])
         check("edge apps: Remove frees a place", apps.pinned.count == DockAppStore.maxPinned - 1 && apps.canPin)
 
@@ -684,9 +704,11 @@ extension FeatureTests {
         m.submitAppsSearch() // substrings only: Calendar, Claude (pinned), Preview, Terminal, Xcode
         check("edge apps search: ...in ranked, alphabetical order", store.pinned == [s[0], s[3], s[1]])
         [s[2], s[4], s[5]].forEach { store.pin($0) }
+        var fill2 = 0
+        while store.canPin { _ = store.pin(DockApp(bundleID: "x.more\(fill2)", name: "More\(fill2)")); fill2 += 1 }
         m.appsQuery = "sa"
         m.submitAppsSearch()
-        check("edge apps search: at six apps Return adds nothing", store.pinned.count == DockAppStore.maxPinned
+        check("edge apps search: at 20 apps Return adds nothing", store.pinned.count == DockAppStore.maxPinned
               && !store.isPinned(s[6].bundleID) && !store.canPin)
 
         m.appsQuery = "sa"

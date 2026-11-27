@@ -40,9 +40,12 @@ extension FeatureTests {
         again = DockAppStore(defaults: d, workspace: FakeDockWorkspace())
         check("dock apps: unpin persists", again.pinned == [mail])
 
-        let capped = DockAppStore(defaults: fresh(), workspace: FakeDockWorkspace())
+        let cappedDefaults = fresh()
+        let capped = DockAppStore(defaults: cappedDefaults, workspace: FakeDockWorkspace())
         for i in 0..<DockAppStore.maxPinned { _ = capped.pin(DockApp(bundleID: "x.\(i)", name: "X\(i)")) }
-        check("dock apps: cap at 6", capped.pinned.count == 6 && !capped.canPin && !capped.pin(DockApp(bundleID: "x.extra", name: "Extra")) && capped.pinned.count == 6)
+        check("dock apps: cap at 20 (a 21st is refused)", DockAppStore.maxPinned == 20 && capped.pinned.count == 20 && !capped.canPin && !capped.pin(DockApp(bundleID: "x.extra", name: "Extra")) && capped.pinned.count == 20)
+        let reloaded = DockAppStore(defaults: cappedDefaults, workspace: FakeDockWorkspace())
+        check("dock apps: 20 pins save and load", reloaded.pinned == capped.pinned)
 
         let url = URL(fileURLWithPath: "/Applications/Notes.app")
         let openWs = FakeDockWorkspace()

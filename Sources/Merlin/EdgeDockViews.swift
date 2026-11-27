@@ -420,7 +420,9 @@ struct EdgeDockView: View {
         let s = EdgePanelLayout.dockSize
         let p = model.palette
         let items = model.ringItems
-        let centres = EdgePanelLayout.itemCentres(count: items.count)
+        let turn = model.isFiltering ? 0 : model.orbitOffset
+        let places = items.indices.map { EdgePanelLayout.orbitPlace($0, of: items.count, offset: turn) }
+        let limit = model.isFiltering ? 0 : EdgePanelLayout.maxOrbitOffset(count: items.count)
         let calm = Motion.still || Motion.reduceMotion
         ZStack(alignment: .topLeading) {
             EdgeHalo(palette: p, moving: model.shown && !calm)
@@ -434,22 +436,54 @@ struct EdgeDockView: View {
                     .frame(width: s.width, height: s.height)
                     .transition(.opacity)
             }
-            ForEach(Array(items.enumerated()), id: \.element.id) { i, item in
+            ForEach(Array(items.enumerated()).filter { places[$0.offset].shown > 0 }, id: \.element.id) { i, item in
+                let place = places[i]
                 EdgeRingItem(model: model, item: item, index: i) { h in
                     if h { hovered = item.id } else if hovered == item.id { hovered = nil }
                 }
-                .position(x: centres[i].x, y: centres[i].y)
+                // The orbit: past an end an item shrinks and fades as it goes behind the disc.
+                .scaleEffect(0.55 + 0.45 * place.shown)
+                .opacity(Double(place.shown))
+                .allowsHitTesting(place.shown > 0.6)
+                .position(x: place.centre.x, y: place.centre.y)
                 .zIndex(hovered == item.id ? 1 : 0) // its name label over the neighbours
                 // Search: the other items fade out (and back) from 0.95; the match slides to the ring's middle.
                 .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
+            // More apps past an end: a small chevron at that end of the arc.
+            if limit > 0 {
+                EdgeOrbitMore(up: true, palette: p, shown: turn > 0.5)
+                    .position(EdgePanelLayout.orbitPlace(0, of: items.count, offset: 0.62).centre)
+                EdgeOrbitMore(up: false, palette: p, shown: turn < limit - 0.5)
+                    .position(EdgePanelLayout.orbitPlace(EdgePanelLayout.visibleSlots - 1, of: items.count, offset: -0.62).centre)
+            }
         }
         .animation(calm ? nil : Motion.edgeIn, value: items.map(\.id))
+        .onChange(of: items.count) { _, _ in model.settleOrbit() } // an app removed: the orbit stays in range
         .frame(width: s.width, height: s.height)
         // Flat path: dark in light and dark mode alike. Glass path: the system picks light or dark content.
         .edgeFlatScheme()
         .environment(\.edgePalette, p)
         .animation(Motion.edgePaletteAnimation, value: p)
+    }
+}
+
+/// A small chevron at an end of the arc: more apps wait past that end (scroll to bring them round).
+private struct EdgeOrbitMore: View {
+    let up: Bool
+    let palette: DockPalette
+    let shown: Bool
+
+    var body: some View {
+        Image(systemName: up ? "chevron.up" : "chevron.down")
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(palette.accentColor)
+            .frame(width: 16, height: 16)
+            .background(Circle().fill(palette.baseDarkColor.opacity(0.85)))
+            .opacity(shown ? 0.9 : 0)
+            .animation(Motion.still ? nil : .easeOut(duration: 0.15), value: shown)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 

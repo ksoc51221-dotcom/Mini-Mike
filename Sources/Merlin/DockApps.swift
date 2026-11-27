@@ -48,7 +48,8 @@ struct LiveDockWorkspace: DockWorkspace {
 /// The pinned apps (saved as JSON in UserDefaults) and the cached list of installed apps.
 final class DockAppStore: ObservableObject {
     static let shared = DockAppStore()
-    static let maxPinned = 6
+    /// 20 apps (2026-11-27, Merlin): 10 places show on the arc; the rest wait behind the disc and come round on a scroll.
+    static let maxPinned = 20
     static let defaultsKey = "dockPinnedApps"
     static let claudeBundleID = "com.anthropic.claudefordesktop"
 

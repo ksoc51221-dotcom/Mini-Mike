@@ -111,10 +111,13 @@ extension FeatureTests {
         check("runner: adding it twice says so", runner.run(A(type: "dock_add", title: "calendar")).line == "Calendar is in the dock already.")
         check("runner: an app not on this Mac", runner.run(A(type: "dock_add", title: "photoshop")) == .init(line: "No app called “photoshop” on this Mac.", ok: false))
         for name in ["notion", "xcode", "safari", "notes", "mail"] { _ = runner.run(A(type: "dock_add", title: name)) }
+        var filler = 0
+        while store.canPin { _ = store.pin(DockApp(bundleID: "x.fill\(filler)", name: "Fill\(filler)")); filler += 1 }
         let full = runner.run(A(type: "dock_add", title: "music"))
-        check("runner: at 6 apps it says which to remove, and adds nothing",
-              !full.ok && full.line.hasPrefix("The dock is full (6 apps). Say which app to remove first") && !store.isPinned("com.apple.Music")
-              && store.pinned.count == 6)
+        check("runner: at 20 apps it says which to remove, and adds nothing",
+              !full.ok && full.line.hasPrefix("The dock is full (20 apps). Say which app to remove first") && !store.isPinned("com.apple.Music")
+              && store.pinned.count == 20)
+        for i in 0..<filler { store.unpin("x.fill\(i)") }
         check("runner: remove Mail from the dock", runner.run(A(type: "dock_remove", title: "mail")).line == "Removed Mail from the dock" && !store.isPinned("com.apple.mail"))
         check("runner: removing an app not in the dock", !runner.run(A(type: "dock_remove", title: "spotify")).ok)
         log = []
