@@ -407,7 +407,7 @@ enum EdgePanelLayout {
 
 final class EdgePanelModel: ObservableObject {
     /// The card left of the dock. Chats and Notes open on hover; Spotify and the add/remove card on a click only.
-    enum Section: Equatable { case chats, notes, spotify, apps }
+    enum Section: Equatable { case chats, notes, spotify, apps, agents }
 
     /// One round item on the ring.
     enum Item: Equatable, Identifiable {
@@ -568,7 +568,7 @@ final class EdgePanelModel: ObservableObject {
     }
 
     /// The panel may take the keyboard: the disc's search, the apps card's field or the songs field is active.
-    var wantsKeyboard: Bool { searchOpen || appsSearchActive || songsSearchActive }
+    var wantsKeyboard: Bool { searchOpen || appsSearchActive || songsSearchActive || agentTaskActive }
     private var keyboardTold = false
     /// Tells the controller only when `wantsKeyboard` flips (a switch from one field to the other keeps the keyboard).
     private func keyboardChanged() {
@@ -645,7 +645,59 @@ final class EdgePanelModel: ObservableObject {
         closeSearch()
         deactivateAppsSearch()
         deactivateSongsSearch()
+        deactivateAgentTask()
     }
+
+    // MARK: Merlin agents (the orbs above the record and the Agents card)
+
+    /// The app's `AgentPool` (nil in the tests until they set a fixture). Its changes redraw the dock.
+    var agentSource: DockAgentSource? {
+        didSet { agentForward = agentSource?.agentChanges.receive(on: DispatchQueue.main).sink { [weak self] in self?.objectWillChange.send() } }
+    }
+    private var agentForward: AnyCancellable?
+    /// The task field has the keyboard (from the card opening, or a click on the field).
+    @Published private(set) var agentTaskActive = false
+    @Published var agentTask = ""
+    /// The pool's answer to the last task ("Agent “…” started.").
+    @Published private(set) var agentLine: String?
+
+    var agentJobs: [AgentJobView] { agentSource?.agentJobs ?? [] }
+    var agentHistory: [AgentJobView] { agentSource?.agentHistory ?? [] }
+    var agentOrbs: [AgentJobView] { DockAgents.orbs(jobs: agentJobs, history: agentHistory) }
+
+    /// An orb or the "+": opens the Agents card, or closes it when it is open.
+    func tapAgents() { toggle(.agents) }
+
+    func activateAgentTask() {
+        guard section == .agents, !agentTaskActive else { return }
+        if searchOpen { searchOpen = false; query = "" } // never two at once
+        agentTaskActive = true
+        keyboardChanged()
+    }
+
+    func deactivateAgentTask() {
+        guard agentTaskActive || !agentTask.isEmpty else { return }
+        agentTaskActive = false
+        agentTask = ""
+        keyboardChanged()
+    }
+
+    /// Esc in the task field: clears a typed task, else closes the card.
+    func escapeAgentTask() {
+        if !agentTask.isEmpty { agentTask = "" } else { toggle(.agents) }
+    }
+
+    /// Return: starts (or queues) the task; the pool's line shows under the field. An empty task does nothing.
+    func submitAgentTask() {
+        let task = agentTask.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !task.isEmpty else { return }
+        guard let source = agentSource else { agentLine = "Agents are not ready yet."; return }
+        agentLine = source.startAgent(task)
+        agentTask = ""
+    }
+
+    func stopAgent(_ id: UUID) { agentSource?.stopAgent(id) }
+    func openAgentResult(_ id: UUID) { agentSource?.openAgentResult(id) }
 
     // MARK: The Spotify card's songs
 
@@ -813,6 +865,8 @@ final class EdgePanelModel: ObservableObject {
             if section == .apps { activateAppsSearch() } // focus goes to the card's field as it opens
             else if oldValue == .apps { deactivateAppsSearch(); appsFilter = .all }
             if oldValue == .spotify { deactivateSongsSearch(); songsStarredOnly = false; songsNotice = nil }
+            if section == .agents { activateAgentTask() } // the task field takes the keyboard as the card opens
+            else if oldValue == .agents { deactivateAgentTask(); agentLine = nil }
         }
     }
     @Published var chats: [ChatRow] = []
@@ -843,6 +897,7 @@ final class EdgePanelModel: ObservableObject {
         case .notes: return EdgePanelLayout.listSize(rows: notes.count, newNoteRow: true)
         case .spotify: return EdgePanelLayout.spotifySize
         case .apps: return EdgePanelLayout.appsSize
+        case .agents: return EdgePanelLayout.agentsSize
         }
     }
 
@@ -986,6 +1041,7 @@ struct EdgePanelView: View {
             case .chats, .notes: EdgeListView(model: model, section: section)
             case .spotify: EdgeSpotifyCard(model: model)
             case .apps: EdgeAppsCard(model: model)
+            case .agents: EdgeAgentsCard(model: model)
             }
         }
             .frame(width: size.width, height: size.height, alignment: .top)
@@ -1021,7 +1077,7 @@ private struct EdgeListView: View {
                 switch section {
                 case .chats: chatRows
                 case .notes: noteRows
-                case .spotify, .apps: EmptyView() // their own cards
+                case .spotify, .apps, .agents: EmptyView() // their own cards
                 }
             }
             .padding(.vertical, EdgePanelLayout.pad - 1)
@@ -1398,8 +1454,9 @@ final class EdgePanelWindow: FloatingPanel {
     /// Set by the controller from `EdgePanelModel.searchOpen` and `appsSearchActive`.
     var searchOpen = false
     var appsSearchOpen = false
+    var agentTaskOpen = false
     var songsSearchOpen = false
-    override var canBecomeKey: Bool { searchOpen || appsSearchOpen || songsSearchOpen }
+    override var canBecomeKey: Bool { searchOpen || appsSearchOpen || songsSearchOpen || agentTaskOpen }
 
     init() {
         super.init(size: EdgePanelLayout.windowSize, canKey: false)
@@ -1524,6 +1581,7 @@ final class EdgePanelController {
         model.onOpenApp = { [weak self] _ in self?.hide(leaveZoneFirst: true) } // the app opened beside it
         model.onCollapse = { [weak self] in self?.hide(leaveZoneFirst: true) }
         model.onSearchChange = { [weak self] open in self?.searchChanged(open) }
+        model.agentSource = DockAgents.live()
         model.onOpenChat = { [weak self] id in
             self?.hide(leaveZoneFirst: true) // the panel's job is done: the chat comes out beside it
             self?.onOpenChat?(id)
@@ -1757,6 +1815,11 @@ final class EdgePanelController {
                 self.model.escapeSongsSearch()
                 return nil
             }
+            // Esc in the agent task field: clears the task, else closes the Agents card.
+            if e.type == .keyDown, e.keyCode == 53, self.model.agentTaskActive {
+                self.model.escapeAgentTask()
+                return nil
+            }
             // Tab (the first key of a hold-Tab chord reaches the panel before the tap sees the second) would move the
             // focus out of the field.
             if e.type == .keyDown, e.keyCode == 48, self.model.wantsKeyboard, e.window === self.window { return nil }
@@ -1793,6 +1856,7 @@ final class EdgePanelController {
         window.searchOpen = model.searchOpen
         window.appsSearchOpen = model.appsSearchActive
         window.songsSearchOpen = model.songsSearchActive
+        window.agentTaskOpen = model.agentTaskActive
         if open {
             guard reveal.visible, window.isVisible, !window.isKeyWindow else { return }
             keyBeforeSearch = NSApp.isActive ? NSApp.keyWindow : nil

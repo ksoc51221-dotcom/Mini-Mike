@@ -338,6 +338,70 @@ extension FeatureTests {
             check("edge dock: Chats and Notes are clear of all 10 orbit places",
                   fixed.allSatisfy { f in orbit.allSatisfy { hypot($0.x - f.x, $0.y - f.y) >= L.itemSize * L.liftScale + 4 } })
         }
+        // Merlin agents (round nine): up to 3 orbs on an arc just outside the disc, above the record; the record stays.
+        do {
+            let orbs = (0..<L.agentOrbSlots).map { L.agentOrbCentre($0) }
+            let centre = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
+            let half = L.agentOrbSize / 2
+            let ringCentre = L.ringCentre
+            check("agents: the orbs are above the record, outside the disc and inside the screen edge",
+                  orbs.allSatisfy { o in o.y < centre.y - L.discWavesRadius && hypot(o.x - centre.x, o.y - centre.y) - half > L.discRadius
+                      && o.x + half * 1.12 < L.dockSize.width && o.y - half > 0 })
+            check("agents: the orbs never touch each other, Chats, the rim buttons or an orbit item at any turn",
+                  zip(orbs, orbs.dropFirst()).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) >= L.agentOrbSize * 1.12 + 4 }
+                  && orbs.allSatisfy { o in
+                      [L.fixedCentre(.chats), L.plusCentre].allSatisfy { hypot($0.x - o.x, $0.y - o.y) >= L.itemSize / 2 + half + 4 }
+                      && hypot(o.x - ringCentre.x, o.y - ringCentre.y) + half + 4 <= L.ringRadius - L.itemSize / 2 * L.liftScale
+                  })
+            let (dA, nameA) = EdgeDockFixtures.defaults()
+            defer { EdgeDockFixtures.forget(nameA) }
+            let am = EdgePanelModel(apps: EdgeDockFixtures.appStore(FixtureDockWorkspace(), defaults: dA),
+                                    spotify: EdgeDockFixtures.spotify(FixtureSpotifyBackend(.stopped)), songs: SpotifySongs(folder: nil))
+            check("agents: no pool: no orb (the \"+\" shows), and a task says the agents are not ready",
+                  am.agentOrbs.isEmpty && { am.section = .agents; am.agentTask = "x"; am.submitAgentTask(); return am.agentLine == "Agents are not ready yet." }())
+            am.section = nil
+            let fx = FixtureDockAgents.sample()
+            am.agentSource = fx
+            let orbStates = am.agentOrbs.map(\.state)
+            check("agents: 3 orbs at most, working and waiting first, then queued", orbStates == [.working, .waiting, .queued])
+            let now = Date()
+            func ended(_ s: AgentJobView.State, _ ago: TimeInterval) -> AgentJobView {
+                AgentJobView(id: UUID(), name: "Job", task: "job", state: s, step: "", started: now - 60, ended: now - ago,
+                             tokens: 0, costUSD: nil, resultNote: nil)
+            }
+            let recent = DockAgents.orbs(jobs: [fx.jobs[0]], history: [ended(.done, 3), ended(.failed, 30), ended(.stopped, 9)], now: now)
+            check("agents: a job that ended in the last 10 s keeps its orb; an older one does not",
+                  recent.map(\.state) == [.working, .done, .stopped])
+            var redraws = 0
+            let sink = am.objectWillChange.sink { redraws += 1 }
+            fx.jobs = Array(fx.jobs.dropLast())
+            EdgeDockFixtures.waitUntil(0.5) { redraws > 0 }
+            check("agents: a change in the pool redraws the dock", redraws > 0)
+            sink.cancel()
+            var keyboard: [Bool] = []
+            am.onSearchChange = { keyboard.append($0) }
+            am.tapAgents()
+            check("agents: an orb opens the Agents card, and its task field takes the keyboard",
+                  am.section == .agents && am.agentTaskActive && am.wantsKeyboard && keyboard == [true] && am.cardSize == L.agentsSize)
+            am.agentTask = "  Find cheap flights to Rome  "
+            am.submitAgentTask()
+            check("agents: Return starts the trimmed task once, shows the pool's line and clears the field",
+                  fx.started == ["Find cheap flights to Rome"] && am.agentLine == "Agent “Find cheap flights to Rome” started." && am.agentTask.isEmpty)
+            am.submitAgentTask()
+            check("agents: an empty task starts nothing", fx.started.count == 1)
+            am.stopAgent(fx.jobs[0].id)
+            am.openAgentResult(fx.history[0].id)
+            check("agents: Stop and Open note reach the pool", fx.stopped == [fx.jobs[0].id] && fx.opened == [fx.history[0].id])
+            am.agentTask = "abc"
+            am.escapeAgentTask()
+            check("agents: Esc clears a typed task first (the card stays)", am.agentTask.isEmpty && am.section == .agents)
+            am.escapeAgentTask()
+            check("agents: a second Esc closes the card and gives the keyboard back",
+                  am.section == nil && !am.agentTaskActive && !am.wantsKeyboard && keyboard == [true, false] && am.agentLine == nil)
+            am.tapAgents(); am.tapAgents()
+            check("agents: a second click on an orb closes the card", am.section == nil && !am.agentTaskActive)
+            check("agents: the tests never reach the app's pool", DockAgents.live() == nil)
+        }
         let cover = L.coverCentre, mid = CGPoint(x: L.dockSize.width, y: L.dockSize.height / 2)
         // The disc's three buttons ("+", search, collapse). Round five (Stitch) replaces the old column inside the disc
         // (14 pt from the rim, 12 pt gaps): 30 pt buttons on a 117 pt circle about the disc's centre, straddling the rim,
@@ -1205,6 +1269,9 @@ extension FeatureTests {
                 switch section {
                 case .apps:
                     return (NSRect(x: card.midX - 55, y: card.maxY - 26, width: 110, height: 12), "apps title")
+                case .agents:
+                    // The title "Agents": top left, inside the 12 pt padding.
+                    return (NSRect(x: card.minX + 14, y: card.maxY - 28, width: 40, height: 10), "agents title")
                 case .spotify where model.songsListShown:
                     // Row 0 of the list (pad, field, 8 pt): its name, right of the 28 pt cover well.
                     let top = L.spotifyPad + L.spotifySearchHeight + 8

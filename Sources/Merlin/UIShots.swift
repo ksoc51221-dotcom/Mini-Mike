@@ -171,6 +171,8 @@ enum UIShots {
             // saved song (the empty-list line). The query is set on the model (a text stand-in for the field).
             shot("edge-13-songs-list", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(query: "mi")).clipped(), pad: 0))
             shot("edge-13b-songs-spotify", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSpotifyHitsModel()).clipped(), pad: 0))
+            shot("edge-25-agents-orbs", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: false)).clipped(), pad: 0))
+            shot("edge-26-agents-card", margin: 0, edgeWall(mode, EdgePanelView(model: edgeAgentsModel(card: true)).clipped(), pad: 0))
             shot("edge-14-songs-empty", margin: 0, edgeWall(mode, EdgePanelView(model: edgeSongsModel(starred: true, empty: true)).clipped(), pad: 0))
 
             // The dock taking its colours from generated covers: very bright, grey, blue. The full dock (six apps) with the
@@ -530,6 +532,13 @@ enum UIShots {
         m.searchSpotify()
         let end = Date().addingTimeInterval(1)
         while m.webHits.isEmpty && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.01)) }
+        return m
+    }
+
+    /// The dock with the agent fixtures (one job in each state): the orbs, or the Agents card open.
+    private static func edgeAgentsModel(card: Bool) -> EdgePanelModel {
+        let m = edgeModel(card ? .agents : nil, music: true, apps: 6)
+        m.agentSource = FixtureDockAgents.sample()
         return m
     }
 
