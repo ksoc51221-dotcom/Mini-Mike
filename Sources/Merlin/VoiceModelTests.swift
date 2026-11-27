@@ -31,5 +31,15 @@ extension FeatureTests {
         check("late claim: never covers a new press", !V.acceptsLateResult(.listening))
         check("late claim: never covers another working line", !V.acceptsLateResult(.working("Transcribing…")))
         check("late claim: never covers a message", !V.acceptsLateResult(.message("Ready.")))
+        // A stale status (macOS ended the speech helper): the engine is the judge, not the status.
+        check("voice model: installed with a format is ready", Dictation.readiness(installed: true, onMac: true, hasFormat: true) == .ready)
+        check("voice model: status not installed but on this Mac with a format: try the engine, no prompt yet",
+              Dictation.readiness(installed: false, onMac: true, hasFormat: true) == .tryEngine)
+        check("voice model: not on this Mac is not ready", Dictation.readiness(installed: false, onMac: false, hasFormat: true) == .notReady)
+        check("voice model: no audio format is not ready", Dictation.readiness(installed: false, onMac: true, hasFormat: false) == .notReady)
+        check("voice model: installed without a format is not ready", Dictation.readiness(installed: true, onMac: true, hasFormat: false) != .ready)
+        let flag = Dictation.Flag()
+        flag.set(true)
+        check("voice model: the stale-status flag keeps its value", flag.get())
     }
 }

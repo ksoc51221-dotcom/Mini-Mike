@@ -35,6 +35,7 @@ final class Dictation {
     /// Loads the speech model into memory so the first press doesn't wait for it. Safe to call any time; it does nothing
     /// if the model isn't installed.
     static func warmUp() async {
+        await MainActor.run { startKeepFresh() }
         await allocateIfOnThisMac()
         guard let (transcriber, format) = await makeTranscriber() else { return }
         let analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -65,6 +66,7 @@ final class Dictation {
                     print("status after allocate=\(await AssetInventory.status(forModules: [live]))")
                     print("reservedLocales after=\(await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) })")
                 }
+                if CommandLine.arguments.contains("killhelper") { await helperKillExperiment(supported) }
                 if CommandLine.arguments.contains("reserve") {
                     do { let ok = try await AssetInventory.reserve(locale: supported); print("reserve -> \(ok)") } catch { print("reserve threw \(error)") }
                     print("status after reserve=\(await AssetInventory.status(forModules: [live]))")
@@ -74,6 +76,70 @@ final class Dictation {
         }
         RunLoop.main.run()
         exit(0)
+    }
+
+    /// `--voicemodelcheck killhelper`: ends this process's own speech helper (as macOS does after an idle time), then
+    /// prints what each repair step gives. A test process only; never the installed app's helper.
+    static func helperPIDs() -> Set<Int32> {
+        let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep"); p.arguments = ["-x", "localspeechrecognition"]
+        let pipe = Pipe(); p.standardOutput = pipe
+        guard (try? p.run()) != nil else { return [] }
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return Set(out.split(separator: "\n").compactMap { Int32($0) })
+    }
+
+    static func helperKillExperiment(_ supported: Locale) async {
+        func snap(_ label: String) async {
+            let t0 = Date()
+            let live = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
+            let status = await AssetInventory.status(forModules: [live])
+            let reserved = await AssetInventory.reservedLocales.map { $0.identifier(.bcp47) }
+            let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [live]) != nil
+            print("EXP \(label): status=\(status) reserved=\(reserved) format=\(format) (\(String(format: "%.2f", Date().timeIntervalSince(t0))) s)")
+        }
+        let known = Set((CommandLine.arguments.first { $0.hasPrefix("known=") } ?? "known=").dropFirst(6).split(separator: ",").compactMap { Int32($0) })
+        let mine = helperPIDs().subtracting(known)
+        print("EXP my helper(s): \(mine.sorted())")
+        await snap("before kill")
+        for pid in mine { kill(pid, SIGKILL) }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        await snap("after kill")
+        await snap("after kill, again")
+        let t0 = Date()
+        print("EXP app path makeTranscriber after kill: \(await makeTranscriber() != nil) (\(String(format: "%.2f", Date().timeIntervalSince(t0))) s)")
+        let t1 = Date()
+        print("EXP app path allocateIfOnThisMac after kill: \(await allocateIfOnThisMac()) (\(String(format: "%.2f", Date().timeIntervalSince(t1))) s)")
+        try? await Task.sleep(nanoseconds: 5_000_000_000)
+        await snap("after 5 s")
+        let live = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
+        do { print("EXP reserve -> \(try await AssetInventory.reserve(locale: supported))") } catch { print("EXP reserve threw \(error)") }
+        await snap("after reserve")
+        do {
+            if let r = try await AssetInventory.assetInstallationRequest(supporting: [live]) { try await r.downloadAndInstall(); print("EXP install ok") } else { print("EXP no install request") }
+        } catch { print("EXP install threw \(error)") }
+        await snap("after install")
+        if let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [live]) {
+            let analyzer = SpeechAnalyzer(modules: [live])
+            do { try await analyzer.prepareToAnalyze(in: format); print("EXP prepareToAnalyze ok") } catch { print("EXP prepareToAnalyze threw \(error)") }
+            await analyzer.cancelAndFinishNow()
+        }
+        await snap("after analyzer")
+        if let path = CommandLine.arguments.first(where: { $0.hasPrefix("audio=") })?.dropFirst(6),
+           let file = try? AVAudioFile(forReading: URL(fileURLWithPath: String(path))) {
+            let t = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
+            let analyzer = SpeechAnalyzer(modules: [t])
+            let collect = Task { () -> String in
+                var text = ""
+                do { for try await r in t.results { text += String(r.text.characters) } } catch { text += " [results threw \(error)]" }
+                return text
+            }
+            do {
+                if let last = try await analyzer.analyzeSequence(from: file) { try await analyzer.finalizeAndFinish(through: last) } else { await analyzer.cancelAndFinishNow() }
+            } catch { print("EXP transcribe threw \(error)") }
+            print("EXP transcript after kill: \"\(await collect.value)\"")
+        }
+        print("EXP helpers now: \(helperPIDs().subtracting(known).sorted())")
     }
 
     /// macOS can have the English model on the Mac (other apps use it) and still say it isn't set up for Merlin: each app
@@ -86,9 +152,12 @@ final class Dictation {
         let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
         if await AssetInventory.status(forModules: [transcriber]) == .installed { return true }
         guard await isInstalled() else { return false }
+        // A stale status (macOS ended the helper): the engine still works, and a new claim would change nothing.
+        if await makeTranscriber() != nil { return true }
         do { try await Transcription.install(transcriber, reserving: supported, progress: { _ in }) }
         catch { log("claim threw: \(error)") }
-        let ready = await AssetInventory.status(forModules: [transcriber]) == .installed
+        var ready = await AssetInventory.status(forModules: [transcriber]) == .installed
+        if !ready { ready = await makeTranscriber() != nil }
         log("claim ended: ready=\(ready)")
         return ready
     }
@@ -170,9 +239,59 @@ final class Dictation {
         guard let supported = await SpeechTranscriber.supportedLocale(equivalentTo: locale) else { return nil }
         let transcriber = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults],
                                             attributeOptions: [])
-        guard await AssetInventory.status(forModules: [transcriber]) == .installed,
-              let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else { return nil }
+        let installed = await AssetInventory.status(forModules: [transcriber]) == .installed
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else { return nil }
+        if installed { staleStatus.set(false); return (transcriber, format) }
+        let onMac = await isInstalled()
+        guard readiness(installed: installed, onMac: onMac, hasFormat: true) == .tryEngine else { return nil }
+        // macOS ends an app's speech helper after an idle time. From then on `AssetInventory` tells this process
+        // "supported, nothing reserved" for ever, and a new claim changes nothing, but the engine still works
+        // (measured: `--voicemodelcheck killhelper`). So the status is not the judge: an engine that starts is.
+        if !staleStatus.get() {
+            guard await engineStarts(supported, format: format) else { log("status not installed and the engine does not start"); return nil }
+            staleStatus.set(true)
+            log("status is stale (speech helper was ended by macOS); the engine starts, so voice goes on")
+        }
         return (transcriber, format)
+    }
+
+    /// How to treat a model that macOS does not report as installed for Merlin.
+    enum Readiness: Equatable { case ready, tryEngine, notReady }
+
+    /// `installed`: the status answer. `onMac`: the model's files are on this Mac. `hasFormat`: the engine names an audio
+    /// format. A status that is not "installed" can be stale, so a model that is on the Mac gets one engine start as proof.
+    static func readiness(installed: Bool, onMac: Bool, hasFormat: Bool) -> Readiness {
+        if installed && hasFormat { return .ready }
+        return onMac && hasFormat ? .tryEngine : .notReady
+    }
+
+    /// True after an engine start proved that the model works although the status says it is not installed.
+    final class Flag: @unchecked Sendable {
+        private let lock = NSLock(); private var value = false
+        func get() -> Bool { lock.lock(); defer { lock.unlock() }; return value }
+        func set(_ v: Bool) { lock.lock(); value = v; lock.unlock() }
+    }
+    static let staleStatus = Flag()
+
+    /// One engine start with a new transcriber (no microphone, no sound): the proof that the model works.
+    static func engineStarts(_ supported: Locale, format: AVAudioFormat) async -> Bool {
+        let probe = SpeechTranscriber(locale: supported, transcriptionOptions: [], reportingOptions: [.volatileResults], attributeOptions: [])
+        let analyzer = SpeechAnalyzer(modules: [probe])
+        do { try await analyzer.prepareToAnalyze(in: format) } catch { log("engine start threw: \(error)"); await analyzer.cancelAndFinishNow(); return false }
+        await analyzer.cancelAndFinishNow()
+        return true
+    }
+
+    /// Every 5 minutes: one status question in the background. After macOS ends the helper, the first question waits
+    /// about 10 s for a dead connection; this takes that wait away from the next press. Started once by `warmUp`.
+    nonisolated(unsafe) private static var keepTimer: DispatchSourceTimer?
+    static func startKeepFresh() {
+        guard keepTimer == nil, Bundle.main.bundleIdentifier != nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "merlin.voice.keepfresh", qos: .utility))
+        timer.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(30))
+        timer.setEventHandler { Task.detached(priority: .utility) { _ = await makeTranscriber() } }
+        timer.resume()
+        keepTimer = timer
     }
 
     // MARK: - One press
