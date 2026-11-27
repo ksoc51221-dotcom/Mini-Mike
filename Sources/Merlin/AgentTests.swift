@@ -544,6 +544,113 @@ extension FeatureTests {
         reader.read(#"{"type":"result","result":" Set a reminder for 30 minutes.\n\nSources:\n- https://x ","total_cost_usd":0.004}"#)
         check("agent stream: tokens once per message, and the last line", reader.tokens == 3185 && reader.result == "Set a reminder for 30 minutes." && reader.costUSD == 0.004)
         check("agent: the caps are 8 tool calls, 50k tokens and 120 s", AgentTools.stepCap == 8 && AgentLoop.tokenCap == 50_000 && AgentLoop.timeLimit == 120)
+        agentDialogChecks(check)
+        whatsAppChecks(check, runner: runner, mail: fakeMail, messages: fakeMsg, mac: fakeMac)
+    }
+
+    /// The agents' dialog (2026-11-27, the dialog that locked Merlin's screen): above the dock, never modal, Return and
+    /// Esc say no, no by itself at the time limit, and the main queue keeps running while it waits. Off-screen only.
+    static func agentDialogChecks(_ check: (String, Bool) -> Void) {
+        _ = NSApplication.shared
+        AgentDialog.hidden = true
+        defer { AgentDialog.hidden = false }
+        let q = AgentQuestion(title: "Agent “Merlin”: Send “hi” to baby on WhatsApp?", detail: "hi", details: "the script", yes: "Send", no: "Don't send")
+        check("dialog: the agent's name leaves the title", q.agent == "Merlin" && q.title == "Send “hi” to baby on WhatsApp?")
+        check("dialog: a plain send title", AgentDialog.sendTitle("hi", to: "baby", app: "WhatsApp") == "Send “hi” to baby on WhatsApp?"
+              && AgentDialog.sendTitle(String(repeating: "long ", count: 20), to: "Tom", app: "Messages") == "Send this message to Tom on Messages?")
+        let c = AgentDialogController(q)
+        c.show()
+        check("dialog: above the dock and its cards (the old alert was under them)",
+              c.panel.level.rawValue > NSWindow.Level.statusBar.rawValue + 1 && c.panel.level.rawValue > NSWindow.Level.modalPanel.rawValue)
+        check("dialog: Return is no (the default button); the yes button has no key", c.panel.defaultButtonCell === c.noButton.cell && c.yesButton.keyEquivalent.isEmpty)
+        check("dialog: not modal (other windows keep working)", NSApp.modalWindow == nil && c.panel.canBecomeKey)
+        check("dialog: the script waits behind Show details", !c.detailsShown && c.detailsButton.title == "Show details")
+        c.detailsButton.performClick(nil)
+        check("dialog: Show details shows it", c.detailsShown && c.detailsButton.title == "Hide details")
+        c.yesButton.performClick(nil)
+        check("dialog: a click on the yes button is a yes, once", c.answer == true && !c.panel.isVisible)
+        c.finish(false)
+        check("dialog: the first answer stays", c.answer == true)
+        let esc = AgentDialogController(q); esc.show()
+        esc.panel.cancelOperation(nil)
+        let ret = AgentDialogController(q); ret.show()
+        let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: ret.panel.windowNumber,
+                                     context: nil, characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36)
+        _ = enter.map { ret.panel.performKeyEquivalent(with: $0) }
+        let closed = AgentDialogController(q); closed.show()
+        closed.panel.performClose(nil)
+        check("dialog: Esc, Return and the close button say no", esc.answer == false && ret.answer == false && closed.answer == false)
+        let late = AgentDialogController(q, timeout: 0.2); late.show()
+        Thread.sleep(forTimeInterval: 0.3)
+        late.debugTick()
+        check("dialog: no by itself at the time limit", late.answer == false && !late.panel.isVisible)
+        check("dialog: the limit is 60 s and the panel shows it", AgentDialog.timeout == 60 && c.countdown.stringValue.contains("60 s"))
+        // From a tool's thread (as the agent server calls it): the main queue keeps running while it waits.
+        final class Run { var answer: Bool?; var mainRan = false; var mainRanBeforeAnswer = false }
+        let run = Run()
+        DispatchQueue.global().async {
+            let a = AgentDialog.ask(q, timeout: 0.6)
+            DispatchQueue.main.async { run.answer = a }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { run.mainRan = true; run.mainRanBeforeAnswer = run.answer == nil }
+        let until = Date(timeIntervalSinceNow: 8)
+        while run.answer == nil, Date() < until { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.05)) }
+        check("dialog: while it waits, Merlin's main queue keeps running (the old one froze it)", run.mainRan && run.mainRanBeforeAnswer)
+        check("dialog: a tool's ask says no by itself at its limit", run.answer == false)
+    }
+
+    /// whatsapp_send with fakes: the number from Contacts, one yes, then WhatsApp's link. Nothing is sent to a person.
+    static func whatsAppChecks(_ check: (String, Bool) -> Void, runner: ActionRunner, mail: MailBackend, messages: MessagesBackend, mac base: MacBackend) {
+        check("whatsapp: numbers", WhatsAppTools.number("+44 7700 900123").map { $0.digits == "447700900123" && $0.international } == true
+              && WhatsAppTools.number("0044 7700 900123")?.international == true
+              && WhatsAppTools.number("07700 900123").map { $0.digits == "07700900123" && !$0.international } == true
+              && WhatsAppTools.number("baby") == nil && WhatsAppTools.number("12") == nil)
+        check("whatsapp: the link keeps + and & as text",
+              WhatsAppTools.link(digits: "447700900123", text: "hi & bye +1")?.absoluteString == "whatsapp://send?phone=447700900123&text=hi%20%26%20bye%20%2B1")
+        final class Log { var contacts = "Baby | +44 7700 900123,  | \n"; var asked: [(String, String, String, String?)] = []; var yes = true; var opened: [URL] = []; var searched: [String] = [] }
+        let log = Log()
+        let mac = MacBackend(contacts: { q in log.searched.append(q); return AgentToolResult(text: log.contacts, isError: false) },
+                             calendarList: base.calendarList, calendarAdd: base.calendarAdd, confirmEvent: base.confirmEvent,
+                             remindersAdd: base.remindersAdd, confirmReminder: base.confirmReminder, remindersList: base.remindersList,
+                             files: base.files, shortcutNames: base.shortcutNames, runShortcut: base.runShortcut, confirmShortcut: base.confirmShortcut)
+        let wa = WhatsAppBackend(open: { u in log.opened.append(u); return AgentToolResult(text: "Opened.", isError: false) },
+                                 confirm: { n, p, t, w in log.asked.append((n, p, t, w)); return log.yes })
+        var scripts = 0
+        func tools(_ request: String) -> AgentTools {
+            let t = AgentTools(runner: runner, confirmScript: { _, _ in scripts += 1; return true }, runScript: { _, _ in AgentToolResult(text: "ran", isError: false) },
+                               trackTitle: { _ in nil }, mail: mail, messages: messages, mac: mac, whatsapp: wa)
+            t.request = request
+            return t
+        }
+        let req = "send a message to baby in whatsapp saying \"hi\""
+        let ok = tools(req).call("whatsapp_send", ["to": "baby", "text": "hi"])
+        check("whatsapp: Contacts gives the number; one yes names the person and the text",
+              !ok.isError && log.searched == ["baby"] && log.asked.count == 1 && log.asked[0].0 == "Baby" && log.asked[0].2 == "hi" && log.asked[0].3 == nil)
+        check("whatsapp: a yes opens WhatsApp's own link, once", log.opened.map(\.absoluteString) == ["whatsapp://send?phone=447700900123&text=hi"]
+              && ok.text.contains("Return in WhatsApp"))
+        log.yes = false
+        let no = tools(req).call("whatsapp_send", ["to": "baby", "text": "hi"])
+        check("whatsapp: a no opens nothing", no.isError && no.text.contains("don't send") && log.opened.count == 1)
+        log.yes = true
+        log.contacts = "Baby |  | baby@example.com, \n"
+        let noPhone = tools(req).call("whatsapp_send", ["to": "baby", "text": "hi"])
+        log.contacts = "No contact matches."
+        let noOne = tools(req).call("whatsapp_send", ["to": "baby", "text": "hi"])
+        check("whatsapp: no phone number in Contacts: it says so and stops (no dialog, nothing opened)",
+              noPhone.isError && noPhone.text.contains("No phone number for “baby”") && noOne.isError && noOne.text.contains("No phone number")
+              && log.asked.count == 2 && log.opened.count == 1)
+        log.contacts = "Baby Lee | +44 7700 900123,  | \nBaby Tran | +44 7700 900456,  | \n"
+        let two = tools(req).call("whatsapp_send", ["to": "baby", "text": "hi"])
+        check("whatsapp: two people match: ask which one, nothing opened", two.isError && two.text.contains("Ask the user which one") && log.opened.count == 1)
+        log.contacts = "Baby | +44 7700 900123,  | \n"
+        _ = tools("text my friend hi on whatsapp").call("whatsapp_send", ["to": "baby", "text": "hi"])
+        check("whatsapp: a person not in the user's words is flagged", log.asked.last?.3?.contains("not in your words") == true)
+        let typed = tools(req).call("run_script", ["language": "applescript", "summary": "Send hi on WhatsApp",
+                                                    "script": "tell application \"System Events\" to keystroke \"baby\"\ntell application \"WhatsApp\" to activate"])
+        check("whatsapp: a script that types into WhatsApp is refused before any dialog", typed.isError && typed.text.contains("whatsapp_send") && scripts == 0)
+        check("whatsapp: the tool is listed, and private like Contacts", AgentTools.names.contains("whatsapp_send") && AgentTools.personalTools.contains("whatsapp_send"))
+        check("whatsapp: the sentence goes to the agent", AgentRequest.looksLikeRequest("send hi to baby on whatsapp", context: ActionContext())
+              && AgentRequest.looksLikeRequest("message Mum on WhatsApp that I'm late", context: ActionContext()))
     }
 
     /// `Merlin --agenttest`: the REAL loop (claude, Haiku, web search) with FAKE tools: nothing on this Mac changes and

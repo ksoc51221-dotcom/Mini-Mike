@@ -44,6 +44,7 @@ final class AgentTools {
     }
     /// Contacts, Calendar, Reminders, file search, Shortcuts.
     let mac: MacBackend
+    let whatsapp: WhatsAppBackend
     /// Numbers and addresses that Contacts gave in this run: a send to one of them needs no "not in your words" warning.
     private(set) var knownRecipients: Set<String> = []
     /// Apple Messages: an iMessage to a person, only after a yes.
@@ -64,7 +65,7 @@ final class AgentTools {
 
     /// Tools that read the user's private data. After one of them, each web call of the run asks first; after a web
     /// read, the first of them asks first (a web page could try to send the data away).
-    static let personalTools: Set<String> = ["mail_read", "contacts_find", "calendar_list", "reminders_list", "files_find"]
+    static let personalTools: Set<String> = ["mail_read", "contacts_find", "calendar_list", "reminders_list", "files_find", "whatsapp_send"]
     private(set) var usedPersonal = false
     private(set) var usedWeb = false
     private var personalAfterWebOK = false
@@ -74,8 +75,9 @@ final class AgentTools {
     init(runner: ActionRunner, confirmScript: @escaping (String, String) -> Bool,
          runScript: @escaping (String, String) -> AgentToolResult = AgentTools.liveRunScript,
          trackTitle: @escaping (String) -> String? = AgentTools.liveTrackTitle, mail: MailBackend = .live,
-         messages: MessagesBackend = .live, mac: MacBackend = .live) {
+         messages: MessagesBackend = .live, mac: MacBackend = .live, whatsapp: WhatsAppBackend = .live) {
         self.mac = mac
+        self.whatsapp = whatsapp
         self.mail = mail
         self.messages = messages
         self.runner = runner
@@ -126,6 +128,9 @@ final class AgentTools {
         tool("message_send", "Send an iMessage (Apple Messages) to a phone number or an email address the REQUEST gives. Merlin shows the user who and all of the text and sends it only on a yes. A person named without a number: ask for the number, send nothing.",
              ["to": ["type": "string", "description": "A phone number (+ and digits) or an email address"],
               "text": ["type": "string"]], required: ["to", "text"]),
+        tool("whatsapp_send", "Send a WhatsApp message to a person in the user's Contacts (give the name) or to a phone number the REQUEST gives. Merlin finds the number, shows the user who and the text, and on a yes opens WhatsApp with the message ready. The only way to use WhatsApp: never a script, keystrokes or a search inside WhatsApp.",
+             ["to": ["type": "string", "description": "The person's name as in Contacts, or a phone number with its country code"],
+              "text": ["type": "string"]], required: ["to", "text"]),
         tool("contacts_find", "Find people in the user's Contacts by name: their phone numbers and email addresses. If more than one person matches, ask the user which one and send nothing.",
              ["name": ["type": "string"]], required: ["name"]),
         tool("calendar_list", "List the user's calendar events from now for some days.", ["days": ["type": "number", "description": "1 to 31 (default 7)"]]),
@@ -160,6 +165,14 @@ final class AgentTools {
             }
             return Thread.isMainThread ? run() : DispatchQueue.main.sync(execute: run)
         }
+    }
+
+    /// A yes/no dialog: on the caller's own thread, never inside a main-queue block (that froze Merlin), with the
+    /// request's clock stopped. `AgentDialog.ask` puts the panel on the main thread itself.
+    private func asking<T>(_ work: () -> T) -> T {
+        inDialog = true
+        defer { inDialog = false }
+        return work()
     }
 
     /// Call it off the main thread (the tool server does); tests call it on the main thread.
@@ -212,6 +225,7 @@ final class AgentTools {
         case "play_spotify_track": return playTrack(str("track_url"), title: str("title"))
         case "run_script": return script(str("language"), str("script"), summary: str("summary"))
         case "message_send": return messageSend(to: str("to"), text: (args["text"] as? String) ?? "")
+        case "whatsapp_send": return whatsappSend(to: str("to"), text: (args["text"] as? String) ?? "")
         case "contacts_find":
             let q = str("name")
             guard q.count >= 2 else { return AgentToolResult(text: "contacts_find needs a name.", isError: true) }
@@ -318,12 +332,16 @@ final class AgentTools {
         guard ["applescript", "shell"].contains(language), !source.isEmpty else {
             return AgentToolResult(text: "language must be applescript or shell, with a script.", isError: true)
         }
+        let lower = source.lowercased()
+        if lower.contains("whatsapp"), lower.contains("keystroke") || lower.contains("key code") {
+            return AgentToolResult(text: "Scripts may not type into WhatsApp. Use whatsapp_send.", isError: true)
+        }
         guard source.count <= Self.maxScript else {
             return AgentToolResult(text: "Too long to show the user: keep the script under \(Self.maxScript) characters.", isError: true)
         }
         let line = summary.isEmpty ? "Run a \(language == "shell" ? "shell command" : "script") on your Mac" : summary
         onAsk?(true)
-        let approved = onMain { confirmScript(line, source) }
+        let approved = asking { confirmScript(line, source) }
         onAsk?(false)
         guard approved else {
             return AgentToolResult(text: "The user said no. Do not try another way; tell the user it was not done.", isError: true)
@@ -334,7 +352,7 @@ final class AgentTools {
     }
 
     static func personalLabel(_ tool: String) -> String {
-        ["mail_read": "email", "contacts_find": "contacts", "calendar_list": "calendar", "reminders_list": "reminders",
+        ["mail_read": "email", "contacts_find": "contacts", "whatsapp_send": "contacts", "calendar_list": "calendar", "reminders_list": "reminders",
          "files_find": "files"][tool] ?? "private data"
     }
 
@@ -357,7 +375,7 @@ final class AgentTools {
     /// The one pattern for "ask first": the dialog (the row shows "waiting"), then nothing after a stop, then the work.
     private func confirmed(_ ask: () -> Bool, no: String, then work: () -> AgentToolResult) -> AgentToolResult {
         onAsk?(true)
-        let yes = onMain(ask)
+        let yes = asking(ask)
         onAsk?(false)
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
         guard yes else { return AgentToolResult(text: no + " Do not try another way; tell the user it was not done.", isError: true) }
@@ -376,12 +394,57 @@ final class AgentTools {
         let known = MessagesTools.inRequest(target, request: request) || knownRecipients.contains(target)
         let warning = known ? nil : "Check the number: \(target) is not in your words."
         onAsk?(true)
-        let yes = onMain { messages.confirm(target, body, warning) }
+        let yes = asking { messages.confirm(target, body, warning) }
         onAsk?(false)
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
         guard yes else { return AgentToolResult(text: "The user said don't send. Do not send it another way; tell the user it was not sent.", isError: true) }
         onMain { onStep?("Sending the message") }
         return messages.send(target, body)
+    }
+
+    /// WhatsApp: the number from Contacts (or the request), one yes, then WhatsApp's own link. No number: nothing.
+    private func whatsappSend(to: String, text: String) -> AgentToolResult {
+        let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty, body.count <= WhatsAppTools.maxText else {
+            return AgentToolResult(text: "The message needs a text of at most \(WhatsAppTools.maxText) characters.", isError: true)
+        }
+        guard to.count >= 2 else { return AgentToolResult(text: "whatsapp_send needs a name or a number.", isError: true) }
+        let stop = " Nothing was sent. Tell the user; do not try another way."
+        var name = to, phone = to, known: Bool
+        if WhatsAppTools.number(to) != nil {
+            known = MessagesTools.inRequest(to, request: request)
+        } else {
+            onMain { onStep?("Looking in Contacts for \(to)") }
+            let r = mac.contacts(to)
+            if r.isError { return AgentToolResult(text: r.text + stop, isError: true) }
+            let people = WhatsAppTools.people(inContactLines: r.text).filter { !$0.phones.isEmpty }
+            if people.isEmpty { return AgentToolResult(text: "No phone number for “\(to)” in Contacts." + stop, isError: true) }
+            if people.count > 1 {
+                return AgentToolResult(text: "More than one person matches “\(to)”: \(people.map(\.name).joined(separator: ", ")). Ask the user which one." + stop, isError: true)
+            }
+            let p = people[0]
+            if Set(p.phones.compactMap { WhatsAppTools.number($0)?.digits }).count > 1 {
+                return AgentToolResult(text: "\(p.name) has more than one number: \(p.phones.joined(separator: ", ")). Ask the user which one." + stop, isError: true)
+            }
+            name = p.name
+            phone = p.phones[0]
+            known = request.lowercased().contains(to.lowercased())
+        }
+        guard let n = WhatsAppTools.number(phone), let url = WhatsAppTools.link(digits: n.digits, text: body) else {
+            return AgentToolResult(text: "“\(phone)” is not a phone number." + stop, isError: true)
+        }
+        let warning = [known ? nil : "Check the person: “\(to)” is not in your words.",
+                       n.international ? nil : "This number has no country code (+…). WhatsApp may not find it."]
+            .compactMap { $0 }.joined(separator: " ")
+        onAsk?(true)
+        let yes = asking { whatsapp.confirm(name, phone, body, warning.isEmpty ? nil : warning) }
+        onAsk?(false)
+        guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
+        guard yes else { return AgentToolResult(text: "The user said don't send." + stop, isError: true) }
+        onMain { onStep?("Opening WhatsApp") }
+        let r = whatsapp.open(url)
+        if r.isError { return r }
+        return AgentToolResult(text: "WhatsApp is open on the chat with \(name), with the message ready. The user presses Return in WhatsApp to send it. Tell the user that.", isError: false)
     }
 
     /// A send never happens without a yes; a no leaves the draft open in Mail for the user.
@@ -400,7 +463,7 @@ final class AgentTools {
         let stranger = MailTools.notInRequest(list, request: request).filter { !knownRecipients.contains($0) }
         let warning = stranger.isEmpty ? nil : "Check the address: \(stranger.joined(separator: ", ")) is not in your words."
         onAsk?(true)
-        let yes = onMain { mail.confirmSend(draft, warning) }
+        let yes = asking { mail.confirmSend(draft, warning) }
         onAsk?(false)
         guard !cancelled else { return AgentToolResult(text: "This request was stopped before the yes came.", isError: true) }
         guard yes else {
@@ -456,15 +519,10 @@ final class AgentTools {
 
     /// The live yes/no for a script: the plain line, then the script itself, so a misleading summary can be seen.
     static func liveConfirmScript(_ line: String, _ source: String) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Merlin wants to: \(line)"
-        alert.informativeText = source // all of it: `maxScript` keeps it short enough to show
-        // "Don't run" is the Return button; "Run it" has no key, so a key pressed for another app can't say yes.
-        alert.addButton(withTitle: "Don't run")
-        let run = alert.addButton(withTitle: "Run it")
-        run.keyEquivalent = ""
-        alert.alertStyle = .warning
-        return alert.runModal() == .alertSecondButtonReturn
+        let s = AgentQuestion.split(line)
+        var title = s.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !title.hasSuffix("?") { title = title.trimmingCharacters(in: CharacterSet(charactersIn: ".!")) + "?" }
+        return AgentDialog.ask(AgentQuestion(title: title, detail: "Merlin wrote a script for this. It runs only if you click Run.",
+                                             details: source, yes: "Run", no: "Don't run", agent: s.agent))
     }
 }

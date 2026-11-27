@@ -21,7 +21,7 @@ enum AgentRequest {
     static let targets: Set<String> = ["reminder", "reminders", "remind", "timer", "timers", "alarm", "dock", "doc", "rotation",
                                        "ring", "app", "apps", "spotify", "song", "songs", "music", "track", "playlist", "volume",
                                        "wifi", "wi-fi", "bluetooth", "brightness", "dark", "folder", "file", "files", "routine",
-                                       "window", "windows", "tab", "tabs", "desktop", "trash", "bin", "email", "emails", "mail", "inbox", "message",
+                                       "window", "windows", "tab", "tabs", "desktop", "trash", "bin", "email", "emails", "mail", "inbox", "message", "whatsapp",
                                        "minute", "minutes", "hour", "hours", "note", "notes", "source", "sources", "web",
                                        "internet", "online", "agent", "calendar", "event", "events", "contact", "contacts", "shortcut",
                                        "number", "phone", "mum", "mom", "dad", "teacher", "essay", "draft", "homework"]
@@ -291,6 +291,8 @@ final class AgentLoop {
         with send false and an empty "to", and say so.
         - A text message (iMessage): message_send to a number or address the REQUEST gives, or that contacts_find gives for \
         a person the REQUEST names; Merlin asks the user first. Two or more matches in Contacts: ask which one, send nothing.
+        - WhatsApp: only whatsapp_send (the person's name or number; Merlin finds the number and asks first). Never a script \
+        or keystrokes for WhatsApp.
         - Calendar: calendar_list, calendar_add (Merlin asks first). Apple Reminders (only when the REQUEST says Reminders \
         or the Reminders app): reminders_add, reminders_list. Files: files_find. Apple Shortcuts: shortcut_run (asks first).
         - A long task (research on the web, finding several sources, comparing options, a summary into a note): call \

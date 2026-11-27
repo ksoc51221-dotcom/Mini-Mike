@@ -242,14 +242,6 @@ enum MacTools {
 
     /// A yes/no with "Don't" as the Return button and the yes button with no key.
     static func confirm(_ title: String, _ detail: String, yes: String) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = title
-        alert.informativeText = detail
-        alert.addButton(withTitle: "Don't")
-        let ok = alert.addButton(withTitle: yes)
-        ok.keyEquivalent = ""
-        alert.alertStyle = .warning
-        return alert.runModal() == .alertSecondButtonReturn
+        AgentDialog.ask(AgentQuestion(title: title, detail: detail, yes: yes, no: "Don't " + yes.lowercased()))
     }
 }

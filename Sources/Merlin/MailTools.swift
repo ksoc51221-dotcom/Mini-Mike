@@ -135,25 +135,13 @@ enum MailTools {
     }
 
     /// The yes/no before a send: who, the subject and all of the text, so nothing is sent unseen.
-    static func liveConfirmSend(_ d: MailDraft, _ warning: String?) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Send this email?"
-        alert.informativeText = (warning.map { "⚠︎ \($0)\n\n" } ?? "") + "To: \(d.to.joined(separator: ", "))\nSubject: \(d.subject)"
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 200))
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
-        let text = NSTextView(frame: scroll.bounds)
-        text.string = d.body
-        text.isEditable = false
-        text.autoresizingMask = [.width]
-        scroll.documentView = text
-        alert.accessoryView = scroll
-        // "Don't send" is the Return button; "Send" has no key, so a key pressed for another app can't say yes.
-        alert.addButton(withTitle: "Don't send")
-        let send = alert.addButton(withTitle: "Send")
-        send.keyEquivalent = ""
-        alert.alertStyle = .warning
-        return alert.runModal() == .alertSecondButtonReturn
+    static func liveConfirmSend(_ d: MailDraft, _ warning: String?) -> Bool { liveConfirmSend(d, warning, agent: nil) }
+
+    static func liveConfirmSend(_ d: MailDraft, _ warning: String?, agent: String?) -> Bool {
+        let short = d.body.count <= 400
+        return AgentDialog.ask(AgentQuestion(title: "Send this email to \(d.to.joined(separator: ", "))?",
+                                             detail: "Subject: \(d.subject)\n\n" + (short ? d.body : String(d.body.prefix(400)) + "…"),
+                                             warning: warning, details: short ? nil : d.body,
+                                             yes: "Send", no: "Don't send", agent: agent))
     }
 }

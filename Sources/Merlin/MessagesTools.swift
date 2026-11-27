@@ -58,17 +58,11 @@ enum MessagesTools {
         return r
     }
 
-    static func liveConfirm(_ to: String, _ text: String, _ warning: String?) -> Bool {
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Send this message to \(to)?"
-        alert.informativeText = (warning.map { "⚠︎ \($0)\n\n" } ?? "") + text
-        // "Don't send" is the Return button; "Send" has no key, so a key pressed for another app can't say yes.
-        alert.addButton(withTitle: "Don't send")
-        let send = alert.addButton(withTitle: "Send")
-        send.keyEquivalent = ""
-        alert.alertStyle = .warning
-        return alert.runModal() == .alertSecondButtonReturn
+    static func liveConfirm(_ to: String, _ text: String, _ warning: String?) -> Bool { liveConfirm(to, text, warning, agent: nil) }
+
+    static func liveConfirm(_ to: String, _ text: String, _ warning: String?, agent: String?) -> Bool {
+        AgentDialog.ask(AgentQuestion(title: AgentDialog.sendTitle(text, to: to, app: "Messages"), detail: text,
+                                      warning: warning, yes: "Send", no: "Don't send", agent: agent))
     }
 }
 
