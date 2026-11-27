@@ -18,9 +18,12 @@ extension FeatureTests {
         func mid(_ r: CGRect) -> CGPoint { CGPoint(x: r.midX, y: r.midY) }
 
         // The style switch.
-        check("lens: MERLIN_EDGE_GLASS=lens picks it, D on the sheet, regular stays the default",
+        check("lens: MERLIN_EDGE_GLASS=lens picks it (D on the sheet); unset or unknown is the plain glass (E)",
               EdgeGlassStyle.from("lens") == .lens && EdgeGlassStyle.from("LENS") == .lens && EdgeGlassStyle.lens.letter == "D"
-                && EdgeGlassStyle.from(nil) == .lens && EdgeGlassStyle.from("regular") == .regular && EdgeGlassStyle.lens.isClear)
+                && EdgeGlassStyle.from(nil) == .plain && EdgeGlassStyle.from("odd") == .plain && EdgeGlassStyle.plain.letter == "E"
+                && EdgeGlassStyle.from("regular") == .regular && EdgeGlassStyle.lens.isClear && EdgeGlassStyle.plain.isClear)
+        check("glass G2: the default style never starts the screen copy",
+              !EdgeLensPolicy.mayRun(requested: EdgeGlassStyle.from(nil), shown: true, flat: false, runAllowed: true))
         check("lens: shape kinds from the SwiftUI shapes",
               EdgeLensShape.Kind(Circle()) == .circle && EdgeLensShape.Kind(Capsule()) == .capsule
                 && EdgeLensShape.Kind(RoundedRectangle(cornerRadius: L.cardRadius, style: .continuous)) == .roundedRect(L.cardRadius)

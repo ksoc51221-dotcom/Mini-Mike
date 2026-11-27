@@ -60,8 +60,8 @@ enum EdgeDockArt {
     static var flat: Bool {
         !glassEnabled || Motion.still || NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
     }
-    /// Which of the three glass looks the dock draws (the user picks from real-screen pictures). Read once at launch from
-    /// `MERLIN_EDGE_GLASS=clear|tinted|regular|lens`; `lens` when unset. The capture tool changes it in code.
+    /// Which glass look the dock draws. Read once at launch from `MERLIN_EDGE_GLASS=plain|clear|tinted|regular|lens`;
+    /// `plain` when unset (2026-11-27, Merlin: plain semi-transparent glass, no bend). The capture tool changes it in code.
     nonisolated(unsafe) static var glassStyle = EdgeGlassStyle.from(ProcessInfo.processInfo.environment["MERLIN_EDGE_GLASS"])
 }
 
@@ -70,16 +70,21 @@ enum EdgeDockArt {
 /// bottom, a soft darker band inside the left edge, no glow, white text on soft local scrims. `clearTinted`: the same
 /// with a faint palette tint in the glass. `lens`: Merlin's own refractive glass (`EdgeLensView.swift`): the backdrop
 /// stays sharp and bends at the edge; falls back to `clearTinted` when it cannot run (`EdgeLensPolicy`).
+/// `plain` (the default since 2026-11-27): a frosted blur (`thinMaterial`, no Liquid Glass, no bend, no screen copy)
+/// tinted with the cover's accent, one soft shadow below, a bright top-left rim line, a faint dark bottom-right line and
+/// a weak top-to-bottom light. All of it static.
 enum EdgeGlassStyle: String, CaseIterable, Equatable {
-    case regular, clearTinted, clear, lens
+    case regular, clearTinted, clear, lens, plain
 
-    /// `clear`, `tinted` (or `cleartinted`), `lens`, `regular`; anything else: `regular`.
+    /// `plain` when unset or unknown; `clear`, `tinted` (or `cleartinted`), `regular` and `lens` only on request (the lens
+    /// copies the screen and bends it: Merlin dropped it as the default for its load).
     static func from(_ value: String?) -> EdgeGlassStyle {
         switch value?.lowercased() {
         case "clear": return .clear
         case "tinted", "cleartinted", "clear-tinted": return .clearTinted
         case "regular": return .regular
-        default: return .lens // the user's choice (2026-11-26); it falls back to clearTinted when it cannot run
+        case "lens": return .lens
+        default: return .plain
         }
     }
 
@@ -91,6 +96,7 @@ enum EdgeGlassStyle: String, CaseIterable, Equatable {
         case .clearTinted: return "B"
         case .clear: return "C"
         case .lens: return "D"
+        case .plain: return "E"
         }
     }
 }
@@ -122,6 +128,12 @@ enum EdgeGlass {
 
     /// The palette hint in the `clearTinted` glass (fainter than `tint`).
     static let clearTint: CGFloat = 0.07
+    /// The plain glass: the cover's accent in the frost, the top light, the rim lines, the shadow below.
+    static let plainTint: CGFloat = 0.16
+    static let plainLight: CGFloat = 0.10
+    static let plainRimLight: CGFloat = 0.42
+    static let plainRimDark: CGFloat = 0.28
+    static let plainShadow = (opacity: 0.28, radius: CGFloat(10), y: CGFloat(4))
     /// The dim under text and small glyphs on the clear styles (soft-edged, only behind them).
     static let scrim: CGFloat = 0.32
     /// The lens's text shadow (no box): black at `near` with radius 1 and at `far` with radius 4, no offset, following
@@ -133,7 +145,7 @@ enum EdgeGlass {
         switch style {
         case .regular: return .regular.tint(palette.rimColor.opacity(tint))
         case .clearTinted: return .clear.tint(palette.rimColor.opacity(clearTint))
-        case .clear, .lens: return .clear // the lens draws no system glass (`EdgeGlassSurface`)
+        case .clear, .lens, .plain: return .clear // the lens and plain draw no system glass (`EdgeGlassSurface`)
         }
     }
 
@@ -214,6 +226,21 @@ private struct EdgeGlassSurface<S: InsettableShape>: ViewModifier {
         } else if style == .lens {
             // Merlin's own lens (no system glass, no SwiftUI rim or band: the shader draws both).
             content.modifier(EdgeLensGlass(shape: shape, region: region))
+        } else if style == .plain {
+            // Plain glass: drawn once, nothing here redraws per frame (the blur is the window server's own material).
+            content
+                .background {
+                    ZStack {
+                        EdgeOuterShadow(shape: shape, color: .black.opacity(EdgeGlass.plainShadow.opacity),
+                                        radius: EdgeGlass.plainShadow.radius, y: EdgeGlass.plainShadow.y)
+                        shape.fill(.thinMaterial)
+                        shape.fill(palette.accentColor.opacity(EdgeGlass.plainTint))
+                        shape.fill(LinearGradient(colors: [.white.opacity(EdgeGlass.plainLight), .clear],
+                                                  startPoint: .top, endPoint: .bottom))
+                    }
+                    .allowsHitTesting(false)
+                }
+                .overlay(plainRim.allowsHitTesting(false))
         } else if style.isClear {
             content
                 .background(band.allowsHitTesting(false))
@@ -243,6 +270,16 @@ private struct EdgeGlassSurface<S: InsettableShape>: ViewModifier {
             .init(color: pink.opacity(0.45), location: 0.8),
             .init(color: w.opacity(0.22), location: 1),
         ], center: .center), lineWidth: 1)
+    }
+
+    /// The plain glass's rim: a thin bright line at the top left fading to a faint dark line at the bottom right.
+    private var plainRim: some View {
+        shape.strokeBorder(LinearGradient(stops: [
+            .init(color: .white.opacity(EdgeGlass.plainRimLight), location: 0),
+            .init(color: .white.opacity(0.06), location: 0.45),
+            .init(color: .black.opacity(0.04), location: 0.55),
+            .init(color: .black.opacity(EdgeGlass.plainRimDark), location: 1),
+        ], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
     }
 
     /// A soft darker band just inside the left edge (fades out by a third of the width).
